@@ -1,0 +1,30 @@
+[package]
+name = "hydrofoil"
+version = "0.1.0"
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+deltalake-datafusion = { path = "../../../deltalake-datafusion/crates/datafusion" }
+
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+cloud-client = { workspace = true }
+datafusion = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
+tracing = { workspace = true }
+unitycatalog-common = { workspace = true }
+
+clap = { version = "4.5.44", features = ["derive"] }
+dashmap = "6.0.1"
+env_logger = "0.11"
+futures = "0.3"
+mimalloc = { version = "0.1", default-features = false }
+prost = "0.13.1"
+tonic = "0.12.3"
+tracing-subscriber = { version = "0.3", features = [
+    "tracing-log",
+    "fmt",
+    "env-filter",
+] }
+uuid = "1.17"

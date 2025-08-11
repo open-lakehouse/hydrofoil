@@ -1,17 +1,34 @@
 [workspace]
 resolver = "2"
-members = ["app/src-tauri"]
+members = ["app/src-tauri", "crates/hydrofoil"]
 # members = ["crates/*"]
 # exclude = ["python/client"]
 
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+
 [workspace.dependencies]
+arrow = "55"
+arrow-flight = { version = "55", features = ["flight-sql-experimental"] }
 chrono = { version = "0.4.41", features = ["serde"] }
+datafusion = "49"
 prost = { version = "0.13.3" }
 thiserror = { version = "2" }
 url = { version = "2.5.2", features = [
     "serde",
     "std",
 ], default-features = false }
+tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
+tracing = { version = "0.1", features = ["log"] }
+
+cloud-client = { path = "../unitycatalog-rs/crates/cloud-client" }
+unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
+    "rest-client",
+    "tokio",
+    "axum",
+] }
 
 [workspace.metadata.typos]
 default.extend-ignore-re = [
