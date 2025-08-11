@@ -16,7 +16,7 @@ pub fn register_location(name: String, site: SiteSetup) {
 }
 
 pub fn run_simulation(config: SimulationConfig) -> Result<()> {
-    let mut simulation = SimulationBuilder::new()
+    let simulation = SimulationBuilder::new()
         .with_result_storage_location(config.results_location)
         .with_snapshot_interval(Duration::minutes(10))
         .with_time_increment(Duration::minutes(1));

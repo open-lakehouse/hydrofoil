@@ -1,4 +1,4 @@
-import types from "../src/components/forms/editor/schemas";
+import types from "../app/src/components/forms/editor/schemas";
 import fs from "fs";
 import path from "path";
 import yaml from "yaml";
