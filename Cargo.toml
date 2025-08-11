@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["app/src-tauri"]
+# members = ["crates/*"]
+# exclude = ["python/client"]
+
+[workspace.dependencies]
+chrono = { version = "0.4.41", features = ["serde"] }
+prost = { version = "0.13.3" }
+thiserror = { version = "2" }
+url = { version = "2.5.2", features = [
+    "serde",
+    "std",
+], default-features = false }
+
+[workspace.metadata.typos]
+default.extend-ignore-re = [
+    # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
+    "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
+    # Line block with # spellchecker:<on|off>
+    "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
+    "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
+]
+files.extend-exclude = [
+    "crates/common/src/models/gen/**/*",
+    "app/src/gen/**/*",
+    "openapi/**/*",
+]
+
+[workspace.metadata.typos.default.extend-words]
+# to avoid having to name fields r#type
+typ = "typ"
