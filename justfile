@@ -13,3 +13,6 @@ hydro:
 # run marimo notebook server
 notebook:
     cd notebooks && uvx marimo edit --sandbox client.py
+
+services:
+    docker compose -p open-lakehouse up -d

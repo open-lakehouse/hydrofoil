@@ -1,0 +1,45 @@
+networks:
+  sharing:
+
+services:
+  uc:
+    image: unitycatalog-rs:dev
+    container_name: uc
+    hostname: uc
+    networks:
+      - sharing
+    ports:
+      - "8080:8080"
+    command: ["server", "--rest", "--use-db"]
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+    depends_on:
+      - azurite
+      - postgres
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: azurite
+    hostname: azurite
+    networks:
+      - sharing
+    ports:
+      - "10000:10000"
+      # - "10001:10001"
+      # - "10002:10002"
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    networks:
+      - sharing
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
