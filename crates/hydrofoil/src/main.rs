@@ -3,6 +3,7 @@ use mimalloc::MiMalloc;
 use tonic::transport::Server;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod error;
 mod server;
 
 #[global_allocator]
@@ -13,11 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
     let addr = "0.0.0.0:50051".parse()?;
-    let service = server::FlightSqlServiceImpl {
-        contexts: Default::default(),
-        statements: Default::default(),
-        results: Default::default(),
-    };
+    let service = server::FlightSqlServiceImpl::new();
     tracing::info!("Listening on {addr:?}");
     let svc = FlightServiceServer::new(service);
 

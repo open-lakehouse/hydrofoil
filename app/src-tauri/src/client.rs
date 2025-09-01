@@ -1,6 +1,7 @@
 use futures::TryStreamExt;
 use prost::Message;
 use tauri::State;
+use unitycatalog_common::client::UnityCatalogClient;
 use unitycatalog_common::models::catalogs::v1::{
     CatalogInfo, CreateCatalogRequest, UpdateCatalogRequest,
 };
@@ -18,7 +19,6 @@ use unitycatalog_common::models::schemas::v1::{
 };
 use unitycatalog_common::models::shares::v1::{CreateShareRequest, ShareInfo, UpdateShareRequest};
 use unitycatalog_common::models::tables::v1::{CreateTableRequest, TableInfo, TableSummary};
-use unitycatalog_common::rest::client::UnityCatalogClient;
 
 use crate::error::Result;
 
@@ -27,7 +27,7 @@ pub async fn list_catalogs(
     state: State<'_, UnityCatalogClient>,
     max_results: Option<i32>,
 ) -> Result<Vec<CatalogInfo>> {
-    Ok(state.catalogs().list(max_results).try_collect().await?)
+    Ok(state.list_catalogs(max_results).try_collect().await?)
 }
 
 #[tauri::command]
@@ -35,7 +35,7 @@ pub async fn get_catalog(
     state: State<'_, UnityCatalogClient>,
     name: String,
 ) -> Result<CatalogInfo> {
-    Ok(state.catalogs().get(name).await?)
+    Ok(state.catalog(name).get().await?)
 }
 
 #[tauri::command]
@@ -61,7 +61,7 @@ pub async fn delete_catalog(
     name: String,
     force: Option<bool>,
 ) -> Result<()> {
-    Ok(state.catalogs().delete(name, force).await?)
+    Ok(state.catalog(name).delete(force).await?)
 }
 
 #[tauri::command]
@@ -71,8 +71,7 @@ pub async fn list_schemas(
     max_results: Option<i32>,
 ) -> Result<Vec<SchemaInfo>> {
     Ok(state
-        .schemas()
-        .list(catalog, max_results)
+        .list_schemas(catalog, max_results)
         .try_collect()
         .await?)
 }

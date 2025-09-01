@@ -41,23 +41,20 @@ pub struct FlightSqlServiceImpl {
 }
 
 impl FlightSqlServiceImpl {
+    pub fn new() -> Self {
+        Self {
+            contexts: Arc::new(DashMap::new()),
+            statements: Arc::new(DashMap::new()),
+            results: Arc::new(DashMap::new()),
+        }
+    }
+
     async fn create_ctx(&self) -> Result<String, Status> {
         let uuid = Uuid::new_v4().hyphenated().to_string();
         let session_config = SessionConfig::from_env()
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::new_with_config(session_config));
-
-        let testdata = datafusion::test_util::parquet_test_data();
-
-        // register parquet file with the execution context
-        ctx.register_parquet(
-            "alltypes_plain",
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await
-        .map_err(|e| status!("Error registering table", e))?;
 
         self.contexts.insert(uuid.clone(), ctx);
         Ok(uuid)

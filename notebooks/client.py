@@ -48,7 +48,19 @@ def _():
         pprint(info)
         types = conn.adbc_get_table_types()
         pprint(types)
-    
+
+    return
+
+
+@app.cell
+def _():
+    import pyarrow.parquet as pq
+    return (pq,)
+
+
+@app.cell
+def _(pq):
+    pq.read_table("/Users/robert.pack/code/delta-rs/crates/test/tests/data/table-with-domain-metadata/_delta_log/00000000000000000108.checkpoint.parquet")
     return
 
 

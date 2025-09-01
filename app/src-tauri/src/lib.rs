@@ -1,6 +1,6 @@
 use cloud_client::CloudClient;
 use tauri::{Builder, Manager};
-use unitycatalog_common::rest::client::UnityCatalogClient;
+use unitycatalog_common::client::UnityCatalogClient;
 use url::Url;
 
 mod client;

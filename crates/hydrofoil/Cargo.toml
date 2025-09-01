@@ -11,20 +11,30 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
+tonic = { workspace = true }
 tracing = { workspace = true }
 unitycatalog-common = { workspace = true }
 
+async-trait = { version = "0.1" }
 clap = { version = "4.5.44", features = ["derive"] }
 dashmap = "6.0.1"
 env_logger = "0.11"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 prost = "0.13.1"
-tonic = "0.12.3"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
     "fmt",
     "env-filter",
 ] }
+sqlparser = { version = "0.55.0", default-features = false, features = [
+    "std",
+    "visitor",
+] }
+url = { version = "2.5.2", features = [
+    "serde",
+    "std",
+], default-features = false }
 uuid = "1.17"
