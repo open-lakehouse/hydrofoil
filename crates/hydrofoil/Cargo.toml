@@ -5,12 +5,12 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-deltalake-datafusion = { path = "../../../deltalake-datafusion/crates/datafusion" }
-
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
+deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
+prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
@@ -23,7 +23,6 @@ dashmap = "6.0.1"
 env_logger = "0.11"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-prost = "0.13.1"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
     "fmt",

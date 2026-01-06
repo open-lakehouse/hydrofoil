@@ -20,7 +20,7 @@ use arrow_flight::{
 };
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use futures::{Stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tonic::metadata::MetadataValue;
@@ -341,8 +341,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let plan_schema = plan.schema();
 
-        let arrow_schema = (&**plan_schema).into();
-        let message = SchemaAsIpc::new(&arrow_schema, &IpcWriteOptions::default())
+        let arrow_schema = plan_schema.as_arrow();
+        let message = SchemaAsIpc::new(arrow_schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;

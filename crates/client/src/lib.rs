@@ -17,7 +17,9 @@ impl Client {
         D: TryInto<Endpoint>,
         D::Error: Into<tonic::codegen::StdError>,
     {
-        let inner = FlightServiceClient::connect(endpoint).await?;
+        let endpoint = Endpoint::new(endpoint)?;
+        let channel = endpoint.connect().await?;
+        let inner = FlightServiceClient::new(channel);
         let client = FlightSqlServiceClient::new_from_inner(inner);
         Ok(Self { client })
     }
