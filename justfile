@@ -11,8 +11,8 @@ hydro:
     RUST_LOG="hydrofoil=debug" cargo run --bin hydrofoil
 
 # run marimo notebook server
-notebook:
-    cd notebooks && uvx marimo edit --sandbox client.py
+scratch:
+    uvx --directory notebooks/ marimo edit --sandbox client.py
 
 services:
     docker compose -p open-lakehouse up -d

@@ -6,27 +6,33 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::error::FlightError;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, Any, CommandGetTables, CommandPreparedStatementQuery,
-    CommandPreparedStatementUpdate, ProstMessageExt, SqlInfo,
+    CommandPreparedStatementUpdate, CommandStatementQuery, ProstMessageExt, SqlInfo,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     IpcMessage, SchemaAsIpc, Ticket,
 };
 use dashmap::DashMap;
+use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
+use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::{Stream, StreamExt, TryStreamExt};
 use prost::Message;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
 use uuid::Uuid;
+
+use crate::execution::CpuRuntime;
 
 macro_rules! status {
     ($desc:expr, $err:expr) => {
@@ -38,18 +44,21 @@ pub struct FlightSqlServiceImpl {
     pub(crate) contexts: Arc<DashMap<String, Arc<SessionContext>>>,
     pub(crate) statements: Arc<DashMap<String, LogicalPlan>>,
     pub(crate) results: Arc<DashMap<String, Vec<RecordBatch>>>,
+
+    cpu_runtime: CpuRuntime,
 }
 
 impl FlightSqlServiceImpl {
-    pub fn new() -> Self {
-        Self {
+    pub fn try_new() -> Result<Self, DataFusionError> {
+        Ok(Self {
             contexts: Arc::new(DashMap::new()),
             statements: Arc::new(DashMap::new()),
             results: Arc::new(DashMap::new()),
-        }
+            cpu_runtime: CpuRuntime::try_new()?,
+        })
     }
 
-    async fn create_ctx(&self) -> Result<String, Status> {
+    fn create_ctx(&self) -> Result<String, Status> {
         let uuid = Uuid::new_v4().hyphenated().to_string();
         let session_config = SessionConfig::from_env()
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
@@ -57,33 +66,41 @@ impl FlightSqlServiceImpl {
         let ctx = Arc::new(SessionContext::new_with_config(session_config));
 
         self.contexts.insert(uuid.clone(), ctx);
+
         Ok(uuid)
     }
 
     #[allow(clippy::result_large_err)]
     fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
         // get the token from the authorization header on Request
-        let auth = req
-            .metadata()
-            .get("authorization")
-            .ok_or_else(|| Status::internal("No authorization header!"))?;
-        let str = auth
-            .to_str()
-            .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
-        let authorization = str.to_string();
-        let bearer = "Bearer ";
-        if !authorization.starts_with(bearer) {
-            Err(Status::internal("Invalid auth header!"))?;
-        }
-        let auth = authorization[bearer.len()..].to_string();
+        // let auth = req
+        //     .metadata()
+        //     .get("authorization")
+        //     .ok_or_else(|| Status::internal("No authorization header!"))?;
+        // let str = auth
+        //     .to_str()
+        //     .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
+        // let authorization = str.to_string();
+        // let bearer = "Bearer ";
+        // if !authorization.starts_with(bearer) {
+        //     Err(Status::internal("Invalid auth header!"))?;
+        // }
+        // let auth = authorization[bearer.len()..].to_string();
 
-        if let Some(context) = self.contexts.get(&auth) {
-            Ok(context.clone())
-        } else {
-            Err(Status::internal(format!(
-                "Context handle not found: {auth}"
-            )))?
-        }
+        // if let Some(context) = self.contexts.get(&auth) {
+        //     Ok(context.clone())
+        // } else {
+        //     let context = self.create_ctx()?;
+        //     Err(Status::internal(format!(
+        //         "Context handle not found: {auth}"
+        //     )))?
+        // }
+        let uuid = Uuid::new_v4().hyphenated().to_string();
+        let session_config = SessionConfig::from_env()
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
+            .with_information_schema(true);
+        let ctx = Arc::new(SessionContext::new_with_config(session_config));
+        Ok(ctx)
     }
 
     #[allow(clippy::result_large_err)]
@@ -92,17 +109,6 @@ impl FlightSqlServiceImpl {
             Ok(plan.clone())
         } else {
             Err(Status::internal(format!("Plan handle not found: {handle}")))?
-        }
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn get_result(&self, handle: &str) -> Result<Vec<RecordBatch>, Status> {
-        if let Some(result) = self.results.get(handle) {
-            Ok(result.clone())
-        } else {
-            Err(Status::internal(format!(
-                "Request handle not found: {handle}"
-            )))?
         }
     }
 
@@ -171,7 +177,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // see Ballista implementation for example of basic auth
         // in this case, we simply accept the connection and create a new SessionContext
         // the SessionContext will be re-used within this same connection/session
-        let token = self.create_ctx().await?;
+        let token = self.create_ctx()?;
 
         let result = HandshakeResponse {
             protocol_version: 0,
@@ -188,9 +194,30 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(resp)
     }
 
+    /// Get a FlightInfo for executing a SQL query.
+    async fn get_flight_info_statement(
+        &self,
+        _query: CommandStatementQuery,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        Err(Status::unimplemented(
+            "get_flight_info_statement has no default implementation",
+        ))
+    }
+
+    async fn do_get_statement(
+        &self,
+        _ticket: TicketStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_statement has no default implementation",
+        ))
+    }
+
     async fn do_get_fallback(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         if !message.is::<FetchResults>() {
@@ -206,20 +233,58 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .ok_or_else(|| Status::internal("Expected FetchResults but got None!"))?;
 
         let handle = fr.handle;
-
         info!("getting results for {handle}");
-        let result = self.get_result(&handle)?;
-        // if we get an empty result, create an empty schema
-        let (schema, batches) = match result.first() {
-            None => (Arc::new(Schema::empty()), vec![]),
-            Some(batch) => (batch.schema(), result.clone()),
+
+        let ctx = self.get_ctx(&request)?;
+        let plan = self.get_plan(handle.as_str())?;
+        let schema = plan.schema().inner().clone();
+
+        let mut builder = RecordBatchReceiverStreamBuilder::new(plan.schema().inner().clone(), 100);
+        let tx = builder.tx();
+
+        // let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let driver_task = async move {
+            // Plan / execute the query
+            // let url = "https://github.com/apache/arrow-testing/raw/master/data/csv/aggregate_test_100.csv";
+            let df = ctx.execute_logical_plan(plan).await?;
+            // let df = ctx
+            //     .sql(&format!("SELECT c1,c2,c3 FROM '{url}' LIMIT 5"))
+            //     .await?;
+
+            let mut stream = df.execute_stream().await?;
+
+            // Note you can do other non trivial CPU work on the results of the
+            // stream before sending it back to the original runtime. For example,
+            // calling a FlightDataEncoder to convert the results to flight messages
+            // to send over the network
+
+            // send results, as above
+            while let Some(batch) = stream.next().await {
+                if tx.send(batch).await.is_err() {
+                    return Ok(());
+                }
+            }
+            Ok(()) as Result<(), DataFusionError>
         };
 
-        let batch_stream = futures::stream::iter(batches).map(Ok);
+        builder.spawn_on(driver_task, self.cpu_runtime.handle());
+
+        let stream = builder
+            .build()
+            .map_err(|e| FlightError::ExternalError(Box::new(e)));
+
+        // let result = self.get_result(&handle)?;
+        // // if we get an empty result, create an empty schema
+        // let (schema, batches) = match result.first() {
+        //     None => (Arc::new(Schema::empty()), vec![]),
+        //     Some(batch) => (batch.schema(), result.clone()),
+        // };
+
+        // let batch_stream = futures::stream::iter(batches).map(Ok);
 
         let stream = FlightDataEncoderBuilder::new()
             .with_schema(schema)
-            .build(batch_stream)
+            .build(stream)
             .map_err(Status::from);
 
         Ok(Response::new(Box::pin(stream)))
@@ -238,25 +303,22 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let plan = self.get_plan(handle)?;
 
         let state = ctx.state();
-        let df = DataFrame::new(state, plan);
-        let result = df
-            .collect()
-            .await
-            .map_err(|e| status!("Error executing query", e))?;
+        // let df = DataFrame::new(state, plan);
+        // let result = df
+        //     .collect()
+        //     .await
+        //     .map_err(|e| status!("Error executing query", e))?;
 
         // if we get an empty result, create an empty schema
-        let schema = match result.first() {
-            None => Schema::empty(),
-            Some(batch) => (*batch.schema()).clone(),
-        };
-
-        self.results.insert(handle.to_string(), result);
-
-        // if we had multiple endpoints to connect to, we could use this Location
-        // but in the case of standalone DataFusion, we don't
-        // let loc = Location {
-        //     uri: "grpc+tcp://127.0.0.1:50051".to_string(),
+        // let schema = match result.first() {
+        //     None => Schema::empty(),
+        //     Some(batch) => batch.schema().as_ref().clone(),
         // };
+
+        // self.results.insert(handle.to_string(), result);
+        //
+        let schema = plan.schema().as_arrow().clone();
+
         let fetch = FetchResults {
             handle: handle.to_string(),
         };
@@ -264,7 +326,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket { ticket: buf };
 
         let info = FlightInfo::new()
-            // Encode the Arrow schema
             .try_with_schema(&schema)
             .expect("encoding failed")
             .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
@@ -273,8 +334,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
                 cmd: Default::default(),
                 path: vec![],
             });
-        let resp = Response::new(info);
-        Ok(resp)
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_tables(
@@ -295,7 +356,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket { ticket: buf };
 
         let info = FlightInfo::new()
-            // Encode the Arrow schema
             .try_with_schema(&schema)
             .expect("encoding failed")
             .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
