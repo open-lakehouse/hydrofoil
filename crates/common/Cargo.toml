@@ -7,4 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 arrow-flight = { workspace = true }
+arrow-schema = { workspace = true }
+delta_kernel = { workspace = true }
+itertools = { workspace = true }
 prost = { workspace = true }

@@ -2,13 +2,15 @@ use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::{DoPutUpdateResult, ProstMessageExt};
 use arrow_flight::{FlightData, FlightDescriptor};
 use arrow_flight::{FlightInfo, flight_service_client::FlightServiceClient};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, Fields, Schema};
 use bytes::Bytes;
 use futures::future::BoxFuture;
+use hydrofoil_common::conversion::field_to_connect;
 use hydrofoil_common::{
     AddFeatureSupport, CreateDeltaTable, CreateDeltaTableMode, DeltaCommand, DeltaCommandType,
     VacuumTable,
 };
+use itertools::Itertools as _;
 use prost::Message as _;
 use tonic::IntoRequest as _;
 use tonic::transport::{Channel, Endpoint};
@@ -52,7 +54,7 @@ impl Client {
             .await
     }
 
-    pub async fn create_delta_table(&self) -> CreateDeltaTableBuilder {
+    pub fn create_delta_table(&self) -> CreateDeltaTableBuilder {
         CreateDeltaTableBuilder::new(self.client.clone())
     }
 }
@@ -104,6 +106,24 @@ impl CreateDeltaTableBuilder {
         self.message.clustering_columns = columns.into_iter().map(|s| s.into()).collect();
         self
     }
+
+    pub fn with_columns(mut self, fields: impl Into<Fields>) -> Result<Self, ArrowError> {
+        self.message.columns = fields
+            .into()
+            .iter()
+            .map(|f| field_to_connect(f))
+            .try_collect()?;
+        Ok(self)
+    }
+
+    pub fn with_schema(mut self, schema: &Schema) -> Result<Self, ArrowError> {
+        self.message.columns = schema
+            .fields()
+            .iter()
+            .map(|f| field_to_connect(f))
+            .try_collect()?;
+        Ok(self)
+    }
 }
 
 impl IntoFuture for CreateDeltaTableBuilder {
@@ -148,11 +168,22 @@ impl IntoFuture for CreateDeltaTableBuilder {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::{DataType, Field};
+
     use super::*;
 
     #[tokio::test]
     async fn it_works() {
         let mut client = Client::try_new("http://localhost:50051").await.unwrap();
-        client.handshake().await.unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Utf8View, false),
+        ]);
+        let result = client
+            .create_delta_table()
+            .with_schema(&schema)
+            .unwrap()
+            .await
+            .unwrap();
     }
 }

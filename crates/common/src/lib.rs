@@ -1,5 +1,3 @@
-extern crate prost;
-
 use std::sync::LazyLock;
 
 use arrow_flight::sql::{Any, ProstMessageExt};
@@ -11,7 +9,9 @@ pub use crate::models::delta::connect::{
     delta_command::CommandType as DeltaCommandType,
 };
 
-mod models {
+pub mod conversion;
+
+pub mod models {
     pub mod spark {
         pub mod connect {
             include!("gen/spark/connect/spark.connect.rs");

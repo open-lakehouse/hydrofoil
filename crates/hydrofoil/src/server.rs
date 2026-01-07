@@ -517,7 +517,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         match command_type {
             DeltaCommandType::CreateDeltaTable(create) => {
-                info!("Creating Delta table at location: {:?}", create.location);
+                info!("Creating Delta table: {:?}", create);
                 // Here you would add the logic to create a Delta table
                 // For now, we just log the action
             }

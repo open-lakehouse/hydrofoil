@@ -12,6 +12,7 @@ arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
+itertools = { workspace = true }
 prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
