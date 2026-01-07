@@ -28,6 +28,14 @@ services:
       # - "10001:10001"
       # - "10002:10002"
 
+  s3:
+    image: chrislusf/seaweedfs
+    ports:
+      - 8333:8333 # S3 API
+      # - 9327:9327 # Metrics
+      - 23646:23646 # Admin UI
+    command: "mini -ip.bind=0.0.0.0 -metricsPort=9327"
+
   postgres:
     image: postgres:16
     container_name: postgres

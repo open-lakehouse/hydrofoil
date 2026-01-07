@@ -6,8 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-arrow = { workspace = true }
+hydrofoil-common = { path = "../common" }
+
 arrow-flight = { workspace = true }
+arrow-schema = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }

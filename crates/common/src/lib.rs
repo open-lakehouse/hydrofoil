@@ -1,3 +1,16 @@
+extern crate prost;
+
+use std::sync::LazyLock;
+
+use arrow_flight::sql::{Any, ProstMessageExt};
+use prost::Name;
+
+pub use crate::models::delta::connect::{
+    AddFeatureSupport, CreateDeltaTable, DeltaCommand, VacuumTable,
+    create_delta_table::Mode as CreateDeltaTableMode,
+    delta_command::CommandType as DeltaCommandType,
+};
+
 mod models {
     pub mod spark {
         pub mod connect {
@@ -11,19 +24,16 @@ mod models {
     }
 }
 
-prost_message_ext!{}
+impl ProstMessageExt for DeltaCommand {
+    fn type_url() -> &'static str {
+        static TYPE_URL: LazyLock<String> = LazyLock::new(|| <DeltaCommand as Name>::type_url());
+        TYPE_URL.as_str()
+    }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn as_any(&self) -> Any {
+        Any {
+            type_url: <DeltaCommand as ProstMessageExt>::type_url().to_string(),
+            value: ::prost::Message::encode_to_vec(self).into(),
+        }
     }
 }

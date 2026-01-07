@@ -5,6 +5,8 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+hydrofoil-common = { path = "../common" }
+
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 cloud-client = { workspace = true }

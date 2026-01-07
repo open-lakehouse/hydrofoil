@@ -14,36 +14,64 @@ pub mod data_type {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Boolean {
+const NAME: &'static str = "Boolean";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Boolean".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Boolean".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Byte {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Byte {
+const NAME: &'static str = "Byte";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Byte".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Byte".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Short {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Short {
+const NAME: &'static str = "Short";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Short".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Short".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Integer {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Integer {
+const NAME: &'static str = "Integer";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Integer".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Integer".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Long {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Long {
+const NAME: &'static str = "Long";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Long".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Long".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Float {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Float {
+const NAME: &'static str = "Float";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Float".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Float".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Double {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Double {
+const NAME: &'static str = "Double";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Double".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Double".into() }}
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct String {
         #[prost(uint32, tag="1")]
@@ -51,36 +79,64 @@ pub mod data_type {
         #[prost(string, tag="2")]
         pub collation: ::prost::alloc::string::String,
     }
+impl ::prost::Name for String {
+const NAME: &'static str = "String";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.String".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.String".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Binary {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Binary {
+const NAME: &'static str = "Binary";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Binary".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Binary".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Null {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Null {
+const NAME: &'static str = "NULL";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.NULL".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.NULL".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Timestamp {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Timestamp {
+const NAME: &'static str = "Timestamp";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Timestamp".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Timestamp".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Date {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Date {
+const NAME: &'static str = "Date";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Date".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Date".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TimestampNtz {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for TimestampNtz {
+const NAME: &'static str = "TimestampNTZ";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.TimestampNTZ".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.TimestampNTZ".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CalendarInterval {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for CalendarInterval {
+const NAME: &'static str = "CalendarInterval";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.CalendarInterval".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.CalendarInterval".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct YearMonthInterval {
         #[prost(int32, optional, tag="1")]
@@ -90,6 +146,10 @@ pub mod data_type {
         #[prost(uint32, tag="3")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for YearMonthInterval {
+const NAME: &'static str = "YearMonthInterval";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.YearMonthInterval".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.YearMonthInterval".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DayTimeInterval {
         #[prost(int32, optional, tag="1")]
@@ -99,6 +159,10 @@ pub mod data_type {
         #[prost(uint32, tag="3")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for DayTimeInterval {
+const NAME: &'static str = "DayTimeInterval";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.DayTimeInterval".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.DayTimeInterval".into() }}
     /// Start compound types.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Char {
@@ -107,6 +171,10 @@ pub mod data_type {
         #[prost(uint32, tag="2")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Char {
+const NAME: &'static str = "Char";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Char".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Char".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct VarChar {
         #[prost(int32, tag="1")]
@@ -114,6 +182,10 @@ pub mod data_type {
         #[prost(uint32, tag="2")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for VarChar {
+const NAME: &'static str = "VarChar";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.VarChar".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.VarChar".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Decimal {
         #[prost(int32, optional, tag="1")]
@@ -123,6 +195,10 @@ pub mod data_type {
         #[prost(uint32, tag="3")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Decimal {
+const NAME: &'static str = "Decimal";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Decimal".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Decimal".into() }}
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct StructField {
         #[prost(string, tag="1")]
@@ -134,6 +210,10 @@ pub mod data_type {
         #[prost(string, optional, tag="4")]
         pub metadata: ::core::option::Option<::prost::alloc::string::String>,
     }
+impl ::prost::Name for StructField {
+const NAME: &'static str = "StructField";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.StructField".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.StructField".into() }}
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Struct {
         #[prost(message, repeated, tag="1")]
@@ -141,6 +221,10 @@ pub mod data_type {
         #[prost(uint32, tag="2")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Struct {
+const NAME: &'static str = "Struct";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Struct".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Struct".into() }}
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Array {
         #[prost(message, optional, boxed, tag="1")]
@@ -150,6 +234,10 @@ pub mod data_type {
         #[prost(uint32, tag="3")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Array {
+const NAME: &'static str = "Array";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Array".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Array".into() }}
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Map {
         #[prost(message, optional, boxed, tag="1")]
@@ -161,11 +249,19 @@ pub mod data_type {
         #[prost(uint32, tag="4")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Map {
+const NAME: &'static str = "Map";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Map".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Map".into() }}
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Variant {
         #[prost(uint32, tag="1")]
         pub type_variation_reference: u32,
     }
+impl ::prost::Name for Variant {
+const NAME: &'static str = "Variant";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Variant".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Variant".into() }}
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Udt {
         #[prost(string, tag="1")]
@@ -183,12 +279,20 @@ pub mod data_type {
         #[prost(message, optional, boxed, tag="5")]
         pub sql_type: ::core::option::Option<::prost::alloc::boxed::Box<super::DataType>>,
     }
+impl ::prost::Name for Udt {
+const NAME: &'static str = "UDT";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.UDT".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.UDT".into() }}
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Unparsed {
         /// (Required) The unparsed data type string
         #[prost(string, tag="1")]
         pub data_type_string: ::prost::alloc::string::String,
     }
+impl ::prost::Name for Unparsed {
+const NAME: &'static str = "Unparsed";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType.Unparsed".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType.Unparsed".into() }}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
@@ -250,4 +354,8 @@ pub mod data_type {
         Unparsed(Unparsed),
     }
 }
+impl ::prost::Name for DataType {
+const NAME: &'static str = "DataType";
+const PACKAGE: &'static str = "spark.connect";
+fn full_name() -> ::prost::alloc::string::String { "spark.connect.DataType".into() }fn type_url() -> ::prost::alloc::string::String { "/spark.connect.DataType".into() }}
 // @@protoc_insertion_point(module)

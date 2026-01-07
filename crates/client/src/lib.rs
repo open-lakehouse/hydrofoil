@@ -1,8 +1,19 @@
-use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::sql::client::FlightSqlServiceClient;
+use arrow_flight::sql::{DoPutUpdateResult, ProstMessageExt};
+use arrow_flight::{FlightData, FlightDescriptor};
+use arrow_flight::{FlightInfo, flight_service_client::FlightServiceClient};
+use arrow_schema::ArrowError;
+use bytes::Bytes;
+use futures::future::BoxFuture;
+use hydrofoil_common::{
+    AddFeatureSupport, CreateDeltaTable, CreateDeltaTableMode, DeltaCommand, DeltaCommandType,
+    VacuumTable,
+};
+use prost::Message as _;
+use tonic::IntoRequest as _;
 use tonic::transport::{Channel, Endpoint};
 
-use crate::error::Result;
+use crate::error::{Result, decode_error_to_arrow_error, status_to_arrow_error};
 
 mod error;
 
@@ -28,6 +39,110 @@ impl Client {
         let result = self.client.handshake("user", "password").await?;
         println!("Handshake result: {:?}", result);
         Ok(())
+    }
+
+    /// Execute a query on the server.
+    pub async fn execute(
+        &mut self,
+        query: impl ToString,
+        transaction_id: impl Into<Option<Bytes>>,
+    ) -> Result<FlightInfo, ArrowError> {
+        self.client
+            .execute(query.to_string(), transaction_id.into())
+            .await
+    }
+
+    pub async fn create_delta_table(&self) -> CreateDeltaTableBuilder {
+        CreateDeltaTableBuilder::new(self.client.clone())
+    }
+}
+
+pub struct CreateDeltaTableBuilder {
+    client: FlightSqlServiceClient<Channel>,
+    message: CreateDeltaTable,
+}
+
+impl CreateDeltaTableBuilder {
+    fn new(client: FlightSqlServiceClient<Channel>) -> Self {
+        let mut message = CreateDeltaTable::default();
+        message.set_mode(CreateDeltaTableMode::Create);
+        Self { client, message }
+    }
+
+    pub fn with_mode(mut self, mode: CreateDeltaTableMode) -> Self {
+        self.message.set_mode(mode);
+        self
+    }
+
+    pub fn with_location<S: Into<String>>(mut self, path: S) -> Self {
+        self.message.location = Some(path.into());
+        self
+    }
+
+    pub fn with_table_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.message.table_name = Some(name.into());
+        self
+    }
+
+    pub fn with_comment<S: Into<String>>(mut self, comment: S) -> Self {
+        self.message.comment = Some(comment.into());
+        self
+    }
+
+    pub fn with_partition_columns<S: Into<String>>(
+        mut self,
+        columns: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.message.partitioning_columns = columns.into_iter().map(|s| s.into()).collect();
+        self
+    }
+
+    pub fn with_clustering_columns<S: Into<String>>(
+        mut self,
+        columns: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.message.clustering_columns = columns.into_iter().map(|s| s.into()).collect();
+        self
+    }
+}
+
+impl IntoFuture for CreateDeltaTableBuilder {
+    type Output = Result<()>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let mut client = self.client;
+        let message = self.message;
+
+        Box::pin(async move {
+            let command = DeltaCommand {
+                command_type: Some(DeltaCommandType::CreateDeltaTable(message)),
+            };
+            let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
+            // let req = self.client.set_request_headers(
+            //     stream::iter(vec![FlightData {
+            //         flight_descriptor: Some(descriptor),
+            //         ..Default::default()
+            //     }])
+            //     .into_request(),
+            // )?;
+            let req = futures::stream::iter(vec![FlightData {
+                flight_descriptor: Some(descriptor),
+                ..Default::default()
+            }])
+            .into_request();
+
+            let mut result = client.do_put(req).await?;
+            let result = result
+                .message()
+                .await
+                .map_err(status_to_arrow_error)?
+                .unwrap();
+            let _result = DoPutUpdateResult::decode(&*result.app_metadata)
+                .map_err(decode_error_to_arrow_error)?;
+
+            Ok(())
+        })
     }
 }
 

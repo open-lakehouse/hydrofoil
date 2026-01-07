@@ -18,6 +18,10 @@ pub mod delta_table {
         #[prost(map="string, string", tag="2")]
         pub hadoop_conf: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
     }
+impl ::prost::Name for Path {
+const NAME: &'static str = "Path";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.DeltaTable.Path".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.DeltaTable.Path".into() }}
     /// (Required)
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum AccessType {
@@ -27,6 +31,10 @@ pub mod delta_table {
         TableOrViewName(::prost::alloc::string::String),
     }
 }
+impl ::prost::Name for DeltaTable {
+const NAME: &'static str = "DeltaTable";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.DeltaTable".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.DeltaTable".into() }}
 /// Message to hold all command extensions in Delta Connect.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeltaCommand {
@@ -53,6 +61,10 @@ pub mod delta_command {
         DropFeatureSupport(super::DropFeatureSupport),
     }
 }
+impl ::prost::Name for DeltaCommand {
+const NAME: &'static str = "DeltaCommand";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.DeltaCommand".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.DeltaCommand".into() }}
 /// Command that creates a copy of a DeltaTable in the specified target location.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CloneTable {
@@ -91,6 +103,10 @@ pub mod clone_table {
         Timestamp(::prost::alloc::string::String),
     }
 }
+impl ::prost::Name for CloneTable {
+const NAME: &'static str = "CloneTable";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.CloneTable".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.CloneTable".into() }}
 /// Command that deletes files and directories in the table that are not needed by the table for
 /// maintaining older versions up to the given retention threshold.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -103,6 +119,10 @@ pub struct VacuumTable {
     #[prost(double, optional, tag="2")]
     pub retention_hours: ::core::option::Option<f64>,
 }
+impl ::prost::Name for VacuumTable {
+const NAME: &'static str = "VacuumTable";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.VacuumTable".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.VacuumTable".into() }}
 /// Command to updates the protocol version of the table so that new features can be used.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpgradeTableProtocol {
@@ -116,6 +136,10 @@ pub struct UpgradeTableProtocol {
     #[prost(int32, tag="3")]
     pub writer_version: i32,
 }
+impl ::prost::Name for UpgradeTableProtocol {
+const NAME: &'static str = "UpgradeTableProtocol";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.UpgradeTableProtocol".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.UpgradeTableProtocol".into() }}
 /// Command that generates manifest files for a given Delta table.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Generate {
@@ -126,6 +150,10 @@ pub struct Generate {
     #[prost(string, tag="2")]
     pub mode: ::prost::alloc::string::String,
 }
+impl ::prost::Name for Generate {
+const NAME: &'static str = "Generate";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.Generate".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.Generate".into() }}
 /// Command that creates or replace a Delta table (depending on the mode).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateDeltaTable {
@@ -193,7 +221,15 @@ pub mod create_delta_table {
             #[prost(bool, tag="3")]
             pub allow_explicit_insert: bool,
         }
+impl ::prost::Name for IdentityInfo {
+const NAME: &'static str = "IdentityInfo";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.CreateDeltaTable.Column.IdentityInfo".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.CreateDeltaTable.Column.IdentityInfo".into() }}
     }
+impl ::prost::Name for Column {
+const NAME: &'static str = "Column";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.CreateDeltaTable.Column".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.CreateDeltaTable.Column".into() }}
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Mode {
@@ -234,6 +270,10 @@ pub mod create_delta_table {
         }
     }
 }
+impl ::prost::Name for CreateDeltaTable {
+const NAME: &'static str = "CreateDeltaTable";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.CreateDeltaTable".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.CreateDeltaTable".into() }}
 /// Command to add a supported feature to the table by modifying the protocol.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddFeatureSupport {
@@ -244,6 +284,10 @@ pub struct AddFeatureSupport {
     #[prost(string, tag="2")]
     pub feature_name: ::prost::alloc::string::String,
 }
+impl ::prost::Name for AddFeatureSupport {
+const NAME: &'static str = "AddFeatureSupport";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.AddFeatureSupport".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.AddFeatureSupport".into() }}
 /// Command to drop a supported feature from the table by modifying the protocol.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DropFeatureSupport {
@@ -257,4 +301,8 @@ pub struct DropFeatureSupport {
     #[prost(bool, optional, tag="3")]
     pub truncate_history: ::core::option::Option<bool>,
 }
+impl ::prost::Name for DropFeatureSupport {
+const NAME: &'static str = "DropFeatureSupport";
+const PACKAGE: &'static str = "delta.connect";
+fn full_name() -> ::prost::alloc::string::String { "delta.connect.DropFeatureSupport".into() }fn type_url() -> ::prost::alloc::string::String { "/delta.connect.DropFeatureSupport".into() }}
 // @@protoc_insertion_point(module)

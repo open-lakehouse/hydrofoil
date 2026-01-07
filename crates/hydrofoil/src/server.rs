@@ -16,18 +16,20 @@ use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetDbSchemas,
     CommandGetSqlInfo, CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
-    CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery, Nullable,
-    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery,
+    CommandStatementUpdate, DoPutUpdateResult, Nullable, ProstMessageExt, Searchable, SqlInfo,
+    TicketStatementQuery, XdbcDataType,
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, SchemaAsIpc, Ticket,
+    IpcMessage, PutResult, SchemaAsIpc, Ticket,
 };
 use dashmap::DashMap;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 use futures::{Stream, TryStreamExt};
+use hydrofoil_common::{DeltaCommand, DeltaCommandType};
 use prost::Message;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
@@ -443,13 +445,32 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("getting results for {handle}");
 
         let ctx = self.get_ctx(&request)?;
+
+        // retrieve the plan and verify it is safe to execute
         let plan = self.get_plan(handle.as_str())?;
+        let options = SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false);
+        options
+            .verify_plan(&plan)
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
 
         let mut builder = FlightDataReceiverStreamBuilder::new(100);
         builder.execute_logical_plan(Arc::new(ctx.state()), plan, self.cpu_runtime.handle());
         let stream = builder.build().map_err(Status::from);
 
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn do_put_statement_update(
+        &self,
+        _handle: CommandStatementUpdate,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        debug!("do_put_statement_update");
+        // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
+        // and we are required to return some row count here
+        Ok(-1)
     }
 
     async fn do_put_prepared_statement_update(
@@ -473,21 +494,70 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn do_put_fallback(
+        &self,
+        _request: Request<PeekableFlightDataStream>,
+        message: Any,
+    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        if !message.is::<DeltaCommand>() {
+            return Err(Status::unimplemented(format!(
+                "do_put: The defined request is invalid: {}",
+                message.type_url
+            )));
+        }
+
+        let command: DeltaCommand = message
+            .unpack()
+            .map_err(|e| Status::internal(format!("{e:?}")))?
+            .ok_or_else(|| Status::internal("Expected DeltaCommand but got None!"))?;
+
+        let Some(command_type) = &command.command_type else {
+            return Err(Status::internal("DeltaCommand has no command_type"));
+        };
+
+        match command_type {
+            DeltaCommandType::CreateDeltaTable(create) => {
+                info!("Creating Delta table at location: {:?}", create.location);
+                // Here you would add the logic to create a Delta table
+                // For now, we just log the action
+            }
+            _ => {
+                return Err(Status::unimplemented(format!(
+                    "DeltaCommandType {:?} not implemented",
+                    command_type
+                )));
+            }
+        }
+
+        let result = DoPutUpdateResult { record_count: -1 };
+        let output = futures::stream::iter(vec![Ok(PutResult {
+            app_metadata: result.encode_to_vec().into(),
+        })]);
+        Ok(Response::new(Box::pin(output)))
+    }
+
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
+        debug!("do_action_create_prepared_statement");
+
         let user_query = query.query.as_str();
-        info!("do_action_create_prepared_statement: {user_query}");
 
         let ctx = self.get_ctx(&request)?;
 
         let plan = ctx
-            .sql(user_query)
+            .state()
+            .create_logical_plan(user_query)
             .await
-            .and_then(|df| df.into_optimized_plan())
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
+
+        // let plan = ctx
+        //     .sql(user_query)
+        //     .await
+        //     .and_then(|df| df.into_optimized_plan())
+        //     .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
 
         // store a copy of the plan,  it will be used for execution
         let plan_uuid = Uuid::new_v4().hyphenated().to_string();
