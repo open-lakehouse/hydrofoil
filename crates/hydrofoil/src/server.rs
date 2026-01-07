@@ -1,5 +1,5 @@
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -8,17 +8,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::metadata::{
-    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
-};
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetDbSchemas,
     CommandGetSqlInfo, CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery,
-    CommandStatementUpdate, DoPutUpdateResult, Nullable, ProstMessageExt, Searchable, SqlInfo,
-    TicketStatementQuery, XdbcDataType,
+    CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
@@ -28,8 +24,14 @@ use dashmap::DashMap;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
+use deltalake_core::StructField;
+use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
+use deltalake_core::operations::create::CreateBuilder;
+use deltalake_core::protocol::SaveMode;
 use futures::{Stream, TryStreamExt};
-use hydrofoil_common::{DeltaCommand, DeltaCommandType};
+use hydrofoil_common::conversion::{ConversionOptions, column_to_arrow};
+use hydrofoil_common::{CreateDeltaTableMode, DeltaCommand, DeltaCommandType};
+use itertools::Itertools as _;
 use prost::Message;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
@@ -39,47 +41,13 @@ use uuid::Uuid;
 use crate::execution::CpuRuntime;
 use crate::stream::FlightDataReceiverStreamBuilder;
 
+mod metadata;
+
 macro_rules! status {
     ($desc:expr, $err:expr) => {
         Status::internal(format!("{}: {} at {}:{}", $desc, $err, file!(), line!()))
     };
 }
-
-static INSTANCE_SQL_DATA: LazyLock<SqlInfoData> = LazyLock::new(|| {
-    let mut builder = SqlInfoDataBuilder::new();
-    // Server information
-    builder.append(SqlInfo::FlightSqlServerName, "Hydrofoil Flight SQL Server");
-    builder.append(SqlInfo::FlightSqlServerVersion, "1");
-    // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
-    builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
-    builder.build().unwrap()
-});
-
-static INSTANCE_XBDC_DATA: LazyLock<XdbcTypeInfoData> = LazyLock::new(|| {
-    let mut builder = XdbcTypeInfoDataBuilder::new();
-    builder.append(XdbcTypeInfo {
-        type_name: "INTEGER".into(),
-        data_type: XdbcDataType::XdbcInteger,
-        column_size: Some(32),
-        literal_prefix: None,
-        literal_suffix: None,
-        create_params: None,
-        nullable: Nullable::NullabilityNullable,
-        case_sensitive: false,
-        searchable: Searchable::Full,
-        unsigned_attribute: Some(false),
-        fixed_prec_scale: false,
-        auto_increment: Some(false),
-        local_type_name: Some("INTEGER".into()),
-        minimum_scale: None,
-        maximum_scale: None,
-        sql_data_type: XdbcDataType::XdbcInteger,
-        datetime_subcode: None,
-        num_prec_radix: Some(2),
-        interval_precision: None,
-    });
-    builder.build().unwrap()
-});
 
 pub struct FlightSqlServiceImpl {
     pub(crate) contexts: Arc<DashMap<String, Arc<SessionContext>>>,
@@ -305,7 +273,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(query.into_builder(&INSTANCE_SQL_DATA).schema().as_ref())
+            .try_with_schema(
+                query
+                    .into_builder(&metadata::INSTANCE_SQL_DATA)
+                    .schema()
+                    .as_ref(),
+            )
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -323,7 +296,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
-            .try_with_schema(query.into_builder(&INSTANCE_XBDC_DATA).schema().as_ref())
+            .try_with_schema(
+                query
+                    .into_builder(&metadata::INSTANCE_XBDC_DATA)
+                    .schema()
+                    .as_ref(),
+            )
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
@@ -378,7 +356,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetSqlInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let builder = query.into_builder(&INSTANCE_SQL_DATA);
+        let builder = query.into_builder(&metadata::INSTANCE_SQL_DATA);
         let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
@@ -394,7 +372,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         // create a builder with pre-defined Xdbc data:
-        let builder = query.into_builder(&INSTANCE_XBDC_DATA);
+        let builder = query.into_builder(&metadata::INSTANCE_XBDC_DATA);
         let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
@@ -517,9 +495,49 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         match command_type {
             DeltaCommandType::CreateDeltaTable(create) => {
-                info!("Creating Delta table: {:?}", create);
-                // Here you would add the logic to create a Delta table
-                // For now, we just log the action
+                let mut builder = CreateBuilder::new();
+                if let Some(location) = &create.location {
+                    builder = builder.with_location(location.clone());
+                }
+                if let Some(table_name) = &create.table_name {
+                    builder = builder.with_table_name(table_name.clone());
+                }
+                if let Some(comment) = &create.comment {
+                    builder = builder.with_comment(comment.clone());
+                }
+                if !create.partitioning_columns.is_empty() {
+                    builder = builder.with_partition_columns(&create.partitioning_columns);
+                }
+                let mode = match create.mode() {
+                    CreateDeltaTableMode::Create => SaveMode::ErrorIfExists,
+                    CreateDeltaTableMode::Replace | CreateDeltaTableMode::CreateOrReplace => {
+                        SaveMode::Overwrite
+                    }
+                    CreateDeltaTableMode::CreateIfNotExists => SaveMode::Ignore,
+                    _ => {
+                        return Err(Status::invalid_argument(format!(
+                            "Invalid CreateMode: {}",
+                            create.mode
+                        )));
+                    }
+                };
+                builder = builder.with_save_mode(mode);
+
+                let fields: Vec<StructField> = create
+                    .columns
+                    .iter()
+                    .map(|c| {
+                        column_to_arrow(c, &ConversionOptions::default())
+                            .and_then(|f| (&f).try_into_kernel())
+                    })
+                    .try_collect()
+                    .map_err(|e| {
+                        Status::internal(format!("Error converting columns to Arrow: {e}"))
+                    })?;
+                builder = builder.with_columns(fields);
+                let _table = builder
+                    .await
+                    .map_err(|e| Status::internal(format!("Error creating Delta table: {e}")))?;
             }
             _ => {
                 return Err(Status::unimplemented(format!(

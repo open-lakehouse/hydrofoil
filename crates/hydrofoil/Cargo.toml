@@ -12,6 +12,8 @@ arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
+delta_kernel = { workspace = true }
+itertools = { workspace = true }
 prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
