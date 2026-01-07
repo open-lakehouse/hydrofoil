@@ -1,20 +1,23 @@
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::error::FlightError;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
+use arrow_flight::sql::metadata::{
+    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
+};
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, Any, CommandGetTables, CommandPreparedStatementQuery,
-    CommandPreparedStatementUpdate, CommandStatementQuery, ProstMessageExt, SqlInfo,
-    TicketStatementQuery,
+    ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetDbSchemas,
+    CommandGetSqlInfo, CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+    CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery, Nullable,
+    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
@@ -23,22 +26,58 @@ use arrow_flight::{
 use dashmap::DashMap;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use prost::Message;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::info;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::execution::CpuRuntime;
+use crate::stream::FlightDataReceiverStreamBuilder;
 
 macro_rules! status {
     ($desc:expr, $err:expr) => {
         Status::internal(format!("{}: {} at {}:{}", $desc, $err, file!(), line!()))
     };
 }
+
+static INSTANCE_SQL_DATA: LazyLock<SqlInfoData> = LazyLock::new(|| {
+    let mut builder = SqlInfoDataBuilder::new();
+    // Server information
+    builder.append(SqlInfo::FlightSqlServerName, "Hydrofoil Flight SQL Server");
+    builder.append(SqlInfo::FlightSqlServerVersion, "1");
+    // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
+    builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
+    builder.build().unwrap()
+});
+
+static INSTANCE_XBDC_DATA: LazyLock<XdbcTypeInfoData> = LazyLock::new(|| {
+    let mut builder = XdbcTypeInfoDataBuilder::new();
+    builder.append(XdbcTypeInfo {
+        type_name: "INTEGER".into(),
+        data_type: XdbcDataType::XdbcInteger,
+        column_size: Some(32),
+        literal_prefix: None,
+        literal_suffix: None,
+        create_params: None,
+        nullable: Nullable::NullabilityNullable,
+        case_sensitive: false,
+        searchable: Searchable::Full,
+        unsigned_attribute: Some(false),
+        fixed_prec_scale: false,
+        auto_increment: Some(false),
+        local_type_name: Some("INTEGER".into()),
+        minimum_scale: None,
+        maximum_scale: None,
+        sql_data_type: XdbcDataType::XdbcInteger,
+        datetime_subcode: None,
+        num_prec_radix: Some(2),
+        interval_precision: None,
+    });
+    builder.build().unwrap()
+});
 
 pub struct FlightSqlServiceImpl {
     pub(crate) contexts: Arc<DashMap<String, Arc<SessionContext>>>,
@@ -194,6 +233,102 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(resp)
     }
 
+    async fn get_flight_info_catalogs(
+        &self,
+        query: CommandGetCatalogs,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
+    }
+
+    async fn get_flight_info_schemas(
+        &self,
+        query: CommandGetDbSchemas,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
+    }
+
+    async fn get_flight_info_tables(
+        &self,
+        query: CommandGetTables,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket {
+            ticket: query.as_any().encode_to_vec().into(),
+        };
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(&query.into_builder().schema())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
+    }
+
+    async fn get_flight_info_sql_info(
+        &self,
+        query: CommandGetSqlInfo,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(query.into_builder(&INSTANCE_SQL_DATA).schema().as_ref())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
+    }
+
+    async fn get_flight_info_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        let flight_descriptor = request.into_inner();
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
+
+        let flight_info = FlightInfo::new()
+            .try_with_schema(query.into_builder(&INSTANCE_XBDC_DATA).schema().as_ref())
+            .map_err(|e| status!("Unable to encode schema", e))?
+            .with_endpoint(endpoint)
+            .with_descriptor(flight_descriptor);
+
+        Ok(tonic::Response::new(flight_info))
+    }
+
     /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(
         &self,
@@ -205,6 +340,68 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn get_flight_info_prepared_statement(
+        &self,
+        cmd: CommandPreparedStatementQuery,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        debug!("get_flight_info_prepared_statement");
+
+        let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
+            .map_err(|e| status!("Unable to parse uuid", e))?;
+
+        let plan = self.get_plan(handle)?;
+
+        let fetch = FetchResults {
+            handle: handle.to_string(),
+        };
+        let buf = fetch.as_any().encode_to_vec().into();
+        let ticket = Ticket { ticket: buf };
+
+        let info = FlightInfo::new()
+            .try_with_schema(plan.schema().as_arrow())
+            .expect("encoding failed")
+            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
+            .with_descriptor(FlightDescriptor {
+                r#type: DescriptorType::Cmd.into(),
+                cmd: Default::default(),
+                path: vec![],
+            });
+
+        Ok(Response::new(info))
+    }
+
+    async fn do_get_sql_info(
+        &self,
+        query: CommandGetSqlInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let builder = query.into_builder(&INSTANCE_SQL_DATA);
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn do_get_xdbc_type_info(
+        &self,
+        query: CommandGetXdbcTypeInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        // create a builder with pre-defined Xdbc data:
+        let builder = query.into_builder(&INSTANCE_XBDC_DATA);
+        let schema = builder.schema();
+        let batch = builder.build();
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { batch }))
+            .map_err(Status::from);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
     async fn do_get_statement(
         &self,
         _ticket: TicketStatementQuery,
@@ -212,6 +409,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented(
             "do_get_statement has no default implementation",
+        ))
+    }
+
+    async fn do_get_prepared_statement(
+        &self,
+        _query: CommandPreparedStatementQuery,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        Err(Status::unimplemented(
+            "do_get_prepared_statement has no default implementation",
         ))
     }
 
@@ -237,135 +444,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let ctx = self.get_ctx(&request)?;
         let plan = self.get_plan(handle.as_str())?;
-        let schema = plan.schema().inner().clone();
 
-        let mut builder = RecordBatchReceiverStreamBuilder::new(plan.schema().inner().clone(), 100);
-        let tx = builder.tx();
-
-        // let (tx, mut rx) = tokio::sync::mpsc::channel(2);
-        let driver_task = async move {
-            // Plan / execute the query
-            // let url = "https://github.com/apache/arrow-testing/raw/master/data/csv/aggregate_test_100.csv";
-            let df = ctx.execute_logical_plan(plan).await?;
-            // let df = ctx
-            //     .sql(&format!("SELECT c1,c2,c3 FROM '{url}' LIMIT 5"))
-            //     .await?;
-
-            let mut stream = df.execute_stream().await?;
-
-            // Note you can do other non trivial CPU work on the results of the
-            // stream before sending it back to the original runtime. For example,
-            // calling a FlightDataEncoder to convert the results to flight messages
-            // to send over the network
-
-            // send results, as above
-            while let Some(batch) = stream.next().await {
-                if tx.send(batch).await.is_err() {
-                    return Ok(());
-                }
-            }
-            Ok(()) as Result<(), DataFusionError>
-        };
-
-        builder.spawn_on(driver_task, self.cpu_runtime.handle());
-
-        let stream = builder
-            .build()
-            .map_err(|e| FlightError::ExternalError(Box::new(e)));
-
-        // let result = self.get_result(&handle)?;
-        // // if we get an empty result, create an empty schema
-        // let (schema, batches) = match result.first() {
-        //     None => (Arc::new(Schema::empty()), vec![]),
-        //     Some(batch) => (batch.schema(), result.clone()),
-        // };
-
-        // let batch_stream = futures::stream::iter(batches).map(Ok);
-
-        let stream = FlightDataEncoderBuilder::new()
-            .with_schema(schema)
-            .build(stream)
-            .map_err(Status::from);
+        let mut builder = FlightDataReceiverStreamBuilder::new(100);
+        builder.execute_logical_plan(Arc::new(ctx.state()), plan, self.cpu_runtime.handle());
+        let stream = builder.build().map_err(Status::from);
 
         Ok(Response::new(Box::pin(stream)))
-    }
-
-    async fn get_flight_info_prepared_statement(
-        &self,
-        cmd: CommandPreparedStatementQuery,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        info!("get_flight_info_prepared_statement");
-        let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
-            .map_err(|e| status!("Unable to parse uuid", e))?;
-
-        let ctx = self.get_ctx(&request)?;
-        let plan = self.get_plan(handle)?;
-
-        let state = ctx.state();
-        // let df = DataFrame::new(state, plan);
-        // let result = df
-        //     .collect()
-        //     .await
-        //     .map_err(|e| status!("Error executing query", e))?;
-
-        // if we get an empty result, create an empty schema
-        // let schema = match result.first() {
-        //     None => Schema::empty(),
-        //     Some(batch) => batch.schema().as_ref().clone(),
-        // };
-
-        // self.results.insert(handle.to_string(), result);
-        //
-        let schema = plan.schema().as_arrow().clone();
-
-        let fetch = FetchResults {
-            handle: handle.to_string(),
-        };
-        let buf = fetch.as_any().encode_to_vec().into();
-        let ticket = Ticket { ticket: buf };
-
-        let info = FlightInfo::new()
-            .try_with_schema(&schema)
-            .expect("encoding failed")
-            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
-            .with_descriptor(FlightDescriptor {
-                r#type: DescriptorType::Cmd.into(),
-                cmd: Default::default(),
-                path: vec![],
-            });
-
-        Ok(Response::new(info))
-    }
-
-    async fn get_flight_info_tables(
-        &self,
-        _query: CommandGetTables,
-        request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        info!("get_flight_info_tables");
-        let ctx = self.get_ctx(&request)?;
-        let data = self.tables(ctx).await;
-        let schema = data.schema();
-
-        let uuid = Uuid::new_v4().hyphenated().to_string();
-        self.results.insert(uuid.clone(), vec![data]);
-
-        let fetch = FetchResults { handle: uuid };
-        let buf = fetch.as_any().encode_to_vec().into();
-        let ticket = Ticket { ticket: buf };
-
-        let info = FlightInfo::new()
-            .try_with_schema(&schema)
-            .expect("encoding failed")
-            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
-            .with_descriptor(FlightDescriptor {
-                r#type: DescriptorType::Cmd.into(),
-                cmd: Default::default(),
-                path: vec![],
-            });
-        let resp = Response::new(info);
-        Ok(resp)
     }
 
     async fn do_put_prepared_statement_update(
@@ -377,6 +461,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
         // and we are required to return some row count here
         Ok(-1)
+    }
+
+    async fn do_put_statement_ingest(
+        &self,
+        _ticket: CommandStatementIngest,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Err(Status::unimplemented(
+            "do_put_statement_ingest not implemented",
+        ))
     }
 
     async fn do_action_create_prepared_statement(

@@ -7,6 +7,7 @@ mod catalog;
 mod error;
 mod execution;
 mod server;
+mod stream;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
