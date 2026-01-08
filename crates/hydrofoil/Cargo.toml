@@ -11,15 +11,18 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
+deltalake-aws = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 delta_kernel = { workspace = true }
 itertools = { workspace = true }
+object_store = { workspace = true }
 prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 unitycatalog-common = { workspace = true }
+url = { workspace = true }
 
 async-trait = { version = "0.1" }
 clap = { version = "4.5.44", features = ["derive"] }
@@ -37,8 +40,4 @@ sqlparser = { version = "0.55.0", default-features = false, features = [
     "std",
     "visitor",
 ] }
-url = { version = "2.5.2", features = [
-    "serde",
-    "std",
-], default-features = false }
 uuid = "1.17"

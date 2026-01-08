@@ -20,6 +20,7 @@ delta_kernel = { version = "0.19.0", features = [
 ] }
 futures = "0.3"
 itertools = "0.14"
+object_store = { version = "^0.12.4", features = ["azure", "aws", "gcp"] }
 prost = { version = "0.14.1" }
 thiserror = { version = "2" }
 url = { version = "2.5.2", features = [
@@ -39,6 +40,7 @@ deltalake-core = { path = "../delta-rs/crates/core", features = [
     "datafusion",
     "cloud",
 ] }
+deltalake-aws = { path = "../delta-rs/crates/aws" }
 
 [workspace.metadata.typos]
 default.extend-ignore-re = [

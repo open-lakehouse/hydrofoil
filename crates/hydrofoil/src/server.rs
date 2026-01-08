@@ -24,10 +24,10 @@ use dashmap::DashMap;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
-use deltalake_core::StructField;
+use deltalake_core::delta_datafusion::engine::AsObjectStoreUrl as _;
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
-use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
+use deltalake_core::{DeltaTableBuilder, StructField};
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::conversion::{ConversionOptions, column_to_arrow};
 use hydrofoil_common::{CreateDeltaTableMode, DeltaCommand, DeltaCommandType};
@@ -39,6 +39,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::execution::CpuRuntime;
+use crate::storage::update_session;
 use crate::stream::FlightDataReceiverStreamBuilder;
 
 mod metadata;
@@ -104,12 +105,18 @@ impl FlightSqlServiceImpl {
         //         "Context handle not found: {auth}"
         //     )))?
         // }
-        let uuid = Uuid::new_v4().hyphenated().to_string();
-        let session_config = SessionConfig::from_env()
-            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
-            .with_information_schema(true);
-        let ctx = Arc::new(SessionContext::new_with_config(session_config));
-        Ok(ctx)
+
+        if let Some(ctx) = self.contexts.get("key") {
+            Ok(ctx.value().clone())
+        } else {
+            let session_config = SessionConfig::from_env()
+                .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
+                .with_information_schema(true);
+            let ctx = Arc::new(SessionContext::new_with_config(session_config));
+            update_session(&ctx.state()).map_err(|e| status!("Failed to update session", e))?;
+            self.contexts.insert("key".to_string(), ctx.clone());
+            Ok(ctx)
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -474,7 +481,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_put_fallback(
         &self,
-        _request: Request<PeekableFlightDataStream>,
+        request: Request<PeekableFlightDataStream>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         if !message.is::<DeltaCommand>() {
@@ -493,12 +500,28 @@ impl FlightSqlService for FlightSqlServiceImpl {
             return Err(Status::internal("DeltaCommand has no command_type"));
         };
 
+        let ctx = self.get_ctx(&request)?;
+
         match command_type {
             DeltaCommandType::CreateDeltaTable(create) => {
-                let mut builder = CreateBuilder::new();
-                if let Some(location) = &create.location {
-                    builder = builder.with_location(location.clone());
-                }
+                info!("Creating Delta table: {:?}", create);
+                let table_url = url::Url::parse(create.location.as_ref().unwrap()).unwrap();
+                let store_url = table_url.as_object_store_url();
+                let root_storage = ctx
+                    .runtime_env()
+                    .object_store(&store_url)
+                    .map_err(|e| status!("failed to get object store", e))?
+                    .clone();
+                let table = DeltaTableBuilder::from_url(table_url.clone())
+                    .map_err(|e| status!("failed to get object store", e))?
+                    .with_storage_backend(root_storage, table_url)
+                    .build()
+                    .map_err(|e| status!("failed to get object store", e))?;
+
+                let mut builder = table.create();
+                // if let Some(location) = &create.location {
+                //     builder = builder.with_location(location.clone());
+                // }
                 if let Some(table_name) = &create.table_name {
                     builder = builder.with_table_name(table_name.clone());
                 }

@@ -3,6 +3,7 @@ networks:
 
 services:
   uc:
+    profiles: ["full"]
     image: unitycatalog-rs:dev
     container_name: uc
     hostname: uc
@@ -18,6 +19,7 @@ services:
       - postgres
 
   azurite:
+    profiles: ["azure", "storage"]
     image: mcr.microsoft.com/azure-storage/azurite
     container_name: azurite
     hostname: azurite
@@ -29,14 +31,19 @@ services:
       # - "10002:10002"
 
   s3:
+    profiles: ["s3", "storage"]
     image: chrislusf/seaweedfs
+    command: "mini -ip.bind=0.0.0.0 -metricsPort=9327"
+    environment:
+      AWS_ACCESS_KEY_ID: seaweed-key-id
+      AWS_SECRET_ACCESS_KEY: seaweed-access-key
     ports:
       - 8333:8333 # S3 API
       # - 9327:9327 # Metrics
       - 23646:23646 # Admin UI
-    command: "mini -ip.bind=0.0.0.0 -metricsPort=9327"
 
   postgres:
+    profiles: ["full"]
     image: postgres:16
     container_name: postgres
     networks:

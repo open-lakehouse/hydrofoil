@@ -181,6 +181,7 @@ mod tests {
         ]);
         let result = client
             .create_delta_table()
+            .with_location("s3://open-lakehouse/test_table/")
             .with_schema(&schema)
             .unwrap()
             .await
