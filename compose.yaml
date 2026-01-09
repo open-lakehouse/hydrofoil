@@ -3,7 +3,7 @@ networks:
 
 services:
   uc:
-    profiles: ["full"]
+    profiles: [full]
     image: unitycatalog-rs:dev
     container_name: uc
     hostname: uc
@@ -19,7 +19,7 @@ services:
       - postgres
 
   azurite:
-    profiles: ["azure", "storage"]
+    profiles: [azure, storage, full]
     image: mcr.microsoft.com/azure-storage/azurite
     container_name: azurite
     hostname: azurite
@@ -31,7 +31,7 @@ services:
       # - "10002:10002"
 
   s3:
-    profiles: ["s3", "storage"]
+    profiles: [s3, storage, full]
     image: chrislusf/seaweedfs
     command: "mini -ip.bind=0.0.0.0 -metricsPort=9327"
     environment:
@@ -43,7 +43,7 @@ services:
       - 23646:23646 # Admin UI
 
   postgres:
-    profiles: ["full"]
+    profiles: [full]
     image: postgres:16
     container_name: postgres
     networks:
@@ -58,3 +58,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  jaeger:
+    profiles: [tracing, full]
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "5778:5778"
+      - "9411:9411"
+      - 6831:6831/udp
+      - 6832:6832/udp
+      - 14250:14250
+      - 14268:14268
+      - 14269:14269
+    # environment:
+    #   - LOG_LEVEL=debug
+    # networks:
+    #   - jaeger-example

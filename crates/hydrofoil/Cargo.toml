@@ -11,6 +11,7 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
+datafusion-tracing = { workspace = true }
 deltalake-aws = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 delta_kernel = { workspace = true }
@@ -30,7 +31,11 @@ dashmap = "6.0.1"
 env_logger = "0.11"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
+opentelemetry = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 pin-project-lite = "^0.2.7"
+tracing-opentelemetry = "0.32.0"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
     "fmt",

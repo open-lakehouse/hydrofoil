@@ -22,8 +22,12 @@ use arrow_flight::{
 };
 use dashmap::DashMap;
 use datafusion::error::DataFusionError;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
+use datafusion_tracing::{
+    InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
+};
 use deltalake_core::delta_datafusion::engine::AsObjectStoreUrl as _;
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::protocol::SaveMode;
@@ -35,7 +39,7 @@ use itertools::Itertools as _;
 use prost::Message;
 use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, info};
+use tracing::{debug, dispatcher, info, instrument};
 use uuid::Uuid;
 
 use crate::execution::CpuRuntime;
@@ -109,10 +113,26 @@ impl FlightSqlServiceImpl {
         if let Some(ctx) = self.contexts.get("key") {
             Ok(ctx.value().clone())
         } else {
+            let options = InstrumentationOptions::builder()
+                .record_metrics(true)
+                .preview_limit(5)
+                .preview_fn(Arc::new(|batch: &RecordBatch| {
+                    pretty_format_compact_batch(batch, 64, 3, 10).map(|fmt| fmt.to_string())
+                }))
+                .build();
+
+            let instrument_rule = instrument_with_info_spans!(
+                options: options,
+            );
+
             let session_config = SessionConfig::from_env()
                 .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
                 .with_information_schema(true);
-            let ctx = Arc::new(SessionContext::new_with_config(session_config));
+            let session_state = SessionStateBuilder::new_with_default_features()
+                .with_config(session_config)
+                .with_physical_optimizer_rule(instrument_rule)
+                .build();
+            let ctx = Arc::new(SessionContext::new_with_state(session_state));
             update_session(&ctx.state()).map_err(|e| status!("Failed to update session", e))?;
             self.contexts.insert("key".to_string(), ctx.clone());
             Ok(ctx)
@@ -317,14 +337,45 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     /// Get a FlightInfo for executing a SQL query.
+    #[instrument(skip(self, request))]
     async fn get_flight_info_statement(
         &self,
-        _query: CommandStatementQuery,
-        _request: Request<FlightDescriptor>,
+        query: CommandStatementQuery,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented(
-            "get_flight_info_statement has no default implementation",
-        ))
+        let ctx = self.get_ctx(&request)?;
+        let plan = ctx
+            .state()
+            .create_logical_plan(&query.query)
+            .await
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
+        let options = SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false);
+        options
+            .verify_plan(&plan)
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
+
+        let plan_uuid = Uuid::new_v4().hyphenated().to_string();
+        self.statements.insert(plan_uuid.clone(), plan.clone());
+
+        let fetch = FetchResults {
+            handle: plan_uuid.to_string(),
+        };
+        let buf = fetch.as_any().encode_to_vec().into();
+        let ticket = Ticket { ticket: buf };
+
+        let info = FlightInfo::new()
+            .try_with_schema(plan.schema().as_arrow())
+            .expect("encoding failed")
+            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
+            .with_descriptor(FlightDescriptor {
+                r#type: DescriptorType::Cmd.into(),
+                cmd: Default::default(),
+                path: vec![],
+            });
+
+        Ok(Response::new(info))
     }
 
     async fn get_flight_info_prepared_statement(
@@ -409,6 +460,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    #[instrument(skip(self, request))]
     async fn do_get_fallback(
         &self,
         request: Request<Ticket>,
@@ -479,6 +531,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    #[instrument(skip(self, request))]
     async fn do_put_fallback(
         &self,
         request: Request<PeekableFlightDataStream>,
@@ -558,9 +611,22 @@ impl FlightSqlService for FlightSqlServiceImpl {
                         Status::internal(format!("Error converting columns to Arrow: {e}"))
                     })?;
                 builder = builder.with_columns(fields);
-                let _table = builder
+
+                let dispatch = dispatcher::get_default(|d| d.clone());
+                let span = tracing::Span::current();
+
+                let handle = self.cpu_runtime.handle().spawn(async move {
+                    dispatcher::with_default(&dispatch, || async {
+                        let _enter = span.enter();
+                        info!("running delta table creation task");
+                        builder.await
+                    })
                     .await
-                    .map_err(|e| Status::internal(format!("Error creating Delta table: {e}")))?;
+                });
+                let _table = handle
+                    .await
+                    .map_err(|e| Status::internal(format!("{e}")))?
+                    .map_err(|e| Status::internal(format!("{e}")))?;
             }
             _ => {
                 return Err(Status::unimplemented(format!(

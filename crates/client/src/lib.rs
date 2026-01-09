@@ -1,6 +1,7 @@
-use arrow_flight::sql::client::FlightSqlServiceClient;
+use arrow_flight::decode::FlightRecordBatchStream;
+use arrow_flight::sql::client::{FlightSqlServiceClient, PreparedStatement};
 use arrow_flight::sql::{DoPutUpdateResult, ProstMessageExt};
-use arrow_flight::{FlightData, FlightDescriptor};
+use arrow_flight::{FlightData, FlightDescriptor, Ticket};
 use arrow_flight::{FlightInfo, flight_service_client::FlightServiceClient};
 use arrow_schema::{ArrowError, Fields, Schema};
 use bytes::Bytes;
@@ -12,7 +13,7 @@ use hydrofoil_common::{
 };
 use itertools::Itertools as _;
 use prost::Message as _;
-use tonic::IntoRequest as _;
+use tonic::IntoRequest;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::error::{Result, decode_error_to_arrow_error, status_to_arrow_error};
@@ -41,6 +42,23 @@ impl Client {
         let result = self.client.handshake("user", "password").await?;
         println!("Handshake result: {:?}", result);
         Ok(())
+    }
+
+    pub async fn prepare(
+        &mut self,
+        query: impl ToString,
+        transaction_id: impl Into<Option<Bytes>>,
+    ) -> Result<PreparedStatement<Channel>, ArrowError> {
+        self.client
+            .prepare(query.to_string(), transaction_id.into())
+            .await
+    }
+
+    pub async fn do_get(
+        &mut self,
+        ticket: impl IntoRequest<Ticket>,
+    ) -> Result<FlightRecordBatchStream, ArrowError> {
+        self.client.do_get(ticket).await
     }
 
     /// Execute a query on the server.

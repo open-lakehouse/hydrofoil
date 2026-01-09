@@ -35,7 +35,7 @@ use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::debug;
+use tracing::{debug, dispatcher};
 
 type FlightResult<T> = Result<T, FlightError>;
 type FlightStream = Pin<Box<dyn Stream<Item = Result<FlightData, FlightError>> + Send + 'static>>;
@@ -89,7 +89,17 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: Future<Output = FlightResult<()>>,
         F: Send + 'static,
     {
-        self.join_set.spawn(task);
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
+
+        self.join_set.spawn(async move {
+            dispatcher::with_default(&dispatch, || async {
+                let _enter = span.enter();
+                debug!("executing task");
+                task.await
+            });
+            Ok(())
+        });
     }
 
     /// Same as [`Self::spawn`] but it spawns the task on the provided runtime
@@ -98,7 +108,20 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: Future<Output = FlightResult<()>>,
         F: Send + 'static,
     {
-        self.join_set.spawn_on(task, handle);
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
+
+        self.join_set.spawn_on(
+            async move {
+                dispatcher::with_default(&dispatch, || async {
+                    let _enter = span.enter();
+                    debug!("executing task on cpu runtime");
+                    task.await
+                });
+                Ok(())
+            },
+            handle,
+        );
     }
 
     /// Spawn a blocking task that will be aborted if this builder (or the stream
@@ -111,7 +134,16 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: FnOnce() -> Result<(), FlightError>,
         F: Send + 'static,
     {
-        self.join_set.spawn_blocking(f);
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
+
+        self.join_set.spawn_blocking(move || {
+            dispatcher::with_default(&dispatch, || {
+                let _enter = span.enter();
+                debug!("executing blocking task");
+                f()
+            })
+        });
     }
 
     /// Same as [`Self::spawn_blocking`] but it spawns the blocking task on the provided runtime
@@ -120,7 +152,19 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: FnOnce() -> Result<(), FlightError>,
         F: Send + 'static,
     {
-        self.join_set.spawn_blocking_on(f, handle);
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
+
+        self.join_set.spawn_blocking_on(
+            move || {
+                dispatcher::with_default(&dispatch, || {
+                    let _enter = span.enter();
+                    debug!("executing blocking task on cpu runtime");
+                    f()
+                })
+            },
+            handle,
+        );
     }
 
     /// Create a stream of all data written to `tx`
@@ -320,6 +364,60 @@ impl FlightDataReceiverStreamBuilder {
         F: Send + 'static,
     {
         self.inner.spawn_blocking_on(f, handle)
+    }
+
+    pub fn execute_plan(
+        &mut self,
+        ctx: Arc<dyn Session>,
+        exec: Arc<dyn ExecutionPlan>,
+        handle: &Handle,
+    ) {
+        let tx = self.tx();
+
+        let driver_task = async move {
+            let schema = exec.schema().clone();
+            let stream = match execute_stream(exec.clone(), ctx.task_ctx()) {
+                Err(e) => {
+                    tx.send(Err(to_flight_err(e))).await.ok();
+                    debug!(
+                        "Stopping execution: error executing input: {}",
+                        displayable(exec.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+                Ok(stream) => stream,
+            }
+            .map_err(|e| FlightError::from_external_error(Box::new(e)));
+
+            let mut stream = FlightDataEncoderBuilder::new()
+                .with_schema(schema)
+                .build(stream);
+
+            while let Some(data) = stream.next().await {
+                let is_err = data.is_err();
+
+                if tx.send(data).await.is_err() {
+                    debug!(
+                        "Stopping execution: output is gone, plan cancelling: {}",
+                        displayable(exec.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+
+                // Stop after the first error is encountered (Don't drive all streams to completion)
+                if is_err {
+                    debug!(
+                        "Stopping execution: plan returned error: {}",
+                        displayable(exec.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+            }
+
+            Ok(())
+        };
+
+        self.spawn_on(driver_task, handle);
     }
 
     pub fn execute_logical_plan(
