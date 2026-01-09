@@ -30,6 +30,7 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
 tonic = "0.14.1"
+tonic-tracing-opentelemetry = "0.32.0"
 tracing = { version = "0.1", features = ["log"] }
 
 cloud-client = { path = "../unitycatalog-rs/crates/cloud-client" }
@@ -41,7 +42,6 @@ deltalake-core = { path = "../delta-rs/crates/core", features = [
     "datafusion",
     "cloud",
 ] }
-deltalake-aws = { path = "../delta-rs/crates/aws" }
 
 [workspace.metadata.typos]
 default.extend-ignore-re = [

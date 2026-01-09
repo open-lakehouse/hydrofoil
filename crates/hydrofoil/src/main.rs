@@ -1,13 +1,15 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
 use mimalloc::MiMalloc;
 use tonic::transport::Server;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tonic_tracing_opentelemetry::middleware::{filters, server::OtelGrpcLayer};
 
 mod catalog;
 mod error;
 mod execution;
+mod external_tables;
+mod planner;
 mod server;
-mod storage;
+mod session;
 mod stream;
 mod telemetry;
 
@@ -24,7 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Listening on {addr:?}");
     let svc = FlightServiceServer::new(service);
 
-    Server::builder().add_service(svc).serve(addr).await?;
+    Server::builder()
+        .layer(OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+        .add_service(svc)
+        .serve(addr)
+        .await?;
 
     Ok(())
 }

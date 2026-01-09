@@ -12,7 +12,6 @@ arrow-flight = { workspace = true }
 cloud-client = { workspace = true }
 datafusion = { workspace = true }
 datafusion-tracing = { workspace = true }
-deltalake-aws = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 delta_kernel = { workspace = true }
 itertools = { workspace = true }
@@ -21,15 +20,17 @@ prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 unitycatalog-common = { workspace = true }
 url = { workspace = true }
 
-async-trait = { version = "0.1" }
+async-trait = { version = "^0.1.89" }
 clap = { version = "4.5.44", features = ["derive"] }
 dashmap = "6.0.1"
 env_logger = "0.11"
 futures = "0.3"
+instrumented-object-store = "51.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"

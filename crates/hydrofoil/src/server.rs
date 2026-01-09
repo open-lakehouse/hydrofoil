@@ -1,4 +1,3 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StringArray};
@@ -17,33 +16,23 @@ use arrow_flight::sql::{
     CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
-    Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, PutResult, SchemaAsIpc, Ticket,
+    Action, FlightDescriptor, FlightEndpoint, FlightInfo, IpcMessage, PutResult, SchemaAsIpc,
+    Ticket,
 };
 use dashmap::DashMap;
 use datafusion::error::DataFusionError;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
-use datafusion_tracing::{
-    InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
-};
-use deltalake_core::delta_datafusion::engine::AsObjectStoreUrl as _;
-use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
-use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaTableBuilder, StructField};
-use futures::{Stream, TryStreamExt};
-use hydrofoil_common::conversion::{ConversionOptions, column_to_arrow};
-use hydrofoil_common::{CreateDeltaTableMode, DeltaCommand, DeltaCommandType};
-use itertools::Itertools as _;
+use datafusion::prelude::{SQLOptions, SessionContext};
+use futures::TryStreamExt;
+use hydrofoil_common::DeltaCommand;
 use prost::Message;
-use tonic::metadata::MetadataValue;
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status};
 use tracing::{debug, dispatcher, info, instrument};
 use uuid::Uuid;
 
 use crate::execution::CpuRuntime;
-use crate::storage::update_session;
+use crate::planner::DeltaPlanner;
+use crate::session::create_session;
 use crate::stream::FlightDataReceiverStreamBuilder;
 
 mod metadata;
@@ -72,68 +61,16 @@ impl FlightSqlServiceImpl {
         })
     }
 
-    fn create_ctx(&self) -> Result<String, Status> {
-        let uuid = Uuid::new_v4().hyphenated().to_string();
-        let session_config = SessionConfig::from_env()
-            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
-            .with_information_schema(true);
-        let ctx = Arc::new(SessionContext::new_with_config(session_config));
-
-        self.contexts.insert(uuid.clone(), ctx);
-
-        Ok(uuid)
-    }
-
     #[allow(clippy::result_large_err)]
-    fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
-        // get the token from the authorization header on Request
-        // let auth = req
-        //     .metadata()
-        //     .get("authorization")
-        //     .ok_or_else(|| Status::internal("No authorization header!"))?;
-        // let str = auth
-        //     .to_str()
-        //     .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
-        // let authorization = str.to_string();
-        // let bearer = "Bearer ";
-        // if !authorization.starts_with(bearer) {
-        //     Err(Status::internal("Invalid auth header!"))?;
-        // }
-        // let auth = authorization[bearer.len()..].to_string();
-
-        // if let Some(context) = self.contexts.get(&auth) {
-        //     Ok(context.clone())
-        // } else {
-        //     let context = self.create_ctx()?;
-        //     Err(Status::internal(format!(
-        //         "Context handle not found: {auth}"
-        //     )))?
-        // }
-
+    fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
         if let Some(ctx) = self.contexts.get("key") {
             Ok(ctx.value().clone())
         } else {
-            let options = InstrumentationOptions::builder()
-                .record_metrics(true)
-                .preview_limit(5)
-                .preview_fn(Arc::new(|batch: &RecordBatch| {
-                    pretty_format_compact_batch(batch, 64, 3, 10).map(|fmt| fmt.to_string())
-                }))
-                .build();
-
-            let instrument_rule = instrument_with_info_spans!(
-                options: options,
+            let session_id = Uuid::new_v4();
+            info!("Creating new session with id {}", session_id);
+            let ctx = Arc::new(
+                create_session(session_id).map_err(|e| status!("Failed to create session", e))?,
             );
-
-            let session_config = SessionConfig::from_env()
-                .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
-                .with_information_schema(true);
-            let session_state = SessionStateBuilder::new_with_default_features()
-                .with_config(session_config)
-                .with_physical_optimizer_rule(instrument_rule)
-                .build();
-            let ctx = Arc::new(SessionContext::new_with_state(session_state));
-            update_session(&ctx.state()).map_err(|e| status!("Failed to update session", e))?;
             self.contexts.insert("key".to_string(), ctx.clone());
             Ok(ctx)
         }
@@ -200,35 +137,6 @@ impl FlightSqlServiceImpl {
 #[tonic::async_trait]
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
-
-    async fn do_handshake(
-        &self,
-        _request: Request<Streaming<HandshakeRequest>>,
-    ) -> Result<
-        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
-        Status,
-    > {
-        info!("do_handshake");
-        // no authentication actually takes place here
-        // see Ballista implementation for example of basic auth
-        // in this case, we simply accept the connection and create a new SessionContext
-        // the SessionContext will be re-used within this same connection/session
-        let token = self.create_ctx()?;
-
-        let result = HandshakeResponse {
-            protocol_version: 0,
-            payload: token.as_bytes().to_vec().into(),
-        };
-        let result = Ok(result);
-        let output = futures::stream::iter(vec![result]);
-        let str = format!("Bearer {token}");
-        let mut resp: Response<Pin<Box<dyn Stream<Item = Result<_, _>> + Send>>> =
-            Response::new(Box::pin(output));
-        let md = MetadataValue::try_from(str)
-            .map_err(|_| Status::invalid_argument("authorization not parsable"))?;
-        resp.metadata_mut().insert("authorization", md);
-        Ok(resp)
-    }
 
     async fn get_flight_info_catalogs(
         &self,
@@ -549,92 +457,30 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?
             .ok_or_else(|| Status::internal("Expected DeltaCommand but got None!"))?;
 
-        let Some(command_type) = &command.command_type else {
-            return Err(Status::internal("DeltaCommand has no command_type"));
-        };
-
         let ctx = self.get_ctx(&request)?;
+        let planner = DeltaPlanner::new();
+        let plan = planner
+            .plan_delta_connect(&ctx.state(), &command)
+            .map_err(|e| Status::internal(format!("Error planning delta command: {e}")))?;
 
-        match command_type {
-            DeltaCommandType::CreateDeltaTable(create) => {
-                info!("Creating Delta table: {:?}", create);
-                let table_url = url::Url::parse(create.location.as_ref().unwrap()).unwrap();
-                let store_url = table_url.as_object_store_url();
-                let root_storage = ctx
-                    .runtime_env()
-                    .object_store(&store_url)
-                    .map_err(|e| status!("failed to get object store", e))?
-                    .clone();
-                let table = DeltaTableBuilder::from_url(table_url.clone())
-                    .map_err(|e| status!("failed to get object store", e))?
-                    .with_storage_backend(root_storage, table_url)
-                    .build()
-                    .map_err(|e| status!("failed to get object store", e))?;
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
 
-                let mut builder = table.create();
-                // if let Some(location) = &create.location {
-                //     builder = builder.with_location(location.clone());
-                // }
-                if let Some(table_name) = &create.table_name {
-                    builder = builder.with_table_name(table_name.clone());
-                }
-                if let Some(comment) = &create.comment {
-                    builder = builder.with_comment(comment.clone());
-                }
-                if !create.partitioning_columns.is_empty() {
-                    builder = builder.with_partition_columns(&create.partitioning_columns);
-                }
-                let mode = match create.mode() {
-                    CreateDeltaTableMode::Create => SaveMode::ErrorIfExists,
-                    CreateDeltaTableMode::Replace | CreateDeltaTableMode::CreateOrReplace => {
-                        SaveMode::Overwrite
-                    }
-                    CreateDeltaTableMode::CreateIfNotExists => SaveMode::Ignore,
-                    _ => {
-                        return Err(Status::invalid_argument(format!(
-                            "Invalid CreateMode: {}",
-                            create.mode
-                        )));
-                    }
-                };
-                builder = builder.with_save_mode(mode);
-
-                let fields: Vec<StructField> = create
-                    .columns
-                    .iter()
-                    .map(|c| {
-                        column_to_arrow(c, &ConversionOptions::default())
-                            .and_then(|f| (&f).try_into_kernel())
-                    })
-                    .try_collect()
-                    .map_err(|e| {
-                        Status::internal(format!("Error converting columns to Arrow: {e}"))
-                    })?;
-                builder = builder.with_columns(fields);
-
-                let dispatch = dispatcher::get_default(|d| d.clone());
-                let span = tracing::Span::current();
-
-                let handle = self.cpu_runtime.handle().spawn(async move {
-                    dispatcher::with_default(&dispatch, || async {
-                        let _enter = span.enter();
-                        info!("running delta table creation task");
-                        builder.await
-                    })
-                    .await
-                });
-                let _table = handle
-                    .await
-                    .map_err(|e| Status::internal(format!("{e}")))?
-                    .map_err(|e| Status::internal(format!("{e}")))?;
-            }
-            _ => {
-                return Err(Status::unimplemented(format!(
-                    "DeltaCommandType {:?} not implemented",
-                    command_type
-                )));
-            }
-        }
+        let _batches = self
+            .cpu_runtime
+            .handle()
+            .spawn(async move {
+                dispatcher::with_default(&dispatch, || async {
+                    let _enter = span.enter();
+                    let df = ctx.execute_logical_plan(plan).await?;
+                    let res = df.collect().await?;
+                    Ok::<_, DataFusionError>(res)
+                })
+                .await
+            })
+            .await
+            .map_err(|e| status!("Failed to join delta command execution task", e))?
+            .map_err(|e| status!("Failed to execute delta command in do_put_fallback", e))?;
 
         let result = DoPutUpdateResult { record_count: -1 };
         let output = futures::stream::iter(vec![Ok(PutResult {

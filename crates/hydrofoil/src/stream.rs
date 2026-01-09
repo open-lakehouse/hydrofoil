@@ -95,9 +95,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn(async move {
             dispatcher::with_default(&dispatch, || async {
                 let _enter = span.enter();
-                debug!("executing task");
                 task.await
-            });
+            })
+            .await?;
             Ok(())
         });
     }
@@ -115,9 +115,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
             async move {
                 dispatcher::with_default(&dispatch, || async {
                     let _enter = span.enter();
-                    debug!("executing task on cpu runtime");
                     task.await
-                });
+                })
+                .await?;
                 Ok(())
             },
             handle,
@@ -140,7 +140,6 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn_blocking(move || {
             dispatcher::with_default(&dispatch, || {
                 let _enter = span.enter();
-                debug!("executing blocking task");
                 f()
             })
         });
@@ -159,7 +158,6 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
             move || {
                 dispatcher::with_default(&dispatch, || {
                     let _enter = span.enter();
-                    debug!("executing blocking task on cpu runtime");
                     f()
                 })
             },

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, TimeUnit};
 use itertools::Itertools as _;
 
 use crate::models::delta::connect::create_delta_table::Column;
