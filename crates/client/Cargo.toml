@@ -8,9 +8,11 @@ rust-version.workspace = true
 [dependencies]
 hydrofoil-common = { path = "../common" }
 
+arrow-array = { workspace = true }
 arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 bytes = { workspace = true }
+datafusion-common = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 prost = { workspace = true }

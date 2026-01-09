@@ -1,23 +1,21 @@
+use arrow_array::RecordBatch;
+use arrow_flight::Ticket;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::sql::client::{FlightSqlServiceClient, PreparedStatement};
-use arrow_flight::sql::{DoPutUpdateResult, ProstMessageExt};
-use arrow_flight::{FlightData, FlightDescriptor, Ticket};
 use arrow_flight::{FlightInfo, flight_service_client::FlightServiceClient};
-use arrow_schema::{ArrowError, Fields, Schema};
+use arrow_schema::ArrowError;
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use hydrofoil_common::conversion::field_to_connect;
-use hydrofoil_common::{
-    AddFeatureSupport, CreateDeltaTable, CreateDeltaTableMode, DeltaCommand, DeltaCommandType,
-    VacuumTable,
-};
-use itertools::Itertools as _;
-use prost::Message as _;
+use datafusion_common::TableReference;
+use futures::Stream;
 use tonic::IntoRequest;
 use tonic::transport::{Channel, Endpoint};
 
-use crate::error::{Result, decode_error_to_arrow_error, status_to_arrow_error};
+use crate::commands::{CreateDeltaTableBuilder, IngestBuilder};
+use crate::error::Result;
 
+pub use arrow_flight::sql::{TableExistsOption, TableNotExistOption};
+
+mod commands;
 mod error;
 
 #[derive(Debug, Clone)]
@@ -72,121 +70,30 @@ impl Client {
             .await
     }
 
+    pub fn ingest<S>(&mut self, table: impl Into<TableReference>, stream: S) -> IngestBuilder<S>
+    where
+        S: Stream<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
+    {
+        let table = table.into();
+        let mut builder =
+            IngestBuilder::new(self.client.clone(), stream).with_table_name(table.table());
+        if let Some(schema) = table.schema() {
+            builder = builder.with_schema_name(schema);
+        }
+        if let Some(catalog) = table.catalog() {
+            builder = builder.with_catalog_name(catalog);
+        }
+        builder
+    }
+
     pub fn create_delta_table(&self) -> CreateDeltaTableBuilder {
         CreateDeltaTableBuilder::new(self.client.clone())
     }
 }
 
-pub struct CreateDeltaTableBuilder {
-    client: FlightSqlServiceClient<Channel>,
-    message: CreateDeltaTable,
-}
-
-impl CreateDeltaTableBuilder {
-    fn new(client: FlightSqlServiceClient<Channel>) -> Self {
-        let mut message = CreateDeltaTable::default();
-        message.set_mode(CreateDeltaTableMode::Create);
-        Self { client, message }
-    }
-
-    pub fn with_mode(mut self, mode: CreateDeltaTableMode) -> Self {
-        self.message.set_mode(mode);
-        self
-    }
-
-    pub fn with_location<S: Into<String>>(mut self, path: S) -> Self {
-        self.message.location = Some(path.into());
-        self
-    }
-
-    pub fn with_table_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.message.table_name = Some(name.into());
-        self
-    }
-
-    pub fn with_comment<S: Into<String>>(mut self, comment: S) -> Self {
-        self.message.comment = Some(comment.into());
-        self
-    }
-
-    pub fn with_partition_columns<S: Into<String>>(
-        mut self,
-        columns: impl IntoIterator<Item = S>,
-    ) -> Self {
-        self.message.partitioning_columns = columns.into_iter().map(|s| s.into()).collect();
-        self
-    }
-
-    pub fn with_clustering_columns<S: Into<String>>(
-        mut self,
-        columns: impl IntoIterator<Item = S>,
-    ) -> Self {
-        self.message.clustering_columns = columns.into_iter().map(|s| s.into()).collect();
-        self
-    }
-
-    pub fn with_columns(mut self, fields: impl Into<Fields>) -> Result<Self, ArrowError> {
-        self.message.columns = fields
-            .into()
-            .iter()
-            .map(|f| field_to_connect(f))
-            .try_collect()?;
-        Ok(self)
-    }
-
-    pub fn with_schema(mut self, schema: &Schema) -> Result<Self, ArrowError> {
-        self.message.columns = schema
-            .fields()
-            .iter()
-            .map(|f| field_to_connect(f))
-            .try_collect()?;
-        Ok(self)
-    }
-}
-
-impl IntoFuture for CreateDeltaTableBuilder {
-    type Output = Result<()>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        let mut client = self.client;
-        let message = self.message;
-
-        Box::pin(async move {
-            let command = DeltaCommand {
-                command_type: Some(DeltaCommandType::CreateDeltaTable(message)),
-            };
-            let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
-            // let req = self.client.set_request_headers(
-            //     stream::iter(vec![FlightData {
-            //         flight_descriptor: Some(descriptor),
-            //         ..Default::default()
-            //     }])
-            //     .into_request(),
-            // )?;
-            let req = futures::stream::iter(vec![FlightData {
-                flight_descriptor: Some(descriptor),
-                ..Default::default()
-            }])
-            .into_request();
-
-            let mut result = client.do_put(req).await?;
-            let result = result
-                .message()
-                .await
-                .map_err(status_to_arrow_error)?
-                .unwrap();
-            let _result = DoPutUpdateResult::decode(&*result.app_metadata)
-                .map_err(decode_error_to_arrow_error)?;
-
-            Ok(())
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{DataType, Field, Schema};
     use futures::TryStreamExt as _;
 
     use super::*;
