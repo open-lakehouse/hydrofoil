@@ -80,8 +80,6 @@ impl TableProviderFactory for DeltaTableFactory {
             builder = builder.with_partition_columns(&cmd.table_partition_cols);
         }
 
-        // TODO: register table provider in catalog/schema.
-
         debug!("Creating Delta table at '{}'.", location.as_str());
         Ok(builder.await?.table_provider().await?)
     }

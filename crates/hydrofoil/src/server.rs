@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::AsArray;
+use arrow::datatypes::UInt64Type;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -20,8 +20,11 @@ use arrow_flight::{
     Ticket,
 };
 use dashmap::DashMap;
+use datafusion::catalog::streaming::StreamingTable;
+use datafusion::datasource::provider_as_source;
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::dml::InsertOp;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::{SQLOptions, SessionContext};
 use futures::TryStreamExt;
 use hydrofoil_common::DeltaCommand;
@@ -33,7 +36,7 @@ use uuid::Uuid;
 use crate::execution::CpuRuntime;
 use crate::planner::DeltaPlanner;
 use crate::session::create_session;
-use crate::stream::FlightDataReceiverStreamBuilder;
+use crate::stream::{FlightDataReceiverStreamBuilder, FlightDataStream};
 
 mod metadata;
 
@@ -83,42 +86,6 @@ impl FlightSqlServiceImpl {
         } else {
             Err(Status::internal(format!("Plan handle not found: {handle}")))?
         }
-    }
-
-    async fn tables(&self, ctx: Arc<SessionContext>) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("catalog_name", DataType::Utf8, true),
-            Field::new("db_schema_name", DataType::Utf8, true),
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("table_type", DataType::Utf8, false),
-        ]));
-
-        let mut catalogs = vec![];
-        let mut schemas = vec![];
-        let mut names = vec![];
-        let mut types = vec![];
-        for catalog in ctx.catalog_names() {
-            let catalog_provider = ctx.catalog(&catalog).unwrap();
-            for schema in catalog_provider.schema_names() {
-                let schema_provider = catalog_provider.schema(&schema).unwrap();
-                for table in schema_provider.table_names() {
-                    let table_provider = schema_provider.table(&table).await.unwrap().unwrap();
-                    catalogs.push(catalog.clone());
-                    schemas.push(schema.clone());
-                    names.push(table.clone());
-                    types.push(table_provider.table_type().to_string())
-                }
-            }
-        }
-
-        RecordBatch::try_new(
-            schema,
-            [catalogs, schemas, names, types]
-                .into_iter()
-                .map(|i| Arc::new(StringArray::from(i)) as ArrayRef)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap()
     }
 
     #[allow(clippy::result_large_err)]
@@ -429,17 +396,73 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(-1)
     }
 
+    #[instrument(
+        skip_all,
+        fields(
+            table = ticket.table,
+            schema = ticket.schema,
+            catalog = ticket.catalog,
+        )
+    )]
     async fn do_put_statement_ingest(
         &self,
-        _ticket: CommandStatementIngest,
-        _request: Request<PeekableFlightDataStream>,
+        ticket: CommandStatementIngest,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        Err(Status::unimplemented(
-            "do_put_statement_ingest not implemented",
-        ))
+        let ctx = self.get_ctx(&request)?;
+
+        let table_name = &ticket.table;
+        let target = ctx.table_provider(table_name).await.unwrap();
+        let schema = target.schema();
+
+        let stream =
+            FlightDataStream::new(request.into_inner().map_err(|e| e.into()), schema.clone());
+        let source_provider =
+            Arc::new(StreamingTable::try_new(schema, vec![Arc::new(stream)]).unwrap());
+        let input =
+            LogicalPlanBuilder::scan("fligh_source", provider_as_source(source_provider), None)
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let plan = LogicalPlanBuilder::insert_into(
+            input,
+            table_name,
+            provider_as_source(target),
+            InsertOp::Append,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = tracing::Span::current();
+
+        let batches = self
+            .cpu_runtime
+            .handle()
+            .spawn(async move {
+                dispatcher::with_default(&dispatch, || async {
+                    let _enter = span.enter();
+                    let df = ctx.execute_logical_plan(plan).await?;
+                    let res = df.collect().await?;
+                    Ok::<_, DataFusionError>(res)
+                })
+                .await
+            })
+            .await
+            .map_err(|e| status!("Failed to join delta command execution task", e))?
+            .map_err(|e| status!("Failed to execute delta command in do_put_fallback", e))?;
+
+        if batches.is_empty() {
+            Ok(0)
+        } else {
+            let row_count = batches[0].column(0).as_primitive::<UInt64Type>().value(0);
+            Ok(row_count as i64)
+        }
     }
 
-    #[instrument(skip(self, request))]
+    #[instrument(skip_all, fields(message_type_url = message.type_url.as_str()))]
     async fn do_put_fallback(
         &self,
         request: Request<PeekableFlightDataStream>,
@@ -486,6 +509,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let output = futures::stream::iter(vec![Ok(PutResult {
             app_metadata: result.encode_to_vec().into(),
         })]);
+
         Ok(Response::new(Box::pin(output)))
     }
 

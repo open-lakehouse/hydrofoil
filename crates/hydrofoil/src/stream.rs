@@ -16,19 +16,24 @@
 // under the License.
 
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use arrow::datatypes::SchemaRef;
 use arrow_flight::FlightData;
+use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 
 use datafusion::catalog::Session;
 use datafusion::common::runtime::JoinSet;
+use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::DataFusionError;
-use datafusion::execution::TaskContext;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
@@ -553,5 +558,48 @@ impl FlightDataReceiverStreamBuilder {
     /// Create a stream of all [`FlightData`] written to `tx`
     pub fn build(self) -> FlightStream {
         Box::pin(self.inner.build())
+    }
+}
+
+#[derive(Debug)]
+pub struct FlightDataStream {
+    inner: Mutex<Option<FlightRecordBatchStream>>,
+    schema: SchemaRef,
+}
+
+impl FlightDataStream {
+    pub fn new<S>(inner: S, schema: SchemaRef) -> Self
+    where
+        S: Stream<Item = Result<FlightData, FlightError>> + Send + 'static,
+    {
+        Self {
+            inner: Mutex::new(Some(FlightRecordBatchStream::new_from_flight_data(inner))),
+            schema,
+        }
+    }
+}
+
+impl PartitionStream for FlightDataStream {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _context: Arc<TaskContext>) -> SendableRecordBatchStream {
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(stream) = guard.take()
+        {
+            return Box::pin(RecordBatchStreamAdapter::new(
+                self.schema().clone(),
+                stream.map_err(|e| exec_datafusion_err!("Failed to receive flight stream: {}", e)),
+            ));
+        };
+        return Box::pin(RecordBatchStreamAdapter::new(
+            self.schema().clone(),
+            futures::stream::once(async {
+                exec_err!(
+                    "FlightDataStream has already been executed once and cannot be executed again"
+                )
+            }),
+        ));
     }
 }

@@ -19,8 +19,6 @@ prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
-tonic-tracing-opentelemetry = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 rstest = { version = "0.26.1" }

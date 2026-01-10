@@ -10,6 +10,12 @@ use tracing::level_filters::LevelFilter;
 use tracing_opentelemetry::{MetricsLayer, OpenTelemetryLayer};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
+#[allow(unused)]
+pub use self::object_store::SpawnedTracedReqwestConnector;
+
+#[allow(unused)]
+mod object_store;
+
 fn resource() -> Resource {
     Resource::builder().with_service_name("hydrofoil").build()
 }

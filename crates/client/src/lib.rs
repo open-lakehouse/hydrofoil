@@ -70,7 +70,7 @@ impl Client {
             .await
     }
 
-    pub fn ingest<S>(&mut self, table: impl Into<TableReference>, stream: S) -> IngestBuilder<S>
+    pub fn ingest<S>(&self, table: impl Into<TableReference>, stream: S) -> IngestBuilder<S>
     where
         S: Stream<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
     {
@@ -93,6 +93,9 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use futures::TryStreamExt as _;
 
@@ -119,10 +122,12 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         let client = Client::try_new("http://localhost:50051").await.unwrap();
+
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("value", DataType::Utf8View, false),
+            Field::new("value", DataType::Utf8, false),
         ]);
+
         let _result = client
             .create_delta_table()
             .with_location("s3://open-lakehouse/test_table/")
@@ -131,6 +136,26 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
+
+        let data = vec![
+            RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![
+                    Arc::new(Int64Array::from(vec![1, 2, 3])),
+                    Arc::new(StringArray::from(vec!["a", "b", "c"])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        client
+            .ingest(
+                "test_table",
+                futures::stream::iter(data.into_iter().map(Ok)),
+            )
+            .await
+            .unwrap();
+
         // assert!(result.is_ok());
     }
 }

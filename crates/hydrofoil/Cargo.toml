@@ -9,7 +9,7 @@ hydrofoil-common = { path = "../common" }
 
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
-cloud-client = { workspace = true }
+bytes = { workspace = true }
 datafusion = { workspace = true }
 datafusion-tracing = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
@@ -26,24 +26,26 @@ unitycatalog-common = { workspace = true }
 url = { workspace = true }
 
 async-trait = { version = "^0.1.89" }
-clap = { version = "4.5.44", features = ["derive"] }
 dashmap = "6.0.1"
-env_logger = "0.11"
 futures = "0.3"
+http = "1.2.0"
+http-body-util = { version = "0.1.2" }
+humantime = "2.1"
+hyper = { version = "1.2", default-features = false }
 instrumented-object-store = "51.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
-pin-project-lite = "^0.2.7"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"] }
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
     "fmt",
     "env-filter",
 ] }
-sqlparser = { version = "0.55.0", default-features = false, features = [
-    "std",
-    "visitor",
-] }
+# sqlparser = { version = "0.55.0", default-features = false, features = [
+#     "std",
+#     "visitor",
+# ] }
 uuid = "1.17"
