@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::error::Result;
+use arrow::array::RecordBatch;
+use datafusion::{
+    common::exec_datafusion_err, error::Result, logical_expr::LogicalPlan, prelude::SessionContext,
+};
 use tokio::{runtime::Handle, sync::Notify};
+use tracing::{Instrument, instrument};
 
 /// Creates a Tokio [`Runtime`] for use with CPU bound tasks
 ///
@@ -85,5 +89,31 @@ impl CpuRuntime {
     /// ```
     pub fn handle(&self) -> &Handle {
         &self.handle
+    }
+
+    pub fn spawn<F>(&self, fut: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let current_span = tracing::Span::current();
+        self.handle
+            .spawn(async move { fut.instrument(current_span).await })
+    }
+
+    #[instrument(skip_all, level = "info", fields(plan = plan.display_indent().to_string()))]
+    pub async fn execute_logical_plan(
+        &self,
+        session: Arc<SessionContext>,
+        plan: LogicalPlan,
+    ) -> Result<Vec<RecordBatch>> {
+        let fut = async move {
+            let df = session.execute_logical_plan(plan).await?;
+            df.collect().await
+        };
+        self.spawn(fut)
+            .await
+            .map_err(|e| exec_datafusion_err!("{e}"))
+            .flatten()
     }
 }

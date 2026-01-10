@@ -1,20 +1,18 @@
+use std::time::Duration;
+
 use opentelemetry::{global, trace::TracerProvider};
-use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::{
     Resource,
     metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
-    propagation::TraceContextPropagator,
-    trace::SdkTracerProvider,
+    trace::{Sampler, SdkTracerProvider},
 };
-use tracing::level_filters::LevelFilter;
-use tracing_opentelemetry::{MetricsLayer, OpenTelemetryLayer};
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-
-#[allow(unused)]
-pub use self::object_store::SpawnedTracedReqwestConnector;
-
-#[allow(unused)]
-mod object_store;
+use tracing::{Level, level_filters::LevelFilter};
+use tracing_opentelemetry::MetricsLayer;
+use tracing_subscriber::{
+    Layer as _, fmt::writer::MakeWriterExt as _, layer::SubscriberExt as _,
+    util::SubscriberInitExt as _,
+};
 
 fn resource() -> Resource {
     Resource::builder().with_service_name("hydrofoil").build()
@@ -46,55 +44,38 @@ pub(crate) fn init_meter_provider() -> SdkMeterProvider {
     meter_provider
 }
 
-pub(crate) fn init_tracer_provider() {
-    let exporter = SpanExporter::builder()
-        .with_tonic()
-        .build()
-        .expect("Failed to create span exporter");
-    let provider = SdkTracerProvider::builder()
-        .with_resource(resource())
-        .with_batch_exporter(exporter)
-        .build();
-    global::set_text_map_propagator(TraceContextPropagator::new());
-    global::set_tracer_provider(provider);
-}
-
 // Initialize tracing-subscriber and return OtelGuard for opentelemetry-related termination processing
 pub(crate) fn init_tracing_subscriber() -> OtelGuard {
-    // let tracer_provider = global::tracer_provider();
     let meter_provider = init_meter_provider();
-    //
-    let exporter = SpanExporter::builder()
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
+        .with_endpoint("http://localhost:4317") // Endpoint for OTLP collector.
+        .with_timeout(Duration::from_secs(10))
         .build()
         .expect("Failed to create span exporter");
     let tracer_provider = SdkTracerProvider::builder()
-        .with_resource(Resource::builder().with_service_name("hydrofoil").build())
         .with_batch_exporter(exporter)
+        .with_resource(resource())
+        .with_sampler(Sampler::AlwaysOn)
         .build();
+    global::set_tracer_provider(tracer_provider.clone());
 
     let tracer = tracer_provider.tracer("hydrofoil");
 
+    let telemetry_layer = tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_location(false)
+        .with_filter(LevelFilter::INFO);
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_writer(std::io::stdout.with_max_level(Level::INFO));
+
     tracing_subscriber::registry()
-        // The global level filter prevents the exporter network stack
-        // from reentering the globally installed OpenTelemetryLayer with
-        // its own spans while exporting, as the libraries should not use
-        // tracing levels below DEBUG. If the OpenTelemetry layer needs to
-        // trace spans and events with higher verbosity levels, consider using
-        // per-layer filtering to target the telemetry layer specifically,
-        // e.g. by target matching.
-        .with(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::WARN.into())
-                .parse_lossy("hydrofoil=debug"),
-        )
-        .with(tracing_subscriber::fmt::layer())
+        .with(telemetry_layer)
+        .with(fmt_layer)
         .with(MetricsLayer::new(meter_provider.clone()))
-        .with(
-            OpenTelemetryLayer::new(tracer)
-                .with_location(false)
-                .with_threads(false),
-        )
         .init();
 
     OtelGuard {

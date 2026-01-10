@@ -31,6 +31,7 @@ impl DeltaTableFactory {
 impl TableProviderFactory for DeltaTableFactory {
     #[instrument(
         skip_all,
+        level = "info",
         fields(
             session_id = ctx.session_id(),
             table_name = cmd.name.table(),

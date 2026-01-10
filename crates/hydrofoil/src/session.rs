@@ -1,24 +1,33 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::RecordBatch;
+use bytes::Bytes;
 use datafusion::{
     catalog::Session,
     error::Result,
-    execution::SessionStateBuilder,
+    execution::{SessionStateBuilder, TaskContext},
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
+use delta_kernel::Engine;
+use deltalake_core::{
+    DeltaResult,
+    logstore::{ObjectStoreRef, commit_uri_from_version},
+};
 use deltalake_core::{
     Path,
     delta_datafusion::engine::AsObjectStoreUrl as _,
-    logstore::{LogStore, StorageConfig, default_logstore, logstore_with},
+    logstore::{LogStore, StorageConfig, logstore_with},
 };
+use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
+use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
 use instrumented_object_store::instrument_object_store;
+use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
 use tokio::runtime::Handle;
-use tracing::warn;
+use tracing::{error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -48,7 +57,12 @@ impl<S: Session + ?Sized> SessionExt for S {
                         "No registered log store factory for scheme '{}'. Using default.",
                         location.scheme()
                     );
-                    default_logstore(prefixed_store, root_store, location, &storage_config)
+                    DataFusionLogStore::new(
+                        prefixed_store,
+                        root_store,
+                        LogStoreConfig::new(location, storage_config),
+                        self.task_ctx(),
+                    )
                 },
             ),
         )
@@ -107,4 +121,111 @@ fn add_seaweedfs(session: &dyn Session, handle: Handle) -> Result<()> {
         .runtime_env()
         .register_object_store(&url, instrumented);
     Ok(())
+}
+
+fn put_options() -> &'static PutOptions {
+    static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
+    PUT_OPTS.get_or_init(|| PutOptions {
+        mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
+        tags: TagSet::default(),
+        attributes: Attributes::default(),
+        extensions: Default::default(),
+    })
+}
+
+/// Default [`LogStore`] implementation
+#[derive(Debug, Clone)]
+pub struct DataFusionLogStore {
+    prefixed_store: ObjectStoreRef,
+    root_store: ObjectStoreRef,
+    config: LogStoreConfig,
+    ctx: Arc<TaskContext>,
+}
+
+impl DataFusionLogStore {
+    /// Create a new instance of [`DefaultLogStore`]
+    fn new(
+        prefixed_store: ObjectStoreRef,
+        root_store: ObjectStoreRef,
+        config: LogStoreConfig,
+        ctx: Arc<TaskContext>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            prefixed_store,
+            root_store,
+            config,
+            ctx,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LogStore for DataFusionLogStore {
+    fn name(&self) -> String {
+        "DataFusionLogStore".into()
+    }
+
+    async fn read_commit_entry(&self, _version: i64) -> DeltaResult<Option<Bytes>> {
+        todo!("read_commit_entry")
+    }
+
+    #[instrument(skip_all, level = "info")]
+    async fn write_commit_entry(
+        &self,
+        version: i64,
+        commit_or_bytes: CommitOrBytes,
+        _: Uuid,
+    ) -> Result<(), TransactionError> {
+        error!("using legacy log store APIs.");
+
+        match commit_or_bytes {
+            CommitOrBytes::LogBytes(log_bytes) => self
+                .object_store(None)
+                .put_opts(
+                    &commit_uri_from_version(version),
+                    log_bytes.into(),
+                    put_options().clone(),
+                )
+                .await
+                .map_err(|err| -> TransactionError {
+                    match err {
+                        ObjectStoreError::AlreadyExists { .. } => {
+                            TransactionError::VersionAlreadyExists(version)
+                        }
+                        _ => TransactionError::from(err),
+                    }
+                })?,
+            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+        };
+        Ok(())
+    }
+
+    async fn abort_commit_entry(
+        &self,
+        _version: i64,
+        _commit_or_bytes: CommitOrBytes,
+        _: Uuid,
+    ) -> Result<(), TransactionError> {
+        todo!("abort_commit_entry")
+    }
+
+    async fn get_latest_version(&self, _current_version: i64) -> DeltaResult<i64> {
+        todo!("not get_latest_version")
+    }
+
+    fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
+        self.prefixed_store.clone()
+    }
+
+    fn root_object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
+        self.root_store.clone()
+    }
+
+    fn config(&self) -> &LogStoreConfig {
+        &self.config
+    }
+
+    fn engine(&self, _operation_id: Option<Uuid>) -> Arc<dyn Engine> {
+        DataFusionEngine::new_from_context(self.ctx.clone())
+    }
 }

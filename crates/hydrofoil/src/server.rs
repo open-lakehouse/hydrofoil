@@ -20,23 +20,20 @@ use arrow_flight::{
     Ticket,
 };
 use dashmap::DashMap;
-use datafusion::catalog::streaming::StreamingTable;
-use datafusion::datasource::provider_as_source;
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::dml::InsertOp;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SQLOptions, SessionContext};
 use futures::TryStreamExt;
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
 use tonic::{Request, Response, Status};
-use tracing::{debug, dispatcher, info, instrument};
+use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 use crate::execution::CpuRuntime;
-use crate::planner::DeltaPlanner;
+use crate::planner::{DeltaPlanner, FlightPlanner};
 use crate::session::create_session;
-use crate::stream::{FlightDataReceiverStreamBuilder, FlightDataStream};
+use crate::stream::FlightDataReceiverStreamBuilder;
 
 mod metadata;
 
@@ -105,6 +102,7 @@ impl FlightSqlServiceImpl {
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_catalogs(
         &self,
         query: CommandGetCatalogs,
@@ -125,6 +123,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_schemas(
         &self,
         query: CommandGetDbSchemas,
@@ -145,6 +144,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_tables(
         &self,
         query: CommandGetTables,
@@ -165,6 +165,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -188,6 +189,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_xdbc_type_info(
         &self,
         query: CommandGetXdbcTypeInfo,
@@ -212,7 +214,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     /// Get a FlightInfo for executing a SQL query.
-    #[instrument(skip(self, request))]
+    #[instrument(skip_all, level = "info", fields(query = query.query.as_str()))]
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
@@ -253,6 +255,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
@@ -284,6 +287,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(info))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -299,6 +303,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_get_xdbc_type_info(
         &self,
         query: CommandGetXdbcTypeInfo,
@@ -315,6 +320,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_get_statement(
         &self,
         _ticket: TicketStatementQuery,
@@ -325,6 +331,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_get_prepared_statement(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -335,7 +342,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
-    #[instrument(skip(self, request))]
+    #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
     async fn do_get_fallback(
         &self,
         request: Request<Ticket>,
@@ -353,13 +360,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?
             .ok_or_else(|| Status::internal("Expected FetchResults but got None!"))?;
 
-        let handle = fr.handle;
-        info!("getting results for {handle}");
-
         let ctx = self.get_ctx(&request)?;
 
         // retrieve the plan and verify it is safe to execute
-        let plan = self.get_plan(handle.as_str())?;
+        let plan = self.get_plan(fr.handle.as_str())?;
         let options = SQLOptions::new()
             .with_allow_ddl(false)
             .with_allow_dml(false);
@@ -374,6 +378,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_put_statement_update(
         &self,
         _handle: CommandStatementUpdate,
@@ -385,6 +390,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(-1)
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_put_prepared_statement_update(
         &self,
         _handle: CommandPreparedStatementUpdate,
@@ -398,6 +404,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     #[instrument(
         skip_all,
+        level = "info",
         fields(
             table = ticket.table,
             schema = ticket.schema,
@@ -410,49 +417,25 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         let ctx = self.get_ctx(&request)?;
+        let planner = FlightPlanner::new();
 
-        let table_name = &ticket.table;
-        let target = ctx.table_provider(table_name).await.unwrap();
-        let schema = target.schema();
-
-        let stream =
-            FlightDataStream::new(request.into_inner().map_err(|e| e.into()), schema.clone());
-        let source_provider =
-            Arc::new(StreamingTable::try_new(schema, vec![Arc::new(stream)]).unwrap());
-        let input =
-            LogicalPlanBuilder::scan("fligh_source", provider_as_source(source_provider), None)
-                .unwrap()
-                .build()
-                .unwrap();
-
-        let plan = LogicalPlanBuilder::insert_into(
-            input,
-            table_name,
-            provider_as_source(target),
-            InsertOp::Append,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let dispatch = dispatcher::get_default(|d| d.clone());
-        let span = tracing::Span::current();
+        let ctx_inner = ctx.clone();
+        let plan = self
+            .cpu_runtime
+            .spawn(async move {
+                planner
+                    .plan_ingest(&ctx_inner, &ticket, request.into_inner())
+                    .await
+            })
+            .await
+            .map_err(|e| status!("Failed to spawn ingest command", e))?
+            .map_err(|e| status!("Failed to spawn ingest command", e))?;
 
         let batches = self
             .cpu_runtime
-            .handle()
-            .spawn(async move {
-                dispatcher::with_default(&dispatch, || async {
-                    let _enter = span.enter();
-                    let df = ctx.execute_logical_plan(plan).await?;
-                    let res = df.collect().await?;
-                    Ok::<_, DataFusionError>(res)
-                })
-                .await
-            })
+            .execute_logical_plan(ctx, plan)
             .await
-            .map_err(|e| status!("Failed to join delta command execution task", e))?
-            .map_err(|e| status!("Failed to execute delta command in do_put_fallback", e))?;
+            .map_err(|e| status!("Failed to execute ingest command", e))?;
 
         if batches.is_empty() {
             Ok(0)
@@ -462,7 +445,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         }
     }
 
-    #[instrument(skip_all, fields(message_type_url = message.type_url.as_str()))]
+    #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
     async fn do_put_fallback(
         &self,
         request: Request<PeekableFlightDataStream>,
@@ -486,24 +469,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .plan_delta_connect(&ctx.state(), &command)
             .map_err(|e| Status::internal(format!("Error planning delta command: {e}")))?;
 
-        let dispatch = dispatcher::get_default(|d| d.clone());
-        let span = tracing::Span::current();
-
         let _batches = self
             .cpu_runtime
-            .handle()
-            .spawn(async move {
-                dispatcher::with_default(&dispatch, || async {
-                    let _enter = span.enter();
-                    let df = ctx.execute_logical_plan(plan).await?;
-                    let res = df.collect().await?;
-                    Ok::<_, DataFusionError>(res)
-                })
-                .await
-            })
+            .execute_logical_plan(ctx, plan)
             .await
-            .map_err(|e| status!("Failed to join delta command execution task", e))?
-            .map_err(|e| status!("Failed to execute delta command in do_put_fallback", e))?;
+            .map_err(|e| status!("Failed to execute ingest command", e))?;
 
         let result = DoPutUpdateResult { record_count: -1 };
         let output = futures::stream::iter(vec![Ok(PutResult {
@@ -513,28 +483,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(output)))
     }
 
+    #[instrument(skip_all, level = "info", fields(query = query.query.as_str()))]
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        debug!("do_action_create_prepared_statement");
-
-        let user_query = query.query.as_str();
-
         let ctx = self.get_ctx(&request)?;
-
         let plan = ctx
             .state()
-            .create_logical_plan(user_query)
+            .create_logical_plan(query.query.as_str())
             .await
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
-
-        // let plan = ctx
-        //     .sql(user_query)
-        //     .await
-        //     .and_then(|df| df.into_optimized_plan())
-        //     .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
 
         // store a copy of the plan,  it will be used for execution
         let plan_uuid = Uuid::new_v4().hyphenated().to_string();
@@ -548,14 +508,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
 
-        let res = ActionCreatePreparedStatementResult {
+        Ok(ActionCreatePreparedStatementResult {
             prepared_statement_handle: plan_uuid.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(),
-        };
-        Ok(res)
+        })
     }
 
+    #[instrument(skip_all, level = "info")]
     async fn do_action_close_prepared_statement(
         &self,
         handle: ActionClosePreparedStatementRequest,
