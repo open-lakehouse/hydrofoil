@@ -142,22 +142,6 @@ impl TaskExt for SessionContext {
     }
 }
 
-pub trait SessionExt {
-    /// Get a Delta [`LogStore`] for the given location
-    ///
-    /// # Arguments
-    ///
-    /// * `location` - The URL location of the Delta table root
-    ///   (i.e., where the `_delta_log` directory is located)
-    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>>;
-}
-
-impl<S: Session + ?Sized> SessionExt for S {
-    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>> {
-        self.task_ctx().lh().delta_logstore_for(location)
-    }
-}
-
 pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
@@ -284,7 +268,8 @@ impl LogStore for DataFusionLogStore {
                         _ => TransactionError::from(err),
                     }
                 })?,
-            _ => unreachable!(), // Default log store should never get a tmp_commit, since this is for conditional put stores
+            // Default log store should never get a tmp_commit, since this is for conditional put stores
+            _ => unreachable!("unreachable in write_commit_entry"),
         };
         Ok(())
     }

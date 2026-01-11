@@ -28,16 +28,11 @@ url = { workspace = true }
 async-trait = { version = "^0.1.89" }
 dashmap = "6.0.1"
 futures = "0.3"
-http = "1.2.0"
-http-body-util = { version = "0.1.2" }
-humantime = "2.1"
-hyper = { version = "1.2", default-features = false }
 instrumented-object-store = "51.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"] }
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
@@ -48,4 +43,4 @@ tracing-subscriber = { version = "0.3", features = [
 #     "std",
 #     "visitor",
 # ] }
-uuid = "1.17"
+uuid = { version = "1.17", features = ["v4", "v7"] }

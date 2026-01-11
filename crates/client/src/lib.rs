@@ -97,6 +97,7 @@ mod tests {
 
     use arrow_array::{Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::arrow::util::pretty::print_batches;
     use futures::TryStreamExt as _;
 
     use super::*;
@@ -121,7 +122,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let client = Client::try_new("http://localhost:50051").await.unwrap();
+        let mut client = Client::try_new("http://localhost:50051").await.unwrap();
 
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
@@ -155,6 +156,19 @@ mod tests {
             )
             .await
             .unwrap();
+
+        let mut stmt = client
+            .prepare("SELECT * FROM test_table", None)
+            .await
+            .unwrap();
+
+        let flight_info = stmt.execute().await.unwrap();
+
+        let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
+        let flight_data = client.do_get(ticket).await.unwrap();
+        let batches: Vec<_> = flight_data.try_collect().await.unwrap();
+
+        print_batches(&batches).unwrap();
 
         // assert!(result.is_ok());
     }

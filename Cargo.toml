@@ -43,6 +43,7 @@ unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
 deltalake-core = { path = "../delta-rs/crates/core", features = [
     "datafusion",
     "cloud",
+    "tracing",
 ] }
 
 [workspace.metadata.typos]

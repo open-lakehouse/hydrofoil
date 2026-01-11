@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use datafusion::{
-    common::exec_datafusion_err, error::Result, logical_expr::LogicalPlan, prelude::SessionContext,
+    common::{exec_datafusion_err, plan_datafusion_err},
+    error::Result,
+    logical_expr::LogicalPlan,
+    prelude::SessionContext,
 };
 use tokio::{runtime::Handle, sync::Notify};
-use tracing::{Instrument, instrument};
+use tracing::{Instrument, field, instrument};
 
 /// Creates a Tokio [`Runtime`] for use with CPU bound tasks
 ///
@@ -101,7 +104,49 @@ impl CpuRuntime {
             .spawn(async move { fut.instrument(current_span).await })
     }
 
-    #[instrument(skip_all, level = "info", fields(plan = plan.display_indent().to_string()))]
+    /// Create a DataFusion LogicalPlan from a SQL query string
+    ///
+    /// Logical query plan creation is performed on the CPU runtime as
+    /// it may involve significant CPU work.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The DataFusion SessionContext to use
+    /// * `query` - The SQL query string
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the LogicalPlan or an error
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            hydrofoil.query = query.as_ref(),
+            hydrofoil.plan = field::Empty,
+        )
+    )]
+    pub async fn create_logical_plan(
+        &self,
+        session: Arc<SessionContext>,
+        query: impl AsRef<str> + Send + 'static,
+    ) -> Result<LogicalPlan> {
+        let fut = async move { session.state().create_logical_plan(query.as_ref()).await };
+        let plan = self
+            .spawn(fut)
+            .await
+            .map_err(|e| plan_datafusion_err!("{e}"))
+            .flatten()?;
+        tracing::Span::current().record("hydrofoil.plan", &plan.display_indent().to_string());
+        Ok(plan)
+    }
+
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            hydrofoil.plan = plan.display_indent().to_string(),
+        )
+    )]
     pub async fn execute_logical_plan(
         &self,
         session: Arc<SessionContext>,
