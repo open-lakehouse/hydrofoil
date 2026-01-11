@@ -4,16 +4,20 @@ use arrow::array::RecordBatch;
 use bytes::Bytes;
 use datafusion::{
     catalog::Session,
+    datasource::provider_as_source,
     error::Result,
-    execution::{SessionStateBuilder, TaskContext},
+    execution::{SessionState, SessionStateBuilder, TaskContext},
+    logical_expr::{LogicalPlan, LogicalPlanBuilder},
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
-use delta_kernel::Engine;
+use delta_kernel::{Engine, Version};
 use deltalake_core::{
-    DeltaResult,
+    DeltaResult, DeltaTableConfig,
+    delta_datafusion::DeltaScanNext,
+    kernel::Snapshot,
     logstore::{ObjectStoreRef, commit_uri_from_version},
 };
 use deltalake_core::{
@@ -33,20 +37,14 @@ use uuid::Uuid;
 
 use crate::external_tables::DeltaTableFactory;
 
-pub trait SessionExt {
-    /// Get a Delta [`LogStore`] for the given location
-    ///
-    /// # Arguments
-    ///
-    /// * `location` - The URL location of the Delta table root
-    ///   (i.e., where the `_delta_log` directory is located)
-    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>>;
+pub struct LakehouseSession {
+    inner: Arc<TaskContext>,
 }
 
-impl<S: Session + ?Sized> SessionExt for S {
-    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>> {
+impl LakehouseSession {
+    pub(crate) fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>> {
         let object_store_url = location.as_object_store_url();
-        let root_store = self.runtime_env().object_store(object_store_url)?;
+        let root_store = self.inner.runtime_env().object_store(object_store_url)?;
         let table_path = Path::from_url_path(location.path())?;
         let prefixed_store = Arc::new(PrefixStore::new(root_store.clone(), table_path));
         let storage_config = StorageConfig::default();
@@ -61,11 +59,102 @@ impl<S: Session + ?Sized> SessionExt for S {
                         prefixed_store,
                         root_store,
                         LogStoreConfig::new(location, storage_config),
-                        self.task_ctx(),
+                        self.inner.clone(),
                     )
                 },
             ),
         )
+    }
+
+    #[instrument(skip(self), level = "info")]
+    pub async fn scan_delta_table(
+        &self,
+        location: &Url,
+        version: Option<Version>,
+    ) -> Result<LogicalPlan> {
+        let log_store = self.delta_logstore_for(location)?;
+        let engine = DataFusionEngine::new_from_context(self.inner.clone());
+
+        let snapshot = Snapshot::try_new_with_engine(
+            engine,
+            location.clone(),
+            DeltaTableConfig {
+                // since we are not going through the eager snapshot, this should
+                // not matter, but we set it to false to avoid any surprises
+                require_files: false,
+                // This might still be used somewhere but should have no effect
+                // when also using the datafusion engine.
+                log_buffer_size: 10,
+                // also should not matter here
+                log_batch_size: self.inner.session_config().options().execution.batch_size,
+                // we are setting the spawning service when we build the objects stores,
+                // and should not additionally integrate with this layer.
+                io_runtime: None,
+            },
+            version,
+        )
+        .await?;
+
+        let table_name = snapshot
+            .metadata()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("__delta__{}", snapshot.metadata().id()));
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .await?;
+
+        LogicalPlanBuilder::scan(table_name, provider_as_source(provider), None)?.build()
+    }
+}
+
+pub trait TaskExt {
+    fn lh(&self) -> LakehouseSession;
+
+    fn lake_house(&self) -> LakehouseSession {
+        self.lh()
+    }
+}
+
+impl TaskExt for Arc<TaskContext> {
+    fn lh(&self) -> LakehouseSession {
+        LakehouseSession {
+            inner: self.clone(),
+        }
+    }
+}
+
+impl TaskExt for SessionState {
+    fn lh(&self) -> LakehouseSession {
+        LakehouseSession {
+            inner: self.task_ctx(),
+        }
+    }
+}
+
+impl TaskExt for SessionContext {
+    fn lh(&self) -> LakehouseSession {
+        LakehouseSession {
+            inner: self.task_ctx(),
+        }
+    }
+}
+
+pub trait SessionExt {
+    /// Get a Delta [`LogStore`] for the given location
+    ///
+    /// # Arguments
+    ///
+    /// * `location` - The URL location of the Delta table root
+    ///   (i.e., where the `_delta_log` directory is located)
+    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>>;
+}
+
+impl<S: Session + ?Sized> SessionExt for S {
+    fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>> {
+        self.task_ctx().lh().delta_logstore_for(location)
     }
 }
 

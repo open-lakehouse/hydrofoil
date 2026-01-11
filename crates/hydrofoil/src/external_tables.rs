@@ -9,10 +9,10 @@ use datafusion::{
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::{StructField, operations::create::CreateBuilder, protocol::SaveMode};
 use itertools::Itertools as _;
-use tracing::{debug, instrument};
+use tracing::instrument;
 use url::Url;
 
-use crate::session::SessionExt as _;
+use crate::session::TaskExt as _;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DeltaTableFactory;
@@ -53,7 +53,7 @@ impl TableProviderFactory for DeltaTableFactory {
         }
 
         let location = Url::parse(&cmd.location).map_err(|e| plan_datafusion_err!("{e}"))?;
-        let log_store = ctx.delta_logstore_for(&location)?;
+        let log_store = ctx.task_ctx().lh().delta_logstore_for(&location)?;
 
         let columns: Vec<StructField> = cmd
             .schema
@@ -81,7 +81,6 @@ impl TableProviderFactory for DeltaTableFactory {
             builder = builder.with_partition_columns(&cmd.table_partition_cols);
         }
 
-        debug!("Creating Delta table at '{}'.", location.as_str());
         Ok(builder.await?.table_provider().await?)
     }
 }
