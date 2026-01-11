@@ -6,7 +6,6 @@ use tonic_tracing_opentelemetry::middleware::{filters, server::OtelGrpcLayer};
 mod catalog;
 mod error;
 mod execution;
-mod external_tables;
 mod planner;
 mod server;
 mod session;

@@ -1,1 +1,5 @@
-use datafusion::catalog::{AsyncCatalogProviderList, AsyncSchemaProvider, TableProviderFactory};
+use datafusion::catalog::{AsyncCatalogProviderList, AsyncSchemaProvider};
+
+pub use self::external_table::DeltaTableFactory;
+
+mod external_table;

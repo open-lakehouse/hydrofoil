@@ -14,7 +14,7 @@ use hydrofoil_common::{
 };
 use itertools::Itertools as _;
 
-use crate::external_tables::DeltaTableFactory;
+use crate::catalog::DeltaTableFactory;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeltaPlanner;

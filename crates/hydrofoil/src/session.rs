@@ -35,7 +35,7 @@ use tracing::{error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::external_tables::DeltaTableFactory;
+use crate::catalog::DeltaTableFactory;
 
 pub struct LakehouseSession {
     inner: Arc<TaskContext>,
