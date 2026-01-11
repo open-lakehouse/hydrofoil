@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use arrow::array::RecordBatch;
 use bytes::Bytes;
 use datafusion::{
-    catalog::Session,
+    catalog::{CatalogProvider as _, MemoryCatalogProvider, Session},
     datasource::provider_as_source,
     error::Result,
     execution::{SessionState, SessionStateBuilder, TaskContext},
@@ -35,7 +35,7 @@ use tracing::{error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::catalog::DeltaTableFactory;
+use crate::catalog::{DeltaTableFactory, LakehouseSchemaProvider};
 
 pub struct LakehouseSession {
     inner: Arc<TaskContext>,
@@ -66,13 +66,11 @@ impl LakehouseSession {
         )
     }
 
-    #[instrument(skip(self), level = "info")]
-    pub async fn scan_delta_table(
+    pub(crate) async fn delta_snapshot_for(
         &self,
         location: &Url,
         version: Option<Version>,
-    ) -> Result<LogicalPlan> {
-        let log_store = self.delta_logstore_for(location)?;
+    ) -> Result<Arc<Snapshot>> {
         let engine = DataFusionEngine::new_from_context(self.inner.clone());
 
         let snapshot = Snapshot::try_new_with_engine(
@@ -94,6 +92,18 @@ impl LakehouseSession {
             version,
         )
         .await?;
+
+        Ok(snapshot.into())
+    }
+
+    #[instrument(skip(self), level = "info")]
+    pub async fn scan_delta_table(
+        &self,
+        location: &Url,
+        version: Option<Version>,
+    ) -> Result<LogicalPlan> {
+        let log_store = self.delta_logstore_for(location)?;
+        let snapshot = self.delta_snapshot_for(location, version).await?;
 
         let table_name = snapshot
             .metadata()
@@ -155,7 +165,10 @@ pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionCont
         options: options,
     );
 
-    let session_config = SessionConfig::from_env()?.with_information_schema(true);
+    let session_config = SessionConfig::from_env()?
+        .with_information_schema(true)
+        .with_default_catalog_and_schema("hydrofoil", "default");
+
     let session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
@@ -168,6 +181,13 @@ pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionCont
     let ctx = SessionContext::new_with_state(session_state);
 
     update_session(&ctx.state())?;
+
+    let catalog = MemoryCatalogProvider::new();
+    catalog.register_schema(
+        "default",
+        LakehouseSchemaProvider::new(Arc::new(ctx.state())),
+    )?;
+    ctx.register_catalog("hydrofoil", Arc::new(catalog));
 
     Ok(ctx)
 }

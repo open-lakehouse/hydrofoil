@@ -65,7 +65,6 @@ impl FlightSqlServiceImpl {
             Ok(ctx.value().clone())
         } else {
             let session_id = Uuid::new_v4();
-            info!("Creating new session with id {}", session_id);
             let ctx = Arc::new(
                 create_session(session_id).map_err(|e| status!("Failed to create session", e))?,
             );
