@@ -10,6 +10,7 @@ use deltalake_core::{
     delta_datafusion::{DeltaScanConfig, DeltaScanNext, engine::DataFusionEngine},
     kernel::Snapshot,
 };
+use itertools::Itertools as _;
 use tracing::instrument;
 
 /// A schema provider that manages Delta Lake tables in a lakehouse.
@@ -28,7 +29,7 @@ use tracing::instrument;
 #[derive(Clone)]
 pub struct LakehouseSchemaProvider {
     session: Arc<dyn Session>,
-    table_cache: Arc<DashMap<String, Arc<Snapshot>>>,
+    tables: Arc<DashMap<String, Arc<Snapshot>>>,
     fallback: Arc<dyn SchemaProvider>,
 }
 
@@ -36,12 +37,8 @@ impl std::fmt::Debug for LakehouseSchemaProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LakehouseSchemaProvider")
             .field(
-                "table_cache_keys",
-                &self
-                    .table_cache
-                    .iter()
-                    .map(|e| e.key().clone())
-                    .collect::<Vec<_>>(),
+                "table_names",
+                &self.tables.iter().map(|e| e.key().clone()).collect_vec(),
             )
             .finish()
     }
@@ -51,7 +48,7 @@ impl LakehouseSchemaProvider {
     pub fn new(session: Arc<dyn Session>) -> Arc<Self> {
         Arc::new(Self {
             session,
-            table_cache: Arc::new(DashMap::new()),
+            tables: Arc::new(DashMap::new()),
             fallback: Arc::new(MemorySchemaProvider::new()),
         })
     }
@@ -64,7 +61,7 @@ impl SchemaProvider for LakehouseSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.table_cache
+        self.tables
             .iter()
             .map(|entry| entry.key().clone())
             .chain(self.fallback.table_names().into_iter())
@@ -79,16 +76,12 @@ impl SchemaProvider for LakehouseSchemaProvider {
         )
     )]
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let Some(snapshot) = self.table_cache.get(name).map(|s| s.value().clone()) else {
+        let Some(snapshot) = self.tables.get(name).map(|s| s.value().clone()) else {
             return self.fallback.table(name).await;
         };
         let engine = DataFusionEngine::new_from_context(self.session.task_ctx());
         let snapshot = snapshot.update_arc(engine, None).await.map_err(|e| {
-            plan_datafusion_err!(
-                "Failed to update Delta snapshot for table '{}': {}",
-                name,
-                e
-            )
+            plan_datafusion_err!("Failed to update Delta snapshot for '{}': {}", name, e)
         })?;
         let config = DeltaScanConfig::new_from_session(self.session.as_ref());
         Ok(Some(Arc::new(DeltaScanNext::try_new(snapshot, config)?)))
@@ -100,19 +93,19 @@ impl SchemaProvider for LakehouseSchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if let Some(delta_table) = table.as_any().downcast_ref::<DeltaScanNext>() {
-            if let Some(snapshot) = self.table_cache.insert(name, delta_table.snapshot().into()) {
+            if let Some(snapshot) = self.tables.insert(name, delta_table.snapshot().into()) {
                 let config = DeltaScanConfig::new_from_session(self.session.as_ref());
                 let provider = DeltaScanNext::try_new(snapshot, config)?;
                 return Ok(Some(Arc::new(provider)));
             };
             return Ok(None);
         }
-        self.table_cache.remove(&name);
+        self.tables.remove(&name);
         self.fallback.register_table(name, table)
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.table_cache.contains_key(name) || self.fallback.table_exist(name)
+        self.tables.contains_key(name) || self.fallback.table_exist(name)
     }
 }
 

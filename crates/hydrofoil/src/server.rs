@@ -3,20 +3,18 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::datatypes::UInt64Type;
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::flight_descriptor::DescriptorType;
-use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, Any, CommandGetCatalogs, CommandGetDbSchemas,
     CommandGetSqlInfo, CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
     CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery,
     CommandStatementUpdate, DoPutUpdateResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    server::{FlightSqlService, PeekableFlightDataStream},
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, IpcMessage, PutResult, SchemaAsIpc,
-    Ticket,
+    Ticket, encode::FlightDataEncoderBuilder, flight_descriptor::DescriptorType,
+    flight_service_server::FlightService,
 };
 use bytes::Bytes;
 use dashmap::DashMap;

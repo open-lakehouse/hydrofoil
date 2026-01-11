@@ -122,10 +122,6 @@ impl LakehouseSession {
 
 pub trait TaskExt {
     fn lh(&self) -> LakehouseSession;
-
-    fn lake_house(&self) -> LakehouseSession {
-        self.lh()
-    }
 }
 
 impl TaskExt for Arc<TaskContext> {
