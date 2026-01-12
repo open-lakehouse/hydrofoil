@@ -85,6 +85,27 @@ impl FlightSqlServiceImpl {
         self.statements.remove(handle);
         Ok(())
     }
+
+    fn do_get_handle(
+        &self,
+        ctx: Arc<SessionContext>,
+        handle: Uuid,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let options = SQLOptions::new()
+            .with_allow_ddl(false)
+            .with_allow_dml(false);
+
+        let plan = self.get_plan(&handle)?;
+        options
+            .verify_plan(&plan)
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
+
+        let mut builder = FlightDataReceiverStreamBuilder::new(100);
+        builder.execute_logical_plan(Arc::new(ctx.state()), plan, self.executor.handle());
+        let stream = builder.build().map_err(Status::from);
+
+        Ok(Response::new(Box::pin(stream)))
+    }
 }
 
 #[tonic::async_trait]
@@ -313,12 +334,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
     #[instrument(skip_all, level = "info")]
     async fn do_get_statement(
         &self,
-        _ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
+        ticket: TicketStatementQuery,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented(
-            "do_get_statement has no default implementation",
-        ))
+        let handle =
+            Uuid::from_slice(&ticket.statement_handle).map_err(|e| status!("Invalid handle", e))?;
+        let result = self.do_get_handle(self.get_ctx(&request)?, handle);
+        self.statements.remove(&handle);
+        result
     }
 
     #[instrument(skip_all, level = "info")]
@@ -327,23 +350,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandPreparedStatementQuery,
         request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let options = SQLOptions::new()
-            .with_allow_ddl(false)
-            .with_allow_dml(false);
         let handle = Uuid::from_slice(&query.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-
-        let plan = self.get_plan(&handle)?;
-        options
-            .verify_plan(&plan)
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
-
-        let ctx = self.get_ctx(&request)?;
-        let mut builder = FlightDataReceiverStreamBuilder::new(100);
-        builder.execute_logical_plan(Arc::new(ctx.state()), plan, self.executor.handle());
-        let stream = builder.build().map_err(Status::from);
-
-        Ok(Response::new(Box::pin(stream)))
+        self.do_get_handle(self.get_ctx(&request)?, handle)
     }
 
     #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]

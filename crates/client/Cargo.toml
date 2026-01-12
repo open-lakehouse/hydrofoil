@@ -20,5 +20,12 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
 
+# TPC-DS feature dependencies
+deltalake-core = { workspace = true, optional = true }
+
 [dev-dependencies]
 rstest = { version = "0.26.1" }
+
+[features]
+default = ["tpcds"]
+tpcds = ["deltalake-core"]

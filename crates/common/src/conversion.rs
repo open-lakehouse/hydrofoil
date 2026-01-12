@@ -4,7 +4,7 @@ use arrow_schema::{ArrowError, DataType, Field, TimeUnit};
 use itertools::Itertools as _;
 
 use crate::models::delta::connect::create_delta_table::Column;
-use crate::models::spark::connect::data_type::StructField;
+use crate::models::spark::connect::data_type::{Decimal, StructField};
 use crate::models::spark::connect::{
     DataType as ConnectDataType, data_type::Kind as ConnectDataTypeKind,
 };
@@ -195,6 +195,10 @@ pub fn data_type_to_arrow(
                 false,
             ))
         }
+        ConnectDataTypeKind::Decimal(info) => Ok(DataType::Decimal128(
+            info.precision.unwrap_or(38) as u8,
+            info.scale.unwrap_or(18) as i8,
+        )),
         _ => Err(ArrowError::NotYetImplemented(format!(
             "Data type conversion not implemented for: {:?}",
             data_type
@@ -239,6 +243,11 @@ pub fn data_type_to_connect(data_type: &DataType) -> Result<ConnectDataTypeKind,
             Ok(ConnectDataTypeKind::TimestampNtz(Default::default()))
         }
         DataType::Date32 => Ok(ConnectDataTypeKind::Date(Default::default())),
+        DataType::Decimal128(p, s) => Ok(ConnectDataTypeKind::Decimal(Decimal {
+            precision: Some(*p as i32),
+            scale: Some(*s as i32),
+            ..Default::default()
+        })),
         _ => Err(ArrowError::NotYetImplemented(format!(
             "Data type conversion not implemented for: {:?}",
             data_type

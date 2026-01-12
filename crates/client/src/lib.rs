@@ -1,8 +1,8 @@
 use arrow_array::RecordBatch;
 use arrow_flight::Ticket;
 use arrow_flight::decode::FlightRecordBatchStream;
+use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::sql::client::{FlightSqlServiceClient, PreparedStatement};
-use arrow_flight::{FlightInfo, flight_service_client::FlightServiceClient};
 use arrow_schema::ArrowError;
 use bytes::Bytes;
 use datafusion_common::TableReference;
@@ -17,6 +17,8 @@ pub use arrow_flight::sql::{TableExistsOption, TableNotExistOption};
 
 mod commands;
 mod error;
+#[cfg(feature = "tpcds")]
+mod tpcds;
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -64,10 +66,13 @@ impl Client {
         &mut self,
         query: impl ToString,
         transaction_id: impl Into<Option<Bytes>>,
-    ) -> Result<FlightInfo, ArrowError> {
-        self.client
+    ) -> Result<FlightRecordBatchStream, ArrowError> {
+        let flight_info = self
+            .client
             .execute(query.to_string(), transaction_id.into())
-            .await
+            .await?;
+        let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
+        self.client.do_get(ticket).await
     }
 
     pub fn ingest<S>(&self, table: impl Into<TableReference>, stream: S) -> IngestBuilder<S>
@@ -93,31 +98,22 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{fs::canonicalize, sync::Arc};
 
     use arrow_array::{Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::arrow::util::pretty::print_batches;
     use futures::TryStreamExt as _;
 
+    use crate::tpcds::register_tpcds_tables;
+
     use super::*;
 
     #[tokio::test]
     async fn it_works_too() {
-        let mut client = Client::try_new("http://localhost:50051").await.unwrap();
-
-        let mut stmt = client
-            .prepare("SELECT 1, 2.0, 'Hello, world!'", None)
-            .await
-            .unwrap();
-
-        let flight_info = stmt.execute().await.unwrap();
-
-        let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
-        let flight_data = client.do_get(ticket).await.unwrap();
-        let batches: Vec<_> = flight_data.try_collect().await.unwrap();
-
-        println!("{batches:?}");
+        let client = Client::try_new("http://localhost:50051").await.unwrap();
+        let path = canonicalize("/Users/robert.pack/code/open-lakehouse/tpcds_parquet/").unwrap();
+        register_tpcds_tables(&path, client).await.unwrap();
     }
 
     #[tokio::test]

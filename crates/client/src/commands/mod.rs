@@ -1,5 +1,6 @@
+mod batch_sizer;
 mod create_delta;
-mod ingrest;
+mod ingest;
 
 pub use create_delta::CreateDeltaTableBuilder;
-pub use ingrest::IngestBuilder;
+pub use ingest::IngestBuilder;
