@@ -16,3 +16,6 @@ scratch:
 
 services:
     docker compose -p open-lakehouse up -d
+
+run profile *FLAGS:
+    docker compose -p open-lakehouse --profile {{ profile }} up {{ FLAGS }}
