@@ -80,7 +80,7 @@ impl SchemaProvider for LakehouseSchemaProvider {
             return self.fallback.table(name).await;
         };
         let engine = DataFusionEngine::new_from_context(self.session.task_ctx());
-        let snapshot = snapshot.update_arc(engine, None).await.map_err(|e| {
+        let snapshot = snapshot.update(engine, None).await.map_err(|e| {
             plan_datafusion_err!("Failed to update Delta snapshot for '{}': {}", name, e)
         })?;
         let config = DeltaScanConfig::new_from_session(self.session.as_ref());
@@ -93,7 +93,7 @@ impl SchemaProvider for LakehouseSchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if let Some(delta_table) = table.as_any().downcast_ref::<DeltaScanNext>() {
-            if let Some(snapshot) = self.tables.insert(name, delta_table.snapshot().into()) {
+            if let Some(snapshot) = self.tables.insert(name, delta_table.snapshot().clone()) {
                 let config = DeltaScanConfig::new_from_session(self.session.as_ref());
                 let provider = DeltaScanNext::try_new(snapshot, config)?;
                 return Ok(Some(Arc::new(provider)));

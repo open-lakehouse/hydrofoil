@@ -12,11 +12,12 @@ arrow = "57.1"
 arrow-array = { version = "57.1" }
 arrow-flight = { version = "57.1", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "57.1" }
+arrow-select = { version = "57.1" }
 bytes = { version = "1" }
 chrono = { version = "0.4.41", features = ["serde"] }
-datafusion = "51"
-datafusion-common = "51"
-datafusion-tracing = "51"
+datafusion = "52.1"
+datafusion-common = "52.1"
+datafusion-tracing = "52"
 delta_kernel = { version = "0.19.0", features = [
     "internal-api",
     "arrow-57",
