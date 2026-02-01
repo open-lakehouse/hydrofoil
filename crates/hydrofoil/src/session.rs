@@ -1,14 +1,24 @@
-use std::sync::{Arc, OnceLock};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use arrow::array::RecordBatch;
 use bytes::Bytes;
 use datafusion::{
     catalog::{CatalogProvider as _, MemoryCatalogProvider, Session},
+    common::DFSchema,
+    config::{ConfigOptions, TableOptions},
     datasource::provider_as_source,
     error::Result,
-    execution::{SessionState, SessionStateBuilder, TaskContext},
-    logical_expr::{LogicalPlan, LogicalPlanBuilder},
-    prelude::{SessionConfig, SessionContext},
+    execution::{
+        SessionState, SessionStateBuilder, TaskContext, context::ExecutionProps,
+        runtime_env::RuntimeEnv,
+    },
+    logical_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF},
+    physical_plan::{ExecutionPlan, PhysicalExpr},
+    prelude::{Expr, SessionConfig, SessionContext},
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
@@ -37,11 +47,91 @@ use uuid::Uuid;
 
 use crate::catalog::{DeltaTableFactory, LakehouseSchemaProvider};
 
+#[async_trait::async_trait]
+pub trait Policy: Send + Sync {
+    async fn allows(&self, action: &str, resource: &str) -> bool;
+}
+
 pub struct LakehouseSession {
+    inner: SessionState,
+    policy: Arc<dyn Policy>,
+}
+
+#[async_trait::async_trait]
+impl Session for LakehouseSession {
+    fn session_id(&self) -> &str {
+        self.inner.session_id()
+    }
+
+    fn config(&self) -> &SessionConfig {
+        self.inner.config()
+    }
+
+    fn config_options(&self) -> &ConfigOptions {
+        self.config().options()
+    }
+
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.inner.create_physical_plan(logical_plan).await
+    }
+
+    fn create_physical_expr(
+        &self,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.inner.create_physical_expr(expr, df_schema)
+    }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        self.inner.scalar_functions()
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        self.inner.aggregate_functions()
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        self.inner.window_functions()
+    }
+
+    fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+        self.inner.runtime_env()
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.inner.execution_props()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn table_options(&self) -> &TableOptions {
+        self.inner.table_options()
+    }
+
+    fn default_table_options(&self) -> TableOptions {
+        self.inner.default_table_options()
+    }
+
+    fn table_options_mut(&mut self) -> &mut TableOptions {
+        self.inner.table_options_mut()
+    }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.inner.task_ctx()
+    }
+}
+
+pub struct LakehouseTaskContext {
     inner: Arc<TaskContext>,
 }
 
-impl LakehouseSession {
+impl LakehouseTaskContext {
     pub(crate) fn delta_logstore_for(&self, location: &Url) -> Result<Arc<dyn LogStore>> {
         let object_store_url = location.as_object_store_url();
         let root_store = self.inner.runtime_env().object_store(object_store_url)?;
@@ -121,28 +211,28 @@ impl LakehouseSession {
 }
 
 pub trait TaskExt {
-    fn lh(&self) -> LakehouseSession;
+    fn lh(&self) -> LakehouseTaskContext;
 }
 
 impl TaskExt for Arc<TaskContext> {
-    fn lh(&self) -> LakehouseSession {
-        LakehouseSession {
+    fn lh(&self) -> LakehouseTaskContext {
+        LakehouseTaskContext {
             inner: self.clone(),
         }
     }
 }
 
 impl TaskExt for SessionState {
-    fn lh(&self) -> LakehouseSession {
-        LakehouseSession {
+    fn lh(&self) -> LakehouseTaskContext {
+        LakehouseTaskContext {
             inner: self.task_ctx(),
         }
     }
 }
 
 impl TaskExt for SessionContext {
-    fn lh(&self) -> LakehouseSession {
-        LakehouseSession {
+    fn lh(&self) -> LakehouseTaskContext {
+        LakehouseTaskContext {
             inner: self.task_ctx(),
         }
     }
