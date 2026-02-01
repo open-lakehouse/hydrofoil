@@ -116,6 +116,31 @@ pub mod policy_service_client {
                 .insert(GrpcMethod::new("hydrofoil.policy.PolicyService", "GetPolicy"));
             self.inner.unary(req, path, codec).await
         }
+        ///
+        pub async fn is_allowed(
+            &mut self,
+            request: impl tonic::IntoRequest<super::IsAllowedRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::IsAllowedResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hydrofoil.policy.PolicyService/IsAllowed",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hydrofoil.policy.PolicyService", "IsAllowed"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -137,6 +162,14 @@ pub mod policy_service_server {
             request: tonic::Request<super::GetPolicyRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetPolicyResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn is_allowed(
+            &self,
+            request: tonic::Request<super::IsAllowedRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::IsAllowedResponse>,
             tonic::Status,
         >;
     }
@@ -247,6 +280,51 @@ pub mod policy_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetPolicySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hydrofoil.policy.PolicyService/IsAllowed" => {
+                    #[allow(non_camel_case_types)]
+                    struct IsAllowedSvc<T: PolicyService>(pub Arc<T>);
+                    impl<
+                        T: PolicyService,
+                    > tonic::server::UnaryService<super::IsAllowedRequest>
+                    for IsAllowedSvc<T> {
+                        type Response = super::IsAllowedResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::IsAllowedRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PolicyService>::is_allowed(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = IsAllowedSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

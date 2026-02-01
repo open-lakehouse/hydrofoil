@@ -6,9 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-datafusion-expr = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 
-cedar-policy = "4.8.2"
+cedar-policy = { version = "4.8.2", features = ["protobufs"] }
+cedar-local-agent = "3.0.0"

@@ -48,10 +48,11 @@ use uuid::Uuid;
 use crate::catalog::{DeltaTableFactory, LakehouseSchemaProvider};
 
 #[async_trait::async_trait]
-pub trait Policy: Send + Sync {
+pub trait Policy: std::fmt::Debug + Send + Sync {
     async fn allows(&self, action: &str, resource: &str) -> bool;
 }
 
+#[derive(Debug, Clone)]
 pub struct LakehouseSession {
     inner: SessionState,
     policy: Arc<dyn Policy>,

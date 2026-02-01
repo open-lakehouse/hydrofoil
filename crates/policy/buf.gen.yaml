@@ -11,7 +11,8 @@ plugins:
     opt:
       - bytes=.
       - compile_well_known_types=true
-      # - extern_path=.google.protobuf=::pbjson_types
+      - extern_path=.cedar_policy_core=::cedar_policy::proto::models
+      - extern_path=.cedar_policy_validator=::cedar_policy::proto::models
       - file_descriptor_set=false
       - enable_type_names=true
   - remote: buf.build/community/neoeinstein-tonic:v0.5.0
