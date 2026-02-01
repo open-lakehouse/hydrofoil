@@ -1,127 +1,93 @@
 networks:
-  sharing:
+  hydrofoil:
 
 services:
-  uc:
-    profiles: [full]
-    image: unitycatalog-rs:dev
-    container_name: uc
-    hostname: uc
+  gateway:
+    image: envoyproxy/envoy:contrib-distroless-v1.37-latest
     networks:
-      - sharing
+      - hydrofoil
     ports:
-      - "8080:8080"
-    command: ["server", "--rest", "--use-db"]
-    environment:
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
-    depends_on:
-      - azurite
-      - postgres
-
-  azurite:
-    profiles: [azure, storage, full]
-    image: mcr.microsoft.com/azure-storage/azurite
-    container_name: azurite
-    hostname: azurite
-    networks:
-      - sharing
-    ports:
-      - "10000:10000"
-      # - "10001:10001"
-      # - "10002:10002"
-
-  s3:
-    profiles: [s3, storage, full]
-    image: chrislusf/seaweedfs
-    command: "mini -ip.bind=0.0.0.0 -metricsPort=9327"
-    environment:
-      AWS_ACCESS_KEY_ID: seaweed-key-id
-      AWS_SECRET_ACCESS_KEY: seaweed-access-key
-    ports:
-      - 8333:8333 # S3 API
-      # - 9327:9327 # Metrics
-      - 23646:23646 # Admin UI
-
-  postgres:
-    profiles: [full]
-    image: postgres:16
-    container_name: postgres
-    networks:
-      - sharing
-    ports:
-      - "5432:5432"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - 10000:10000
+      - 10100:10100
+      - 10101:10101
+    volumes:
+      - ./config/network/gateway.yaml:/etc/envoy/envoy.yaml
 
   jaeger:
-    profiles: [tracing, full]
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
+    command: ["--set=extensions.jaeger_query.base_path=/jaeger"]
+    networks:
+      - hydrofoil
     ports:
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
-      - "5778:5778"
-      - "9411:9411"
-      - 6831:6831/udp
-      - 6832:6832/udp
-      - 14250:14250
-      - 14268:14268
-      - 14269:14269
-    # environment:
-    #   - LOG_LEVEL=debug
-    # networks:
-    #   - jaeger-example
+      - 16686
+      - 4317
 
-  lakefs:
-    profiles: [lakefs, storage, full]
-    image: docker.io/treeverse/lakefs:1.74
+  # Storage Service - SeaweedFS
+  # - provides S3 compatible object storage
+  # - used as storage backend for other services
+  seaweedfs:
+    profiles: [s3, storage, oci, full]
+    image: chrislusf/seaweedfs
+    command: "mini -ip.bind=0.0.0.0 -dir=/data"
+    networks:
+      - hydrofoil
+    env_file: ./config/environment/seaweedfs.env
     ports:
-      - "8000:8000"
+      - 8333 # S3 API
+      - 23646 # Admin UI
+    volumes:
+      - ./.mounts/seaweedfs:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://localhost:9333/cluster/status",
+        ]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 0s
+    restart: unless-stopped
+
+  # Init OCI Registry Bucket
+  # - creates the bucket used by the OCI registry
+  # - bucket name must match the configuration in oci_registry config.json
+  oci_init:
+    profiles: [oci, full]
+    image: amazon/aws-cli
+    entrypoint: |
+      sh -c '
+      if ! aws s3 ls s3://oci-registry >/dev/null 2>&1; then
+        aws s3 mb s3://oci-registry
+      fi
+      '
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    networks:
+      - hydrofoil
     environment:
-      - LAKEFS_DATABASE_TYPE=local
-      - LAKEFS_BLOCKSTORE_TYPE=local
-      - LAKEFS_AUTH_ENCRYPT_SECRET_KEY=some random secret string
-      - LAKEFS_LOGGING_LEVEL=INFO
-      - LAKEFS_STATS_ENABLED=${LAKEFS_STATS_ENABLED:-1}
-      - LAKEFS_INSTALLATION_USER_NAME=delta
-      - LAKEFS_INSTALLATION_ACCESS_KEY_ID=LAKEFSID
-      - LAKECTL_CREDENTIALS_ACCESS_KEY_ID=LAKEFSID
-      - LAKEFS_INSTALLATION_SECRET_ACCESS_KEY=LAKEFSKEY
-      - LAKECTL_CREDENTIALS_SECRET_ACCESS_KEY=LAKEFSKEY
-      - LAKECTL_SERVER_ENDPOINT_URL=http://localhost:8000
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        lakefs run --local-settings &
-        echo "---- Creating repository ----"
-        wait-for -t 60 lakefs:8000 -- lakectl repo create lakefs://bronze local://bronze || true
-        echo ""
-        echo "lakeFS Web UI: http://127.0.0.1:8000/      >(.＿.)<"
-        echo "                                             (  )_ "
-        echo ""
-        echo "                Access Key ID    : $$LAKEFS_INSTALLATION_ACCESS_KEY_ID"
-        echo "                Secret Access Key: $$LAKEFS_INSTALLATION_SECRET_ACCESS_KEY"
-        echo ""
-        echo "-------- Let's go and have axolotl fun! --------"
-        echo ""
-        wait
+      - AWS_DEFAULT_REGION=hydrofoil
+      - AWS_ENDPOINT_URL=http://seaweedfs:8333
+    env_file: ./config/environment/seaweedfs.env
 
   oci_registry:
     profiles: [oci, full]
     image: ghcr.io/project-zot/zot:latest
-    container_name: oci-registry
+    depends_on:
+      oci_init:
+        condition: service_completed_successfully
+    networks:
+      - hydrofoil
+    env_file: ./config/environment/seaweedfs.env
     ports:
-      - "5000:5000"
-      - "8080:8080"
+      - 5000
     volumes:
       - ./.mounts/oci_registry:/var/lib/registry
-      - ./config/zot/config.json:/etc/zot/config.json:ro
+      - ./config/services/oci_registry/config.json:/etc/zot/config.json:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/v2/"]
@@ -129,3 +95,33 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  postgres:
+    profiles: [full]
+    image: postgres:16
+    networks:
+      - hydrofoil
+    ports:
+      - 5432:5432
+    env_file: ./config/environment/pg.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  uc:
+    profiles: [full]
+    image: unitycatalog-rs:dev
+    networks:
+      - hydrofoil
+    ports:
+      - 8080
+    command: ["server", "--rest", "--use-db"]
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy

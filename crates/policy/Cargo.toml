@@ -12,3 +12,9 @@ tonic-prost = { workspace = true }
 
 cedar-policy = { version = "4.8.2", features = ["protobufs"] }
 cedar-local-agent = "3.0.0"
+oci-client = "0.16.0"
+
+serde_json = { version = "1.0" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
