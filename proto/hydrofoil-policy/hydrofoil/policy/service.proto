@@ -1,0 +1,14 @@
+syntax = "proto3";
+package hydrofoil.policy;
+
+message GetPolicyRequest {
+  string policy_id = 1;
+}
+
+message GetPolicyResponse {
+  string policy_data = 1;
+}
+
+service PolicyService {
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+}

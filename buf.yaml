@@ -1,9 +1,15 @@
 version: v2
 modules:
+  - path: proto/hydrofoil-policy
+    name: buf.build/hydrofoil/policy
   - path: proto/delta-connect
     name: buf.build/delta/connect
   - path: proto/spark-connect
     name: buf.build/spark/connect
+  - path: proto/cedar-policy-core
+    name: buf.build/cedar/policy-core
+  - path: proto/cedar-policy-validator
+    name: buf.build/cedar/policy-validator
 # deps:
 #   - buf.build/bufbuild/protovalidate
 #   - buf.build/gnostic/gnostic

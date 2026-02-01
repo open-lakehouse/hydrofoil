@@ -19,3 +19,6 @@ services:
 
 run profile *FLAGS:
     docker compose -p open-lakehouse --profile {{ profile }} up {{ FLAGS }}
+
+build_policy:
+    cd crates/policy && buf generate

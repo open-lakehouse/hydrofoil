@@ -1,0 +1,18 @@
+# this config needs to be invoked from the root of the repo
+# e.g. `buf generate -c crates/policy/buf.gen.yaml`
+version: v2
+managed:
+  enabled: true
+inputs:
+  - directory: ../../proto/hydrofoil-policy/
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
+    out: src/gen
+    opt:
+      - bytes=.
+      - compile_well_known_types=true
+      # - extern_path=.google.protobuf=::pbjson_types
+      - file_descriptor_set=false
+      - enable_type_names=true
+  - remote: buf.build/community/neoeinstein-tonic:v0.5.0
+    out: src/gen
