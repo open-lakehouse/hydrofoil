@@ -11,7 +11,8 @@
       "bucket": "oci-registry",
       "secure": true,
       "skipverify": true,
-      "regionendpoint": "http://seaweedfs:8333"
+      "regionendpoint": "http://seaweedfs:8333",
+      "forcepathstyle": true
     }
   },
   "http": {

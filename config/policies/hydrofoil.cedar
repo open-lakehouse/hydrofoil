@@ -1,65 +1,74 @@
-// a repo admin can pushRepo, pullRepo, forkRepo, addRepoReporter, addRepoContributor, addRepoAdmin
-@id("resource.admins_Repo")
+//Actions for readers
+permit (
+  principal,
+  action == Action::"pull",
+  resource
+)
+when { principal in resource.readers };
+
+permit (
+  principal,
+  action == Action::"fork",
+  resource
+)
+when { principal in resource.readers };
+
+permit (
+  principal,
+  action == Action::"delete_issue",
+  resource
+)
+when { principal in resource.repo.readers && principal == resource.reporter };
+
+permit (
+  principal,
+  action == Action::"edit_issue",
+  resource
+)
+when { principal in resource.repo.readers && principal == resource.reporter };
+
+//Actions for triagers
+permit (
+  principal,
+  action == Action::"assign_issue",
+  resource
+)
+when { principal in resource.repo.triagers };
+
+//Actions for writers
+permit (
+  principal,
+  action == Action::"push",
+  resource
+)
+when { principal in resource.writers };
+
+permit (
+  principal,
+  action == Action::"edit_issue",
+  resource
+)
+when { principal in resource.repo.writers };
+
+//Actions for maintainers
+permit (
+  principal,
+  action == Action::"delete_issue",
+  resource
+)
+when { principal in resource.repo.maintainers };
+
+//Actions for admins
 permit (
   principal,
   action in
-    [GitApp::Action::"pushRepo",
-     GitApp::Action::"pullRepo",
-     GitApp::Action::"forkRepo",
-     GitApp::Action::"addRepoReporter",
-     GitApp::Action::"addRepoContributor",
-     GitApp::Action::"addRepoAdmin"],
-  resource in GitApp::Application::"GitApp"
+    [Action::"add_reader",
+     Action::"add_triager",
+     Action::"add_writer",
+     Action::"add_maintainer",
+     Action::"add_admin"],
+  resource
 )
 when { principal in resource.admins };
-
-// a repo admin can addIssue, editIssue, assignIssue, closeIssue, deleteIssue
-@id("resource.admins_Issue")
-permit (
-  principal,
-  action in
-    [GitApp::Action::"addIssue",
-     GitApp::Action::"editIssue",
-     GitApp::Action::"assignIssue",
-     GitApp::Action::"closeIssue",
-     GitApp::Action::"deleteIssue"],
-  resource in GitApp::Application::"GitApp"
-)
-when { principal in resource.admins };
-
-// repo reporter can addIssue, pullRepo, forkRepo
-@id("resource.reporters")
-permit (
-  principal,
-  action in
-    [GitApp::Action::"pullRepo",
-     GitApp::Action::"forkRepo",
-     GitApp::Action::"addIssue"],
-  resource in GitApp::Application::"GitApp"
-)
-when { resource has reporters && principal in resource.reporters };
-
-// a repo contributor can addIssue, editIssue, assignIssue, closeIssue
-@id("resource.contributors_Issue")
-permit (
-  principal,
-  action in
-    [GitApp::Action::"addIssue",
-     GitApp::Action::"editIssue",
-     GitApp::Action::"assignIssue",
-     GitApp::Action::"closeIssue"],
-  resource in GitApp::Application::"GitApp"
-)
-when { resource has contributors && principal in resource.contributors };
-
-// a repo contributor can pushRepo, pullRepo, forkRepo
-@id("resource.contributors_Repo")
-permit (
-  principal,
-  action in
-    [GitApp::Action::"pushRepo",
-     GitApp::Action::"pullRepo",
-     GitApp::Action::"forkRepo"],
-  resource in GitApp::Application::"GitApp"
-)
-when { resource has contributors && principal in resource.contributors };
+//We use the same permissions for org owners, and rely on placing them in the admins group for every repository in the org
+//The other option is to duplicate all policies for the org base permissions (with a separate hierarchy for each org)

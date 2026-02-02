@@ -24,15 +24,10 @@ build_policy:
     cd crates/policy && buf generate
 
 push_policy:
-    oras push localhost:10100/hydrofoil/plan-policy:v1 \
-      config/policies/hydrofoil.cedar:application/vnd.cedar.policy.v1
-
-init_cert:
-    notation cert generate-test --default "hydrofoil.io"
-
-push_cert:
-    curl --data-binary "/Users/robert.pack/Library/Application Support/notation/localkeys/hydrofoil.io.crt" -X \
-      POST "http://localhost:10100/v2/_zot/ext/notation?truststoreType=ca"
+    oras push localhost:10100/hydrofoil/plan-policy:latest \
+      config/policies/hydrofoil.cedar:application/vnd.cedar.policyset.v1 \
+      config/policies/hydrofoil.cedarschema:application/vnd.cedar.schema.v1 \
+      config/policies/entities.json:application/vnd.cedar.entities.v1
 
 trust-me:
     ./scripts/generate-notation-certs.sh

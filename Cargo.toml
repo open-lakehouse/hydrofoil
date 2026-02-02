@@ -13,8 +13,10 @@ arrow-array = { version = "57.1" }
 arrow-flight = { version = "57.1", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "57.1" }
 arrow-select = { version = "57.1" }
+async-trait = { version = "^0.1.89" }
 bytes = { version = "1" }
 chrono = { version = "0.4.41", features = ["serde"] }
+config = "0.15.19"
 datafusion = "52.1"
 datafusion-common = "52.1"
 datafusion-expr = "52.1"
@@ -27,6 +29,7 @@ futures = "0.3"
 itertools = "0.14"
 object_store = { version = "^0.12.4", features = ["azure", "aws", "gcp"] }
 prost = { version = "0.14.1" }
+serde = { version = "1", features = ["derive"] }
 sqlparser = { version = "0.59", default-features = false, features = [
     "std",
     "visitor",

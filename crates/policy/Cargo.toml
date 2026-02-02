@@ -6,9 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+config = { workspace = true }
 prost = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
+tracing = { workspace = true }
 
 cedar-policy = { version = "4.8.2", features = ["protobufs"] }
 cedar-local-agent = "3.0.0"
