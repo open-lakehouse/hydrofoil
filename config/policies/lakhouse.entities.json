@@ -1,0 +1,113 @@
+[
+  {
+    "uid": {
+      "__entity": {
+        "type": "UserGroup",
+        "id": "lakhouse_admins"
+      }
+    },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "UserGroup",
+        "id": "readers"
+      }
+    },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "UserGroup",
+        "id": "privileged_readers"
+      }
+    },
+    "attrs": {},
+    "parents": [
+      {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "readers"
+        }
+      }
+    ]
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "User",
+        "id": "alice"
+      }
+    },
+    "attrs": {},
+    "parents": [
+      {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "privileged_readers"
+        }
+      }
+    ]
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "User",
+        "id": "bob"
+      }
+    },
+    "attrs": {},
+    "parents": [
+      {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "readers"
+        }
+      }
+    ]
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "Agent",
+        "id": "r2d2"
+      }
+    },
+    "attrs": {},
+    "parents": [
+      {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "readers"
+        }
+      }
+    ]
+  },
+  {
+    "uid": {
+      "__entity": {
+        "type": "Table",
+        "id": "protected_table"
+      }
+    },
+    "attrs": {
+      "writers": {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "lakhouse_admins"
+        }
+      },
+      "readers": {
+        "__entity": {
+          "type": "UserGroup",
+          "id": "readers"
+        }
+      }
+    },
+    "parents": []
+  }
+]

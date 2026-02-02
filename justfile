@@ -25,9 +25,9 @@ build_policy:
 
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \
-      config/policies/hydrofoil.cedar:application/vnd.cedar.policyset.v1 \
-      config/policies/hydrofoil.cedarschema:application/vnd.cedar.schema.v1 \
-      config/policies/entities.json:application/vnd.cedar.entities.v1
+      config/policies/lakehouse.cedar:application/vnd.cedar.policyset.v1 \
+      config/policies/lakehouse.cedarschema:application/vnd.cedar.schema.v1 \
+      config/policies/lakhouse.entities.json:application/vnd.cedar.entities.v1
 
 trust-me:
     ./scripts/generate-notation-certs.sh

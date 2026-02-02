@@ -39,14 +39,14 @@ pub fn build_client_config() -> ClientConfig {
     }
 }
 
-pub struct OciEntityProvider {
+pub struct OciPolicyProvider {
     client: Client,
     reference: Reference,
     entities: RwLock<Arc<Entities>>,
     policy_set: RwLock<Arc<PolicySet>>,
 }
 
-impl Debug for OciEntityProvider {
+impl Debug for OciPolicyProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OciPolicyProvider")
             .field("reference", &self.reference)
@@ -54,7 +54,7 @@ impl Debug for OciEntityProvider {
     }
 }
 
-impl OciEntityProvider {
+impl OciPolicyProvider {
     #[instrument(skip(client), err(Debug))]
     pub async fn try_new(
         client: Client,
@@ -126,7 +126,7 @@ impl OciEntityProvider {
 }
 
 #[async_trait::async_trait]
-impl SimpleEntityProvider for OciEntityProvider {
+impl SimpleEntityProvider for OciPolicyProvider {
     #[instrument(skip_all, err(Debug))]
     async fn get_entities(&self, _: &Request) -> Result<Arc<Entities>, EntityProviderError> {
         Ok(self.entities.read().await.clone())
@@ -134,7 +134,7 @@ impl SimpleEntityProvider for OciEntityProvider {
 }
 
 #[async_trait::async_trait]
-impl SimplePolicySetProvider for OciEntityProvider {
+impl SimplePolicySetProvider for OciPolicyProvider {
     #[instrument(skip_all, err(Debug))]
     async fn get_policy_set(&self, _: &Request) -> Result<Arc<PolicySet>, PolicySetProviderError> {
         Ok(self.policy_set.read().await.clone())
@@ -143,6 +143,10 @@ impl SimplePolicySetProvider for OciEntityProvider {
 
 #[cfg(test)]
 mod tests {
+
+    use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
+    use cedar_policy::{Context, EntityId, EntityTypeName, EntityUid};
+
     use super::*;
 
     #[tokio::test]
@@ -153,6 +157,32 @@ mod tests {
             .parse()
             .unwrap();
 
-        let provider = OciEntityProvider::try_new(client, reference).await.unwrap();
+        let provider = Arc::new(OciPolicyProvider::try_new(client, reference).await.unwrap());
+        let authorizer = Authorizer::new(
+            AuthorizerConfigBuilder::default()
+                .policy_set_provider(provider.clone())
+                .entity_provider(provider)
+                .build()
+                .unwrap(),
+        );
+
+        let user_type_name = EntityTypeName::from_str("User").unwrap();
+        let action_type_name = EntityTypeName::from_str("Action").unwrap();
+        let table_type_name = EntityTypeName::from_str("Table").unwrap();
+
+        let principal = EntityUid::from_type_name_and_id(user_type_name, EntityId::new("alice"));
+        let action =
+            EntityUid::from_type_name_and_id(action_type_name, EntityId::new("read_table"));
+        let resource =
+            EntityUid::from_type_name_and_id(table_type_name, EntityId::new("protected_table"));
+
+        let request = Request::new(principal, action, resource, Context::empty(), None).unwrap();
+
+        let decision = authorizer
+            .is_authorized(&request, &Entities::empty())
+            .await
+            .unwrap();
+
+        println!("Decision: {:?}", decision);
     }
 }

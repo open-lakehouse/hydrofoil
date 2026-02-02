@@ -1,0 +1,34 @@
+// Cedara schema to describe the entities relevant to a Lakehouse data platform.
+
+// Basic Org structure. 
+entity Team, UserGroup in [UserGroup];
+entity User, Agent in [UserGroup, Team];
+
+// Namespaces for a generic nested structure to organize tables and other resources.
+entity Namespace in [Namespace];
+
+// A tabular data resource within a Lakehouse.
+entity Table in [Namespace] = {
+  readers: UserGroup,
+  writers: UserGroup,
+};
+
+entity GovernedTag = {
+  readers: UserGroup,
+};
+entity Field = {
+  tags: Set<GovernedTag>,
+};
+
+action read_table, write_table appliesTo {
+  principal: [User, Agent],
+  resource: [Table]
+};
+
+action read_field appliesTo {
+  principal: [User, Agent],
+  resource: [Field],
+  context: {
+    "in_trusted_environment": Bool
+  }
+};
