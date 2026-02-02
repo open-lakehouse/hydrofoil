@@ -31,3 +31,6 @@ push_policy:
 
 trust-me:
     ./scripts/generate-notation-certs.sh
+
+build-docker:
+    docker build -f crates/hydrofoil/Dockerfile -t hydrofoil:dev .

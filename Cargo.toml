@@ -46,15 +46,26 @@ tonic-tracing-opentelemetry = "0.32.0"
 tracing = { version = "0.1", features = ["log"] }
 
 cloud-client = { path = "../unitycatalog-rs/crates/cloud-client" }
-unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "1470778c9db75e904b53ce7fbd3456539cd5ffe4", features = [
     "rest-client",
     "axum",
 ] }
-deltalake-core = { path = "../delta-rs/crates/core", features = [
+# unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
+#     "rest-client",
+#     "axum",
+# ] }
+# https://github.com/unitycatalog-incubator/unitycatalog-rs
+# deltalake-core = { path = "../delta-rs/crates/core", features = [
+#     "datafusion",
+#     "cloud",
+#     "tracing",
+# ] }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "a1552061d15e5d27bffebae92f1ea7459a89abb0", features = [
     "datafusion",
     "cloud",
     "tracing",
 ] }
+# a1552061d15e5d27bffebae92f1ea7459a89abb0
 
 [workspace.metadata.typos]
 default.extend-ignore-re = [
