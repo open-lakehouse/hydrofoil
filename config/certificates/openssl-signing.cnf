@@ -1,0 +1,31 @@
+# OpenSSL configuration for Notation Signing Certificate
+# Used for generating a code signing certificate for OCI artifact signing
+# This certificate will be signed by the Root CA
+
+[ req ]
+default_bits = 2048
+default_md = sha256
+prompt = no
+distinguished_name = dn
+req_extensions = v3_req
+
+[ dn ]
+CN = Open Lakehouse Notation Signing Certificate
+O = Open Lakehouse
+OU = Demo Environment
+C = US
+
+[ v3_req ]
+# NOT a Certificate Authority
+basicConstraints = critical, CA:FALSE
+# REQUIRED: digitalSignature for signing operations
+# MUST NOT include: keyEncipherment, dataEncipherment, keyAgreement, keyCertSign, cRLSign
+keyUsage = critical, digitalSignature
+# REQUIRED: codeSigning for notation compliance
+# MUST NOT include: anyExtendedKeyUsage, serverAuth, clientAuth, emailProtection, timeStamping
+extendedKeyUsage = critical, codeSigning
+# Standard identifiers
+subjectKeyIdentifier = hash
+
+# Validity note: Certificate will be valid for 1 year from generation
+# This certificate meets all notation requirements for OCI artifact signing

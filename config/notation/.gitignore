@@ -1,0 +1,5 @@
+*
+
+# Keep README and OpenSSL configs
+!README.md
+!.gitignore

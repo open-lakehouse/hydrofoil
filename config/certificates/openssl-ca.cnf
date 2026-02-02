@@ -1,0 +1,27 @@
+# OpenSSL configuration for Root CA Certificate
+# Used for generating a self-signed root CA for notation signing
+
+[ req ]
+default_bits = 4096
+default_md = sha384
+prompt = no
+distinguished_name = dn
+x509_extensions = v3_ca
+
+[ dn ]
+CN = Open Lakehouse Demo Root CA
+O = Open Lakehouse
+OU = Demo Environment
+C = US
+
+[ v3_ca ]
+# Mark as a Certificate Authority
+basicConstraints = critical, CA:TRUE, pathlen:0
+# CA must have keyCertSign capability
+keyUsage = critical, keyCertSign, cRLSign
+# Identifier for the CA
+subjectKeyIdentifier = hash
+# For self-signed CA, use keyid only (no issuer)
+authorityKeyIdentifier = keyid:always
+
+# Validity note: Certificate will be valid for 1 year from generation

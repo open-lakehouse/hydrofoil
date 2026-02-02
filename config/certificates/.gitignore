@@ -1,0 +1,19 @@
+# Ignore all certificate and key files
+# These are generated locally and should NOT be committed to git
+*.key
+*.crt
+*.pem
+*.cer
+*.p12
+*.pfx
+*.csr
+
+# Ignore generated directories
+ca/
+signing/
+trust/
+
+# Keep README and OpenSSL configs
+!README.md
+!openssl-*.cnf
+!.gitignore

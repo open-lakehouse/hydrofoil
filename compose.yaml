@@ -96,6 +96,42 @@ services:
       retries: 3
       start_period: 10s
 
+  # Upload Notation Certificates to Zot
+  # - uploads CA certificate to zot's trust store
+  # - runs after oci_registry is healthy
+  # - enables signature verification for signed OCI artifacts
+  # oci_cert_uploader:
+  #   profiles: [oci, full]
+  #   image: curlimages/curl:latest
+  #   depends_on:
+  #     oci_registry:
+  #       condition: service_healthy
+  #   networks:
+  #     - hydrofoil
+  #   volumes:
+  #     - ./config/certificates:/certificates:ro
+  #   entrypoint: |
+  #     sh -c '
+  #     if [ ! -f /certificates/trust/ca.crt ]; then
+  #       echo "Warning: CA certificate not found at /certificates/trust/ca.crt"
+  #       echo "Please generate certificates first: ./scripts/generate-notation-certs.sh"
+  #       exit 0
+  #     fi
+  #     echo "Uploading CA certificate to zot trust store..."
+  #     HTTP_CODE=$$(curl -s -w "%{http_code}" -o /tmp/response.txt \
+  #       --data-binary @/certificates/trust/ca.crt \
+  #       -X POST "http://oci_registry:5000/v2/_zot/ext/notation?truststoreType=ca")
+  #     if [ "$$HTTP_CODE" -eq 200 ] || [ "$$HTTP_CODE" -eq 201 ]; then
+  #       echo "✓ CA certificate uploaded successfully (HTTP $$HTTP_CODE)"
+  #       cat /tmp/response.txt
+  #       exit 0
+  #     else
+  #       echo "✗ Failed to upload certificate (HTTP $$HTTP_CODE)"
+  #       cat /tmp/response.txt
+  #       exit 1
+  #     fi
+  #     '
+
   postgres:
     profiles: [full]
     image: postgres:16
