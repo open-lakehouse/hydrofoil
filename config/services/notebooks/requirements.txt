@@ -1,0 +1,2 @@
+deltalake==1.4.1
+adbc-driver-flightsql==1.10.0

@@ -6,6 +6,7 @@ rust-version = { workspace = true }
 
 [dependencies]
 hydrofoil-common = { path = "../common" }
+hydrofoil-policy = { path = "../policy" }
 
 arrow = { workspace = true }
 arrow-flight = { workspace = true }

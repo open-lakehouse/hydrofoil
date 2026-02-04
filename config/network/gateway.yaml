@@ -23,6 +23,8 @@ static_resources:
                         timeout: 0.250s
                       service_name: gateway
                 codec_type: AUTO
+                upgrade_configs:
+                  upgrade_type: "websocket"
                 stat_prefix: ingress_http
                 http_filters:
                   - name: envoy.filters.http.router
@@ -35,6 +37,12 @@ static_resources:
                       domains:
                         - "*"
                       routes:
+                        - match:
+                            prefix: "/notebooks"
+                          route:
+                            cluster: notebooks
+                          decorator:
+                            operation: notebooks
                         - match:
                             prefix: "/jaeger"
                           route:
@@ -139,6 +147,19 @@ static_resources:
                     socket_address:
                       address: jaeger
                       port_value: 16686
+
+    - name: notebooks
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: notebooks
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: notebooks
+                      port_value: 8080
 
     - name: oci_registry
       type: STRICT_DNS
