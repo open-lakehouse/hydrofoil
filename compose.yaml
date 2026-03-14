@@ -161,3 +161,30 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  notebooks:
+    profiles: [full, notebooks]
+    build:
+      context: .
+      dockerfile: ./config/services/notebooks/Dockerfile
+    networks:
+      - hydrofoil
+    ports:
+      - 8080
+    command:
+      [
+        "marimo",
+        "edit",
+        "--no-token",
+        "--host",
+        "0.0.0.0",
+        --port,
+        "8080",
+        "--base-url",
+        "/notebooks",
+        "--proxy",
+        "localhost:10000",
+      ]
+    env_file: ./config/environment/notebooks.env
+    volumes:
+      - ./.mounts/notebooks:/home

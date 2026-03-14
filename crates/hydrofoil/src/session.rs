@@ -8,7 +8,7 @@ use arrow::array::RecordBatch;
 use bytes::Bytes;
 use datafusion::{
     catalog::{CatalogProvider as _, MemoryCatalogProvider, Session},
-    common::DFSchema,
+    common::{DFSchema, exec_err},
     config::{ConfigOptions, TableOptions},
     datasource::provider_as_source,
     error::Result,
@@ -37,6 +37,7 @@ use deltalake_core::{
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
+use hydrofoil_policy::{Decision, EntityUid};
 use instrumented_object_store::instrument_object_store;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
@@ -45,17 +46,53 @@ use tracing::{error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::catalog::{DeltaTableFactory, LakehouseSchemaProvider};
+use crate::{
+    catalog::{DeltaTableFactory, LakehouseSchemaProvider},
+    policy::Policy,
+};
 
-#[async_trait::async_trait]
-pub trait Policy: std::fmt::Debug + Send + Sync {
-    async fn allows(&self, action: &str, resource: &str) -> bool;
+#[derive(Clone)]
+pub struct LakehouseCtx {
+    /// The underlying DataFusion session state that manages most of the execution context.
+    inner: SessionContext,
+    /// The policy engine used to enforce access control
+    /// and other policies during query planning and execution.
+    policy: Arc<dyn Policy>,
+    /// The principal (user or service) on behalf of whom queries are executed.
+    principal: EntityUid,
 }
 
+impl LakehouseCtx {
+    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: EntityUid) -> Self {
+        Self {
+            inner,
+            policy,
+            principal,
+        }
+    }
+
+    pub fn session(&self) -> LakehouseSession {
+        LakehouseSession {
+            inner: self.inner.state(),
+            policy: self.policy.clone(),
+            principal: self.principal.clone(),
+        }
+    }
+}
+
+/// Custom session providing Lakehouse specific features on top of DataFusion's [`SessionState`].
+///
+/// This is the main entry point for query execution and planning, and is where we will
+/// enforce policies and manage state related to the lakehouse.
 #[derive(Debug, Clone)]
 pub struct LakehouseSession {
+    /// The underlying DataFusion session state that manages most of the execution context.
     inner: SessionState,
+    /// The policy engine used to enforce access control
+    /// and other policies during query planning and execution.
     policy: Arc<dyn Policy>,
+    /// The principal (user or service) on behalf of whom queries are executed.
+    principal: EntityUid,
 }
 
 #[async_trait::async_trait]
@@ -76,7 +113,26 @@ impl Session for LakehouseSession {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.create_physical_plan(logical_plan).await
+        // First optimize the logical plan to make sure all projections
+        // and filters are pushed down to the table scan level. This
+        // allows us to enforce policies based on the actual data
+        // being accessed.
+        let optimized_plan = self.inner.optimize(logical_plan)?;
+        if self
+            .policy
+            .is_allowed(&optimized_plan, &self.principal)
+            .await?
+            == Decision::Deny
+        {
+            return exec_err!(
+                "Principal '{}' is not authorized to execute this query",
+                self.principal
+            );
+        }
+        self.inner
+            .query_planner()
+            .create_physical_plan(&optimized_plan, &self.inner)
+            .await
     }
 
     fn create_physical_expr(

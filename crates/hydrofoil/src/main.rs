@@ -7,6 +7,7 @@ mod catalog;
 mod error;
 mod execution;
 mod planner;
+mod policy;
 mod server;
 mod session;
 mod stream;
