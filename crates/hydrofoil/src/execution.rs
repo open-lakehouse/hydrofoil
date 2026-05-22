@@ -5,10 +5,11 @@ use datafusion::{
     common::{exec_datafusion_err, plan_datafusion_err},
     error::Result,
     logical_expr::LogicalPlan,
-    prelude::SessionContext,
 };
 use tokio::{runtime::Handle, sync::Notify};
 use tracing::{Instrument, field, instrument};
+
+use crate::session::LakehouseCtx;
 
 /// Creates a Tokio [`Runtime`] for use with CPU bound tasks
 ///
@@ -127,10 +128,10 @@ impl CpuRuntime {
     )]
     pub async fn create_logical_plan(
         &self,
-        session: Arc<SessionContext>,
+        session: Arc<LakehouseCtx>,
         query: impl AsRef<str> + Send + 'static,
     ) -> Result<LogicalPlan> {
-        let fut = async move { session.state().create_logical_plan(query.as_ref()).await };
+        let fut = async move { session.session().create_logical_plan(query).await };
         let plan = self
             .spawn(fut)
             .await
@@ -149,7 +150,7 @@ impl CpuRuntime {
     )]
     pub async fn execute_logical_plan(
         &self,
-        session: Arc<SessionContext>,
+        session: Arc<LakehouseCtx>,
         plan: LogicalPlan,
     ) -> Result<Vec<RecordBatch>> {
         let fut = async move {

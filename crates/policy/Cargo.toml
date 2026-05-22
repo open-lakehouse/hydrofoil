@@ -7,6 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+cedar-local-agent = { workspace = true }
+cedar-policy = { workspace = true }
 config = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
@@ -15,8 +17,6 @@ tonic = { workspace = true }
 tonic-prost = { workspace = true }
 tracing = { workspace = true }
 
-cedar-policy = { version = "4.8.2", features = ["protobufs"] }
-cedar-local-agent = "3.0.0"
 oci-client = "0.16.0"
 
 serde_json = { version = "1.0" }

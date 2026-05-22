@@ -12,10 +12,12 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+cedar-local-agent = { workspace = true, optional = true }
+cedar-policy = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-tracing = { workspace = true }
-deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 delta_kernel = { workspace = true }
+deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 itertools = { workspace = true }
 object_store = { workspace = true }
 prost = { workspace = true }
@@ -32,8 +34,8 @@ futures = "0.3"
 instrumented-object-store = "51.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
-opentelemetry_sdk = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.31.0"
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = { version = "0.3", features = [
     "tracing-log",
@@ -45,3 +47,7 @@ tracing-subscriber = { version = "0.3", features = [
 #     "visitor",
 # ] }
 uuid = { version = "1.17", features = ["v4", "v7"] }
+
+[features]
+default = ["cedar"]
+cedar = ["cedar-local-agent", "cedar-policy"]

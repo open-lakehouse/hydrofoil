@@ -18,7 +18,7 @@ use datafusion::{
     },
     logical_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF},
     physical_plan::{ExecutionPlan, PhysicalExpr},
-    prelude::{Expr, SessionConfig, SessionContext},
+    prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
@@ -51,12 +51,17 @@ use crate::{
     policy::Policy,
 };
 
+/// Context for executing queries in a Lakehouse.
+///
+/// This context is used to execute queries in a Lakehouse. It contains the
+/// underlying DataFusion session state, the policy used to enforce access
+/// control during query planning and execution, and the principal (user or
+/// service) on behalf of whom queries are executed.
 #[derive(Clone)]
 pub struct LakehouseCtx {
     /// The underlying DataFusion session state that manages most of the execution context.
     inner: SessionContext,
-    /// The policy engine used to enforce access control
-    /// and other policies during query planning and execution.
+    /// The policy used to enforce access control during query planning and execution.
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
     principal: EntityUid,
@@ -70,6 +75,9 @@ impl LakehouseCtx {
             principal,
         }
     }
+    pub fn ctx(&self) -> &SessionContext {
+        &self.inner
+    }
 
     pub fn session(&self) -> LakehouseSession {
         LakehouseSession {
@@ -77,6 +85,16 @@ impl LakehouseCtx {
             policy: self.policy.clone(),
             principal: self.principal.clone(),
         }
+    }
+
+    pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
+        if self.policy.is_allowed(&plan, &self.principal).await? == Decision::Deny {
+            return exec_err!(
+                "Principal '{}' is not authorized to execute this query",
+                self.principal
+            );
+        }
+        self.inner.execute_logical_plan(plan).await
     }
 }
 
@@ -93,6 +111,15 @@ pub struct LakehouseSession {
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
     principal: EntityUid,
+}
+
+impl LakehouseSession {
+    pub async fn create_logical_plan(
+        &self,
+        query: impl AsRef<str> + Send + 'static,
+    ) -> Result<LogicalPlan> {
+        self.inner.create_logical_plan(query.as_ref()).await
+    }
 }
 
 #[async_trait::async_trait]
