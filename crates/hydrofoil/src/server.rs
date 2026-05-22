@@ -17,10 +17,11 @@ use arrow_flight::{
     flight_service_server::FlightService,
 };
 use bytes::Bytes;
+use cedar_policy::Decision;
 use dashmap::DashMap;
-use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{SQLOptions, SessionContext};
+use datafusion::prelude::SQLOptions;
+use datafusion::{catalog::Session, error::DataFusionError};
 use futures::TryStreamExt;
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
@@ -28,10 +29,13 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
-use crate::execution::CpuRuntime;
-use crate::planner::{DeltaPlanner, FlightPlanner};
-use crate::session::create_session;
+use crate::session::{LakehouseCtx, create_session};
 use crate::stream::FlightDataReceiverStreamBuilder;
+use crate::{execution::CpuRuntime, policy::Policy};
+use crate::{
+    planner::{DeltaPlanner, FlightPlanner},
+    policy::StaticPolicy,
+};
 
 mod metadata;
 
@@ -42,10 +46,11 @@ macro_rules! status {
 }
 
 pub struct FlightSqlServiceImpl {
-    pub(crate) contexts: Arc<DashMap<String, Arc<SessionContext>>>,
+    pub(crate) contexts: Arc<DashMap<String, Arc<LakehouseCtx>>>,
     pub(crate) statements: Arc<DashMap<Uuid, LogicalPlan>>,
 
     executor: CpuRuntime,
+    policy: Arc<dyn Policy>,
 }
 
 impl FlightSqlServiceImpl {
@@ -54,18 +59,33 @@ impl FlightSqlServiceImpl {
             contexts: Arc::new(DashMap::new()),
             statements: Arc::new(DashMap::new()),
             executor: CpuRuntime::try_new()?,
+            policy: Arc::new(StaticPolicy::new(Decision::Allow)),
         })
     }
 
+    /// Set the policy for the server.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy` - The [`Policy`] to set for the server.
+    pub fn with_policy(mut self, policy: Arc<dyn Policy>) -> Self {
+        self.policy = policy;
+        self
+    }
+
     #[allow(clippy::result_large_err)]
-    fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
+    fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
         if let Some(ctx) = self.contexts.get("key") {
             Ok(ctx.value().clone())
         } else {
             let session_id = Uuid::new_v4();
-            let ctx = Arc::new(
-                create_session(session_id).map_err(|e| status!("Failed to create session", e))?,
-            );
+            let ctx =
+                create_session(session_id).map_err(|e| status!("Failed to create session", e))?;
+            let ctx = Arc::new(LakehouseCtx::new(
+                ctx,
+                self.policy.clone(),
+                "User:default".parse().unwrap(),
+            ));
             self.contexts.insert("key".to_string(), ctx.clone());
             Ok(ctx)
         }
@@ -88,7 +108,7 @@ impl FlightSqlServiceImpl {
 
     fn do_get_handle(
         &self,
-        ctx: Arc<SessionContext>,
+        session: Arc<dyn Session>,
         handle: Uuid,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let options = SQLOptions::new()
@@ -101,7 +121,7 @@ impl FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?;
 
         let mut builder = FlightDataReceiverStreamBuilder::new(100);
-        builder.execute_logical_plan(Arc::new(ctx.state()), plan, self.executor.handle());
+        builder.execute_logical_plan(session, plan, self.executor.handle());
         let stream = builder.build().map_err(Status::from);
 
         Ok(Response::new(Box::pin(stream)))
@@ -339,7 +359,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle =
             Uuid::from_slice(&ticket.statement_handle).map_err(|e| status!("Invalid handle", e))?;
-        let result = self.do_get_handle(self.get_ctx(&request)?, handle);
+        let ctx = self.get_ctx(&request)?;
+        let result = self.do_get_handle(Arc::new(ctx.session()), handle);
         self.statements.remove(&handle);
         result
     }
@@ -352,7 +373,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle = Uuid::from_slice(&query.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-        self.do_get_handle(self.get_ctx(&request)?, handle)
+        let ctx = self.get_ctx(&request)?;
+        self.do_get_handle(Arc::new(ctx.session()), handle)
     }
 
     #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
@@ -413,7 +435,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .executor
             .spawn(async move {
                 planner
-                    .plan_ingest(&ctx_inner, &ticket, request.into_inner())
+                    .plan_ingest(ctx_inner.ctx(), &ticket, request.into_inner())
                     .await
             })
             .await
@@ -455,7 +477,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ctx = self.get_ctx(&request)?;
         let planner = DeltaPlanner::new();
         let plan = planner
-            .plan_delta_connect(&ctx.state(), &command)
+            .plan_delta_connect(&ctx.session(), &command)
             .map_err(|e| Status::internal(format!("Error planning delta command: {e}")))?;
 
         let _batches = self
