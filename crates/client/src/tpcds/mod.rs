@@ -5,7 +5,7 @@ use arrow_schema::{ArrowError, Schema};
 use datafusion_common::HashMap;
 use deltalake_core::datafusion::prelude::{ParquetReadOptions, SessionContext};
 use deltalake_core::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel as _};
-use deltalake_core::{DeltaResult, StructType};
+use deltalake_core::{DeltaResult, DeltaTableError, StructType};
 use futures::TryStreamExt;
 
 use crate::Client;
@@ -173,14 +173,18 @@ pub async fn register_tpcds_tables(
             .with_location(store_path)
             .with_table_name(full_name.clone())
             .with_columns(arrow_schema.fields().clone())?
-            .await?;
+            .await
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
         let source = parquet_df
             .execute_stream()
             .await?
             .map_err(|e| ArrowError::ExternalError(Box::new(e)));
 
-        let _res = client.ingest(full_name, source).await?;
+        let _res = client
+            .ingest(full_name, source)
+            .await
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
     }
 
     Ok(ctx)

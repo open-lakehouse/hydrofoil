@@ -84,7 +84,7 @@ impl SchemaProvider for LakehouseSchemaProvider {
             plan_datafusion_err!("Failed to update Delta snapshot for '{}': {}", name, e)
         })?;
         let config = DeltaScanConfig::new_from_session(self.session.as_ref());
-        Ok(Some(Arc::new(DeltaScanNext::try_new(snapshot, config)?)))
+        Ok(Some(Arc::new(DeltaScanNext::new(snapshot, config)?)))
     }
 
     fn register_table(
@@ -92,12 +92,14 @@ impl SchemaProvider for LakehouseSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        if let Some(delta_table) = table.as_any().downcast_ref::<DeltaScanNext>() {
-            if let Some(snapshot) = self.tables.insert(name, delta_table.snapshot().clone()) {
-                let config = DeltaScanConfig::new_from_session(self.session.as_ref());
-                let provider = DeltaScanNext::try_new(snapshot, config)?;
-                return Ok(Some(Arc::new(provider)));
-            };
+        if table.as_any().downcast_ref::<DeltaScanNext>().is_some() {
+            // TODO(migration): in deltalake-core 0.32 the inner `Snapshot` of a
+            // `DeltaScanNext` is no longer publicly accessible (`snapshot()` is
+            // now `pub(crate)`), so we can no longer cache the snapshot when a
+            // delta provider is re-registered here. Snapshots are still cached
+            // via `LakehouseTaskContext` when tables are first resolved, so this
+            // path is a no-op for now; re-enable once an accessor is available
+            // upstream (or restructure to register snapshots directly).
             return Ok(None);
         }
         self.tables.remove(&name);

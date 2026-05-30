@@ -31,7 +31,7 @@ url = { workspace = true }
 
 dashmap = "6.0.1"
 futures = "0.3"
-instrumented-object-store = "51.0.0"
+instrumented-object-store = "53.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }

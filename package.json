@@ -1,8 +1,5 @@
 {
   "name": "open-lakehouse",
-  "workspaces": [
-    "app"
-  ],
   "dependencies": {
     "@babel/core": "^7.28.0",
     "eslint": "^9.30.0",

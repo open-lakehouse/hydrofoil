@@ -262,6 +262,8 @@ impl LakehouseTaskContext {
                 // we are setting the spawning service when we build the objects stores,
                 // and should not additionally integrate with this layer.
                 io_runtime: None,
+                // should not matter here as we go through the datafusion engine.
+                skip_stats: false,
             },
             version,
         )
@@ -428,14 +430,14 @@ impl LogStore for DataFusionLogStore {
         "DataFusionLogStore".into()
     }
 
-    async fn read_commit_entry(&self, _version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, _version: u64) -> DeltaResult<Option<Bytes>> {
         todo!("read_commit_entry")
     }
 
     #[instrument(skip_all, level = "info")]
     async fn write_commit_entry(
         &self,
-        version: i64,
+        version: u64,
         commit_or_bytes: CommitOrBytes,
         _: Uuid,
     ) -> Result<(), TransactionError> {
@@ -445,7 +447,7 @@ impl LogStore for DataFusionLogStore {
             CommitOrBytes::LogBytes(log_bytes) => self
                 .object_store(None)
                 .put_opts(
-                    &commit_uri_from_version(version),
+                    &commit_uri_from_version(Some(version)),
                     log_bytes.into(),
                     put_options().clone(),
                 )
@@ -466,14 +468,14 @@ impl LogStore for DataFusionLogStore {
 
     async fn abort_commit_entry(
         &self,
-        _version: i64,
+        _version: u64,
         _commit_or_bytes: CommitOrBytes,
         _: Uuid,
     ) -> Result<(), TransactionError> {
         todo!("abort_commit_entry")
     }
 
-    async fn get_latest_version(&self, _current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, _current_version: u64) -> DeltaResult<u64> {
         todo!("not get_latest_version")
     }
 
