@@ -47,7 +47,7 @@ url = { version = "2.5.2", features = [
     "std",
 ], default-features = false }
 
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "1470778c9db75e904b53ce7fbd3456539cd5ffe4", features = [
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3", features = [
     "rest-client",
     "axum",
 ] }
