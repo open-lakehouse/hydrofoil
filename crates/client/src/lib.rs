@@ -2,6 +2,7 @@ use arrow_array::RecordBatch;
 use arrow_flight::Ticket;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::flight_service_client::FlightServiceClient;
+use arrow_flight::error::FlightError;
 use arrow_flight::sql::client::{FlightSqlServiceClient, PreparedStatement};
 use arrow_schema::ArrowError;
 use bytes::Bytes;
@@ -48,7 +49,7 @@ impl Client {
         &mut self,
         query: impl ToString,
         transaction_id: impl Into<Option<Bytes>>,
-    ) -> Result<PreparedStatement<Channel>, ArrowError> {
+    ) -> Result<PreparedStatement<Channel>, FlightError> {
         self.client
             .prepare(query.to_string(), transaction_id.into())
             .await
@@ -57,7 +58,7 @@ impl Client {
     pub async fn do_get(
         &mut self,
         ticket: impl IntoRequest<Ticket>,
-    ) -> Result<FlightRecordBatchStream, ArrowError> {
+    ) -> Result<FlightRecordBatchStream, FlightError> {
         self.client.do_get(ticket).await
     }
 
@@ -66,7 +67,7 @@ impl Client {
         &mut self,
         query: impl ToString,
         transaction_id: impl Into<Option<Bytes>>,
-    ) -> Result<FlightRecordBatchStream, ArrowError> {
+    ) -> Result<FlightRecordBatchStream, FlightError> {
         let flight_info = self
             .client
             .execute(query.to_string(), transaction_id.into())

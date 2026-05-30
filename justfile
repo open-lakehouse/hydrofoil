@@ -2,10 +2,6 @@
 _default:
     just --list
 
-# run local tauri app
-app:
-    npm run tauri dev -w app
-
 # run hydrofoil server
 hydro:
     RUST_LOG="hydrofoil=debug" cargo run --bin hydrofoil

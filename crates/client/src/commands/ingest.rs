@@ -97,7 +97,7 @@ impl<S> IntoFuture for IngestBuilder<S>
 where
     S: Stream<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
 {
-    type Output = Result<i64, ArrowError>;
+    type Output = Result<i64, FlightError>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {

@@ -1,5 +1,6 @@
 use arrow_flight::{
     FlightData, FlightDescriptor,
+    error::FlightError,
     sql::{DoPutUpdateResult, ProstMessageExt, client::FlightSqlServiceClient},
 };
 use arrow_schema::{ArrowError, Fields, Schema};
@@ -82,7 +83,7 @@ impl CreateDeltaTableBuilder {
 }
 
 impl IntoFuture for CreateDeltaTableBuilder {
-    type Output = Result<(), ArrowError>;
+    type Output = Result<(), FlightError>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
