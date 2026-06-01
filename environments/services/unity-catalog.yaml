@@ -5,7 +5,7 @@
 # Listens on 8081 in-container; published to host for the marimo notebook.
 services:
   unity-catalog:
-    image: ghcr.io/roeap/unitycatalog:v0.0.0-dev-2
+    image: ghcr.io/roeap/unitycatalog:v0.0.0-dev-3
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:

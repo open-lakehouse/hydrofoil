@@ -13,6 +13,25 @@
 target/
 /Cargo.lock
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Spark
+spark-warehouse/
+
+# Secrets / local env (tracked config env files live under config/environment/)
+.env
+.env.*
+!.env.example
+
 # Logs
 logs
 *.log
@@ -27,3 +46,5 @@ dist
 dist-ssr
 *.local
 .hydro/
+
+WALKTHROUGH.md

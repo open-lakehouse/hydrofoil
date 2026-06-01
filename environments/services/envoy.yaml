@@ -1,0 +1,13 @@
+# Envoy gateway — contributed by the `local-stack-envoy` component.
+# `docker compose --profile svc up` brings up everything on the `svc` profile.
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.34-latest
+    restart: unless-stopped
+    profiles: [svc, full]
+    volumes:
+      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+      - "${ENVOY_PORT:-9080}:10000"
+      - "9901:9901"
