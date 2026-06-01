@@ -1,0 +1,45 @@
+# SeaweedFS + one-shot bucket init
+# Bucket list is rendered from the aggregated `stack.s3_buckets` list at scaffold time.
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    profiles: [svc, full]
+    # -s3.config registers an S3 identity so SIGNED requests (e.g. from Spark/hadoop-aws)
+    # are authorized. Without it, `mini` accepts anonymous calls but rejects signed ones.
+    command: mini -dir=/data -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "${SEAWEEDFS_MASTER_PORT:-9333}:9333"
+      - "${SEAWEEDFS_S3_PORT:-9000}:8333"
+    volumes:
+      - ./.data/seaweedfs:/data
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q --spider http://127.0.0.1:9333/ && echo ok || exit 1"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  seaweedfs-init:
+    image: amazon/aws-cli:latest
+    restart: on-failure
+    profiles: [svc, full]
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Waiting for SeaweedFS S3...";
+        until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 2; done;
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://unity 2>&1 || true;
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://mlflow 2>&1 || true;
+        echo "Buckets ready.";

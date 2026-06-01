@@ -1,0 +1,35 @@
+# Unity Catalog OSS (Java) server, backed by Postgres (db: unitycatalog).
+# Uses the GHCR fork image directly: it carries the S3EndpointResolver fix AND already
+# ships the Postgres JDBC driver (jars/server/postgresql-*.jar), so we only mount a
+# Postgres-pointed hibernate.properties over the H2 default.
+# Listens on 8081 in-container; published to host for the marimo notebook.
+services:
+  unity-catalog:
+    image: ghcr.io/roeap/unitycatalog:v0.0.0-dev-2
+    restart: unless-stopped
+    profiles: [svc, full]
+    depends_on:
+      db:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
+    command: ["./bin/start-uc-server"]
+    environment:
+      # UC-side S3 (managed tables / Iceberg) -> SeaweedFS. The image's S3EndpointResolver
+      # reads AWS_ENDPOINT_URL_S3 and auto-enables path-style addressing; no extra flag.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+      AWS_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ENDPOINT_URL_S3: http://seaweedfs:8333
+    ports:
+      - "${UC_PORT:-8081}:8081"
+    volumes:
+      - ./docker/unity-catalog/server.properties:/home/unitycatalog/etc/conf/server.properties:ro
+      - ./docker/unity-catalog/hibernate.properties:/home/unitycatalog/etc/conf/hibernate.properties:ro
+    healthcheck:
+      # no curl in the image -> bash /dev/tcp probe (the image ships bash)
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8081' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
