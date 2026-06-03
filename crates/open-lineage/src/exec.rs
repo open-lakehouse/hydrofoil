@@ -32,23 +32,30 @@ use futures::Stream;
 
 use crate::client::OpenLineageClient;
 use crate::event::{RunEvent, RunEventType};
-use crate::facets::{BaseFacet, ErrorMessageRunFacet};
+use crate::facets::{BaseFacet, ErrorMessageRunFacet, OutputStatisticsOutputDatasetFacet};
 
 const ERROR_FACET: &str = "1-0-0/ErrorMessageRunFacet.json";
+const OUTPUT_STATS_FACET: &str = "1-0-2/OutputStatisticsOutputDatasetFacet.json";
 
 /// Shared completion state across the partitions of one query run.
-#[derive(Debug)]
 struct RunState {
     client: OpenLineageClient,
     /// COMPLETE event template (cloned and mutated into FAIL on error).
     complete: RunEvent,
     producer: String,
+    /// The wrapped plan, read for native runtime metrics on completion. Tracked
+    /// through `with_new_children` rewrites so metrics come from the node that
+    /// actually executed.
+    inner: std::sync::Mutex<Arc<dyn ExecutionPlan>>,
     /// Outstanding partitions yet to finish.
     remaining: AtomicUsize,
     /// Set if any partition observed an error or was dropped early.
     failed: AtomicBool,
     /// First error message observed, for the FAIL facet.
     error: std::sync::Mutex<Option<String>>,
+    /// Rows written, summed from DataFusion's write-result `count` batches
+    /// (`Some` once any write count is observed).
+    rows_written: std::sync::Mutex<Option<u64>>,
     /// Guards against emitting more than once (e.g. zero-partition plans).
     emitted: AtomicBool,
 }
@@ -60,6 +67,12 @@ impl RunState {
         if slot.is_none() {
             *slot = Some(message);
         }
+    }
+
+    /// Accumulate rows written, observed from a write-result `count` batch.
+    fn record_rows_written(&self, rows: u64) {
+        let mut slot = self.rows_written.lock().unwrap();
+        *slot = Some(slot.unwrap_or(0) + rows);
     }
 
     /// Mark one partition finished; emit the terminal event when the last one
@@ -94,7 +107,49 @@ impl RunState {
             });
             self.client.emit(event);
         } else {
-            self.client.emit(self.complete.clone());
+            let mut event = self.complete.clone();
+            self.attach_output_statistics(&mut event);
+            self.client.emit(event);
+        }
+    }
+
+    /// Attach an `outputStatistics` facet to each output dataset of the COMPLETE
+    /// event.
+    ///
+    /// The row count comes from DataFusion's write-result `count` batch (the
+    /// authoritative rows-written signal, captured as the stream drained). Size
+    /// is taken from a `bytes_scanned`-style plan metric when available. Reads
+    /// (SELECT) have no output dataset, so this is a no-op there.
+    fn attach_output_statistics(&self, event: &mut RunEvent) {
+        if event.outputs.is_empty() {
+            return;
+        }
+
+        let row_count = self.rows_written.lock().unwrap().map(|n| n as i64);
+
+        // `bytes_scanned` is the closest widely-emitted size metric; absent for
+        // many plans, in which case `size` is simply omitted.
+        let size = self
+            .inner
+            .lock()
+            .unwrap()
+            .metrics()
+            .and_then(|m| m.aggregate_by_name().sum_by_name("bytes_scanned"))
+            .map(|v| v.as_usize() as i64);
+
+        if row_count.is_none() && size.is_none() {
+            return;
+        }
+
+        let stats = OutputStatisticsOutputDatasetFacet {
+            base: BaseFacet::new(&self.producer, OUTPUT_STATS_FACET),
+            row_count,
+            size,
+            file_count: None,
+        };
+        for output in &mut event.outputs {
+            let facets = output.output_facets.get_or_insert_with(Default::default);
+            facets.output_statistics = Some(stats.clone());
         }
     }
 }
@@ -121,16 +176,21 @@ impl OpenLineageExec {
             client,
             complete,
             producer,
+            inner: std::sync::Mutex::new(inner.clone()),
             // A plan may have zero partitions; guard so we still emit once.
             remaining: AtomicUsize::new(partitions.max(1)),
             failed: AtomicBool::new(false),
             error: std::sync::Mutex::new(None),
+            rows_written: std::sync::Mutex::new(None),
             emitted: AtomicBool::new(false),
         });
         Arc::new(Self { inner, state })
     }
 
     fn with_new_inner(&self, inner: Arc<dyn ExecutionPlan>) -> Arc<Self> {
+        // Keep the shared run state pointed at the node that will execute, so
+        // metrics are harvested from the right plan on completion.
+        *self.state.inner.lock().unwrap() = inner.clone();
         Arc::new(Self {
             inner,
             state: self.state.clone(),
@@ -225,7 +285,12 @@ impl Stream for TrackedStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
+            Poll::Ready(Some(Ok(batch))) => {
+                if let Some(rows) = write_count(&batch) {
+                    self.state.record_rows_written(rows);
+                }
+                Poll::Ready(Some(Ok(batch)))
+            }
             Poll::Ready(Some(Err(e))) => {
                 self.state.record_error(e.to_string());
                 self.finish();
@@ -256,4 +321,21 @@ impl Drop for TrackedStream {
             self.finish();
         }
     }
+}
+
+/// Recognize DataFusion's write-result batch — a single `count` UInt64 column
+/// whose value is the number of rows written — and return that count.
+fn write_count(batch: &RecordBatch) -> Option<u64> {
+    use datafusion::arrow::array::{Array, UInt64Array};
+
+    if batch.num_columns() != 1 || batch.schema().field(0).name() != "count" {
+        return None;
+    }
+    let counts = batch.column(0).as_any().downcast_ref::<UInt64Array>()?;
+    Some(
+        (0..counts.len())
+            .filter(|i| counts.is_valid(*i))
+            .map(|i| counts.value(i))
+            .sum(),
+    )
 }

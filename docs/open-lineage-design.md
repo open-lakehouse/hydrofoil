@@ -100,11 +100,23 @@ event semantics rather than per-stream metric aggregation.
 A *planning* failure is different: there's no plan to wrap, so the planner emits
 FAIL directly.
 
-**What this unlocks next:** the same `OpenLineageExec` is the natural place to
-harvest the inner plan's native `MetricsSet` on completion and attach runtime
-row/byte counts as output-statistics facets — a follow-up, but the hook is now in
-place. See *Cross-RPC correlation* for why the run identity has to survive across
-requests for this to be correct end to end.
+### Runtime statistics, and where the row count actually lives
+
+The COMPLETE event also carries an **`outputStatistics`** facet (`rowCount`,
+`size`) per output dataset — the runtime "how much did we write." The obvious
+source is the inner plan's native `MetricsSet`, the way `datafusion-tracing`
+harvests metrics on completion. But for the case that matters here — a write
+(`INSERT`/`CTAS`) — the root `DataSinkExec` returns `None` from `metrics()`; the
+rows-written count isn't there. DataFusion instead reports it *in the result
+stream*: a write yields a single batch with one `count` (UInt64) column whose
+value is the number of rows written.
+
+So `OpenLineageExec` watches the batches flowing through each partition's
+stream, recognizes that `count`-batch shape, and accumulates the rows-written
+total in `RunState`; `size` falls back to a `bytes_scanned`-style plan metric
+when the plan exposes one. A read (`SELECT`) has no output dataset, so the facet
+is simply absent. This is a good example of "read the engine, not the docs": the
+authoritative signal was in the data path, not the metrics API.
 
 ## Critical decision 2 — Deriving lineage from the logical plan
 
@@ -267,16 +279,16 @@ the hook; `TreeNodeVisitor` plan walk; the `DIRECT`/`INDIRECT` column-lineage
 model; spec-exact facets with `_producer`/`_schemaURL`; async fail-safe emission;
 standard env-var config; pluggable transport; **end-of-execution COMPLETE/FAIL
 via a `Drop`-based physical-plan wrapper** (`OpenLineageExec`), so terminal events
-reflect runtime outcome, not just planning success.
+reflect runtime outcome, not just planning success; **`outputStatistics`
+facets** (rows written, from the write-result `count` batch).
 
 **Deferred** (complexity that doesn't earn its place yet): the full
 `OpenLineageEventHandlerFactory` ServiceLoader-style SPI for third-party facet
 builders — Rust has no ServiceLoader, and a fixed visitor set plus trait seams
 covers us until a second consumer appears; Kafka/GCS/composite transports;
-JVM-specific circuit breakers (our bounded queue covers the safety goal);
-runtime-statistics facets (row/byte counts harvested from the inner plan's
-`MetricsSet` on completion — the `OpenLineageExec` hook is now in place for it);
-real session/statement management for cross-RPC, per-operation runs.
+JVM-specific circuit breakers (our bounded queue covers the safety goal); richer
+input-side statistics (bytes/files scanned per source); real session/statement
+management for cross-RPC, per-operation runs.
 
 ## The bigger picture
 

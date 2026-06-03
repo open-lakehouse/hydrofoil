@@ -294,6 +294,50 @@ async fn runtime_error_emits_fail() {
     assert!(json["run"]["facets"]["errorMessage"]["message"].is_string());
 }
 
+#[tokio::test]
+async fn write_emits_output_statistics() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE src (a INT) AS VALUES (1), (2), (3)")
+        .await
+        .unwrap();
+    instrumented
+        .sql("CREATE TABLE dst (a INT) AS VALUES (0)")
+        .await
+        .unwrap();
+
+    // A write produces an output dataset; its COMPLETE event should carry
+    // runtime row statistics harvested at end of execution.
+    let df = instrumented
+        .sql("INSERT INTO dst SELECT a FROM src")
+        .await
+        .unwrap();
+    let _ = df.collect().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    // Find the COMPLETE event that has an output dataset (the INSERT run).
+    let complete = events
+        .iter()
+        .find(|e| e.event_type == RunEventType::Complete && !e.outputs.is_empty())
+        .expect("a COMPLETE with an output dataset");
+
+    let json = serde_json::to_value(complete).unwrap();
+    let stats = &json["outputs"][0]["outputFacets"]["outputStatistics"];
+    assert!(
+        stats["rowCount"].is_number(),
+        "outputStatistics.rowCount present: {json}"
+    );
+    assert_eq!(stats["rowCount"], 3, "three rows written");
+    assert!(stats["_producer"].is_string());
+    assert!(stats["_schemaURL"].is_string());
+}
+
 // ---------------------------------------------------------------------------
 // 4. Context provider injects orchestration metadata
 // ---------------------------------------------------------------------------
