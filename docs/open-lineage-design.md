@@ -69,17 +69,42 @@ each wraps rather than replaces.
 let state = instrument_session_state(state, client, context_provider, config);
 ```
 
-### Known limitation, by design
+### Two hooks: START at plan time, COMPLETE/FAIL at execution time
 
-Wrapping the planner means COMPLETE/FAIL currently fire at **plan-creation**
-time, not end-of-execution. A query that plans cleanly but errors mid-stream
-emits a spurious COMPLETE. We shipped this knowingly for v1 (inputs/outputs/
-column lineage are already correct) and scoped the fix as a follow-up: wrap the
-*physical plan* in an instrumented `ExecutionPlan` node and emit COMPLETE/FAIL
-from a `Drop`-based stream guard once all partitions drain — the same technique
-`datafusion-tracing` uses to harvest metrics. That also unlocks runtime
-row/byte statistics as run facets. See *Cross-RPC correlation* below for why the
-hook has to survive across requests.
+The planner emits only **START** — at this point we have the optimized plan and
+the context, which is everything START needs. But COMPLETE/FAIL must reflect the
+actual *execution* outcome, not just that planning succeeded: a query that plans
+cleanly can still error mid-stream. Emitting COMPLETE from the planner would
+report success for a query that later fails.
+
+So the planner wraps the root physical plan in an **`OpenLineageExec`** node and
+hands it the pre-built COMPLETE event (carrying the same `runId` as START). That
+node observes the result streams and emits the terminal event when execution
+actually ends:
+
+- COMPLETE when every output partition drains successfully;
+- FAIL (with an `errorMessage` run facet) if any partition yields an error, or
+  is dropped before exhaustion (a cancelled/abandoned query).
+
+**Exactly-once across partitions.** A root plan has *N* output partitions, each
+producing an independent stream. `OpenLineageExec` shares a small `RunState`
+(an `AtomicUsize` of outstanding partitions + a `failed` flag) across them. Each
+partition's stream is wrapped so that on terminal — exhaustion, error, or
+`Drop` — it decrements the counter; the partition that brings it to zero emits
+the single terminal event. Using `Drop` as the completion signal means
+cancellation is handled without special-casing, and an `emitted` flag guards the
+zero-partition edge case. This is the same `Drop`-based technique
+`datafusion-tracing` uses to harvest metrics, specialized here for once-per-run
+event semantics rather than per-stream metric aggregation.
+
+A *planning* failure is different: there's no plan to wrap, so the planner emits
+FAIL directly.
+
+**What this unlocks next:** the same `OpenLineageExec` is the natural place to
+harvest the inner plan's native `MetricsSet` on completion and attach runtime
+row/byte counts as output-statistics facets — a follow-up, but the hook is now in
+place. See *Cross-RPC correlation* for why the run identity has to survive across
+requests for this to be correct end to end.
 
 ## Critical decision 2 — Deriving lineage from the logical plan
 
@@ -214,34 +239,44 @@ The architectural seam: `LineageContextProvider::context()` only sees a
 provider reads it back with `get_extension`. DataFusion internals stay unaware of
 gRPC; orchestration context still flows to planning.
 
-## Cross-RPC correlation (the session problem)
+## Where the events fire, and the session question
 
-A single client operation is several Flight SQL RPCs: `get_flight_info_statement`
-*plans* (where START fires), then a separate `do_get_statement` *executes* (where
-the future COMPLETE/FAIL belongs) — often on different connections. Correct
-lineage therefore needs one stable `runId` to survive across RPCs.
+Because we hook *physical* planning, the run's identity is intrinsically
+self-consistent: START and the `OpenLineageExec` that emits COMPLETE/FAIL both
+originate from a single `create_physical_plan` call, so they share one `runId`
+without any external bookkeeping. In hydrofoil today that call happens inside the
+`do_get_*` RPC's streaming task (`get_flight_info_statement` only builds the
+*logical* plan and hands back a handle), so the whole START→COMPLETE/FAIL
+lifecycle lives in one task — the physical-plan wrapper "just works" here.
 
-The pattern we're designing toward: a statement handle owns its `runId` and a
-snapshot of its `LineageContext`, minted at plan time and reused at execution
-time. This is the prerequisite for the execution-accurate COMPLETE/FAIL
-follow-up — the physical-plan wrapper has to emit under the *same* run id START
-used. (Today's server still uses a demo session stub; the real session/statement
-store is designed in `docs/session-management.md` and intentionally deferred.)
+The session question is about a *different* axis: a client's logical operation
+spans several RPCs (`CreatePreparedStatement` → `GetFlightInfo` → `DoGet` →
+`Close`), and we'll eventually want one lineage run per logical operation, plus
+per-session orchestration context that outlives a single statement. That needs
+real session/statement management — a session keyed by a protocol-derived id
+(Flight SQL handshake / cookie), statements owning their `runId` — replacing the
+current demo `get_ctx` stub. That work is designed in `docs/session-management.md`
+and intentionally deferred; the lineage layer is already structured to slot into
+it (the `LineageContextProvider` reads context from the session, and a statement
+could pre-mint the `runId` the planner uses).
 
 ## Patterns adopted vs. deferred
 
 **Adopted** (validated by mature integrations, mostly Spark): planner-wrapping as
 the hook; `TreeNodeVisitor` plan walk; the `DIRECT`/`INDIRECT` column-lineage
 model; spec-exact facets with `_producer`/`_schemaURL`; async fail-safe emission;
-standard env-var config; pluggable transport.
+standard env-var config; pluggable transport; **end-of-execution COMPLETE/FAIL
+via a `Drop`-based physical-plan wrapper** (`OpenLineageExec`), so terminal events
+reflect runtime outcome, not just planning success.
 
-**Deferred** (complexity that doesn't earn its place in v1): the full
+**Deferred** (complexity that doesn't earn its place yet): the full
 `OpenLineageEventHandlerFactory` ServiceLoader-style SPI for third-party facet
 builders — Rust has no ServiceLoader, and a fixed visitor set plus trait seams
 covers us until a second consumer appears; Kafka/GCS/composite transports;
 JVM-specific circuit breakers (our bounded queue covers the safety goal);
-end-of-execution COMPLETE/FAIL and runtime-statistics facets (the physical-plan
-wrapper follow-up).
+runtime-statistics facets (row/byte counts harvested from the inner plan's
+`MetricsSet` on completion — the `OpenLineageExec` hook is now in place for it);
+real session/statement management for cross-RPC, per-operation runs.
 
 ## The bigger picture
 

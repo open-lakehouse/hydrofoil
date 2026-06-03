@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::prelude::SessionContext;
 use datafusion_open_lineage::builder::{complete_event, fail_event, start_event};
 use datafusion_open_lineage::config::OpenLineageConfig;
@@ -195,6 +196,102 @@ async fn end_to_end_emits_start_and_complete() {
         types.contains(&RunEventType::Complete),
         "got COMPLETE: {types:?}"
     );
+}
+
+#[tokio::test]
+async fn complete_fires_only_after_execution() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE t (a INT) AS VALUES (1)")
+        .await
+        .unwrap();
+
+    // Plan + physical plan, but do NOT consume the stream yet.
+    let df = instrumented.sql("SELECT a FROM t").await.unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Identify the run for THIS query by its START (setup CREATE TABLE produced
+    // its own events). The select's run must have START but not yet COMPLETE.
+    let run_id = {
+        let events = transport.events.lock().unwrap();
+        let start = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == RunEventType::Start)
+            .expect("a START for the select");
+        let id = start.run.run_id;
+        let completes = events
+            .iter()
+            .filter(|e| e.run.run_id == id && e.event_type == RunEventType::Complete)
+            .count();
+        assert_eq!(completes, 0, "COMPLETE must NOT fire before execution");
+        id
+    };
+
+    // Now execute (drain all partitions) -> exactly one COMPLETE for this run.
+    let task_ctx = instrumented.task_ctx();
+    let partitions = plan.output_partitioning().partition_count();
+    for p in 0..partitions {
+        let mut stream = plan.execute(p, task_ctx.clone()).unwrap();
+        use futures::StreamExt;
+        while stream.next().await.is_some() {}
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let events = transport.events.lock().unwrap();
+    let completes = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id && e.event_type == RunEventType::Complete)
+        .count();
+    assert_eq!(completes, 1, "exactly one COMPLETE across partitions");
+}
+
+#[tokio::test]
+async fn runtime_error_emits_fail() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE t (a INT) AS VALUES (1), (2), (0)")
+        .await
+        .unwrap();
+
+    // Division by zero surfaces as an error during stream execution, not at
+    // planning time -> the run must report FAIL, not COMPLETE.
+    let df = instrumented.sql("SELECT 10 / a AS r FROM t").await.unwrap();
+    let result = df.collect().await;
+    assert!(result.is_err(), "query should fail at runtime");
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    // Correlate by the failing run (setup CREATE TABLE has its own run id).
+    let fail = events
+        .iter()
+        .find(|e| e.event_type == RunEventType::Fail)
+        .expect("a FAIL event");
+    let run_id = fail.run.run_id;
+    let for_run: Vec<RunEventType> = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id)
+        .map(|e| e.event_type)
+        .collect();
+    assert!(for_run.contains(&RunEventType::Start), "START: {for_run:?}");
+    assert!(
+        !for_run.contains(&RunEventType::Complete),
+        "no COMPLETE on runtime failure: {for_run:?}"
+    );
+    // The FAIL event carries an errorMessage facet.
+    let json = serde_json::to_value(fail).unwrap();
+    assert!(json["run"]["facets"]["errorMessage"]["message"].is_string());
 }
 
 // ---------------------------------------------------------------------------

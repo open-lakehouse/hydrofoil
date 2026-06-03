@@ -1,13 +1,14 @@
-//! A [`QueryPlanner`] wrapper that emits OpenLineage events around physical
-//! planning.
+//! A [`QueryPlanner`] wrapper that emits OpenLineage events around query
+//! execution.
 //!
 //! `create_physical_plan` receives the full optimized [`LogicalPlan`] (the best
 //! lineage signal) and the [`SessionState`] (which the context provider reads),
 //! and lets us correlate START / COMPLETE / FAIL under one run id.
 //!
-//! NOTE (v1 limitation): COMPLETE/FAIL are emitted at *plan creation*, not at
-//! end of execution. The planned follow-up wraps the physical plan to move
-//! COMPLETE/FAIL to end-of-stream. See the plan's follow-up section.
+//! START is emitted here at plan time. COMPLETE / FAIL are emitted at *end of
+//! execution* by the [`OpenLineageExec`] node we wrap the physical plan in, so
+//! a query that plans cleanly but errors mid-stream reports FAIL, not COMPLETE.
+//! A planning failure (no plan to wrap) emits FAIL directly.
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use crate::builder::{complete_event, fail_event, start_event};
 use crate::client::OpenLineageClient;
 use crate::config::OpenLineageConfig;
 use crate::context::LineageContextProvider;
+use crate::exec::OpenLineageExec;
 use crate::extract::extract;
 
 /// Wraps an inner [`QueryPlanner`], emitting OpenLineage run events.
@@ -69,11 +71,19 @@ impl QueryPlanner for OpenLineageQueryPlanner {
             .await
         {
             Ok(plan) => {
-                self.client
-                    .emit(complete_event(run_id, &lineage, &cx, &self.config));
-                Ok(plan)
+                // Defer COMPLETE/FAIL to end of execution: wrap the root plan in
+                // a node that emits the pre-built COMPLETE event (or FAIL) once
+                // all output partitions finish, under the same run id as START.
+                let complete = complete_event(run_id, &lineage, &cx, &self.config);
+                Ok(OpenLineageExec::new(
+                    plan,
+                    self.client.clone(),
+                    complete,
+                    self.config.producer.clone(),
+                ))
             }
             Err(err) => {
+                // Planning failed outright — no plan to wrap, emit FAIL now.
                 self.client.emit(fail_event(
                     run_id,
                     &lineage,
