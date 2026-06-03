@@ -11,3 +11,6 @@ services:
     ports:
       - "${ENVOY_PORT:-9080}:10000"
       - "9901:9901"
+      # Dedicated root listeners for prefix-unfriendly UIs.
+      - "${MARQUEZ_UI_PORT:-10110}:10110"   # Marquez lineage UI
+      - "${MLFLOW_UI_PORT:-10120}:10120"    # MLflow UI + OTLP /v1/traces ingestion
