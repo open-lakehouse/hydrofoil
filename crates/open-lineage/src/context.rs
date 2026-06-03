@@ -29,6 +29,10 @@ pub struct LineageContext {
     pub run_facets: Map<String, Value>,
     /// Arbitrary extra job facets merged into the emitted event.
     pub job_facets: Map<String, Value>,
+    /// The SQL text of the query, if the host has it. Populates the `sql` job
+    /// facet. The plan walk cannot recover this (it only sees the
+    /// `LogicalPlan`), so the integration supplies it from the request boundary.
+    pub sql: Option<String>,
 }
 
 impl LineageContext {

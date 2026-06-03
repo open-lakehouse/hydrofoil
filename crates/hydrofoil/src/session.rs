@@ -42,7 +42,8 @@ use deltalake_core::{
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
-use hydrofoil_policy::{Decision, EntityUid};
+use cedar_oci::Decision;
+use datafusion_cedar::PrincipalIdentity;
 use instrumented_object_store::instrument_object_store;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
@@ -54,10 +55,37 @@ use uuid::Uuid;
 use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
+use datafusion_open_lineage::context::LineageContext;
+
 use crate::{
     catalog::{DeltaTableFactory, LakehouseSchemaProvider, LakehouseTableProviderBuilder},
+    lineage::LineageContextExt,
     policy::Policy,
 };
+
+/// Inject fine-grained governance (row filters + column masks) into a plan
+/// before optimization.
+///
+/// With the `governance` feature this delegates to
+/// [`datafusion_cedar::govern_plan`]; without it (the default), it is a no-op
+/// that returns the plan unchanged — the coarse access gate still applies.
+#[cfg(feature = "governance")]
+async fn govern_plan(
+    plan: &LogicalPlan,
+    policy: &dyn Policy,
+    principal: &PrincipalIdentity,
+) -> Result<LogicalPlan> {
+    datafusion_cedar::govern_plan(plan, policy, principal).await
+}
+
+#[cfg(not(feature = "governance"))]
+async fn govern_plan(
+    plan: &LogicalPlan,
+    _policy: &dyn Policy,
+    _principal: &PrincipalIdentity,
+) -> Result<LogicalPlan> {
+    Ok(plan.clone())
+}
 
 /// Context for executing queries in a Lakehouse.
 ///
@@ -72,14 +100,14 @@ pub struct LakehouseCtx {
     /// The policy used to enforce access control during query planning and execution.
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
-    principal: EntityUid,
+    principal: PrincipalIdentity,
     /// Optional Unity Catalog resolver used to back catalog/schema/table
     /// resolution with a live Unity Catalog instance during planning.
     unity: Option<Arc<UnityCatalogProviderList>>,
 }
 
 impl LakehouseCtx {
-    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: EntityUid) -> Self {
+    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: PrincipalIdentity) -> Self {
         Self {
             inner,
             policy,
@@ -108,14 +136,45 @@ impl LakehouseCtx {
         }
     }
 
+    /// Build a [`LakehouseSession`] for a single request, attaching the
+    /// per-request OpenLineage [`LineageContext`] (parsed from the request's
+    /// parent-run headers) to the session's `SessionConfig`.
+    ///
+    /// Parent-run context is per-request, so it is attached to a fresh
+    /// `SessionState` clone here rather than baked into the long-lived,
+    /// per-principal cached `LakehouseCtx` (which would otherwise pin the first
+    /// caller's parent run onto every later request). The
+    /// `HydrofoilContextProvider` reads it back at planning time via
+    /// `SessionConfig::get_extension`.
+    pub fn session_with_lineage(&self, context: LineageContext) -> LakehouseSession {
+        let mut inner = self.inner.state();
+        inner
+            .config_mut()
+            .set_extension(Arc::new(LineageContextExt(context)));
+        LakehouseSession {
+            inner,
+            policy: self.policy.clone(),
+            principal: self.principal.clone(),
+            unity: self.unity.clone(),
+        }
+    }
+
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
-        if self.policy.is_allowed(&plan, &self.principal).await? == Decision::Deny {
+        // This path (ingest / delta-connect) executes on the inner
+        // `SessionContext`, which does NOT route through
+        // `LakehouseSession::create_physical_plan`, so it must enforce the gate
+        // itself. Inject fine-grained governance (row filters + column masks)
+        // before optimization, then gate on the optimized plan to match the
+        // statement path's contract (projections/filters pushed down first).
+        let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal).await?;
+        let optimized_plan = self.inner.state().optimize(&governed)?;
+        if self.policy.is_allowed(&optimized_plan, &self.principal).await? == Decision::Deny {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
-                self.principal
+                self.principal.uid
             );
         }
-        self.inner.execute_logical_plan(plan).await
+        self.inner.execute_logical_plan(governed).await
     }
 }
 
@@ -131,7 +190,7 @@ pub struct LakehouseSession {
     /// and other policies during query planning and execution.
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
-    principal: EntityUid,
+    principal: PrincipalIdentity,
     /// Optional Unity Catalog resolver used to back catalog/schema/table
     /// resolution during planning.
     unity: Option<Arc<UnityCatalogProviderList>>,
@@ -186,11 +245,13 @@ impl Session for LakehouseSession {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // First optimize the logical plan to make sure all projections
-        // and filters are pushed down to the table scan level. This
-        // allows us to enforce policies based on the actual data
-        // being accessed.
-        let optimized_plan = self.inner.optimize(logical_plan)?;
+        // Inject fine-grained governance (row filters + column masks) before
+        // optimization, so the injected predicate pushes into the scan and
+        // masked-away columns are pruned. Then optimize, so the coarse gate
+        // sees projections/filters pushed down to the table scan level and can
+        // authorize based on the actual data being accessed.
+        let governed = govern_plan(logical_plan, self.policy.as_ref(), &self.principal).await?;
+        let optimized_plan = self.inner.optimize(&governed)?;
         if self
             .policy
             .is_allowed(&optimized_plan, &self.principal)
@@ -199,7 +260,7 @@ impl Session for LakehouseSession {
         {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
-                self.principal
+                self.principal.uid
             );
         }
         self.inner
@@ -420,9 +481,9 @@ pub fn create_session(
         .build();
 
     // Emit OpenLineage events around physical planning when a client is wired.
-    // The context provider reads any per-session `LineageContext` attached to
-    // the `SessionConfig` (see `crate::lineage`); today none is attached yet, so
-    // it resolves to empty context until session management is reworked.
+    // The context provider reads the per-request `LineageContext` the server
+    // attaches to the `SessionConfig` via `LakehouseCtx::session_with_lineage`
+    // (parent-run facet + SQL text); when none is attached it resolves to empty.
     if let Some(client) = lineage {
         session_state = instrument_session_state(
             session_state,
@@ -590,5 +651,201 @@ impl LogStore for DataFusionLogStore {
 
     fn engine(&self, _operation_id: Option<Uuid>) -> Arc<dyn Engine> {
         DataFusionEngine::new_from_context(self.ctx.clone())
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    //! End-to-end tests over `LakehouseCtx`/`LakehouseSession` — the govern →
+    //! optimize → gate pipeline and OpenLineage emission — without standing up a
+    //! Flight SQL socket. The transport seam is exercised directly here; the
+    //! Flight layer is thin and covered by upstream `arrow-flight`.
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use datafusion::arrow::array::{Int64Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
+    use datafusion::logical_expr::LogicalPlan;
+
+    use cedar_oci::{Decision, EntityUid};
+    use datafusion_cedar::PrincipalIdentity;
+    use datafusion_open_lineage::event::{RunEvent, RunEventType};
+    use datafusion_open_lineage::transport::{Transport, TransportError};
+    use datafusion_open_lineage::OpenLineageClient;
+
+    use super::*;
+    use crate::policy::{Policy, StaticPolicy};
+
+    fn principal(name: &str) -> PrincipalIdentity {
+        use std::str::FromStr as _;
+        PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
+            .with_attribute("region", "eu")
+    }
+
+    async fn ctx_with_table(policy: Arc<dyn Policy>, lineage: Option<OpenLineageClient>) -> LakehouseCtx {
+        let session = create_session(None, lineage).unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("region", DataType::Utf8, true),
+            Field::new("ssn", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["eu", "us", "eu"])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .unwrap();
+        let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+        session.register_table("t", Arc::new(table)).unwrap();
+        LakehouseCtx::new(session, policy, principal("alice"))
+    }
+
+    /// A policy that denies everything — the coarse gate must reject the query.
+    #[derive(Debug)]
+    struct DenyAll;
+
+    #[async_trait]
+    impl Policy for DenyAll {
+        async fn is_allowed(&self, _plan: &LogicalPlan, _p: &PrincipalIdentity) -> Result<Decision> {
+            Ok(Decision::Deny)
+        }
+    }
+
+    #[derive(Debug, Default, Clone)]
+    struct RecordingTransport {
+        events: Arc<Mutex<Vec<RunEvent>>>,
+    }
+
+    #[async_trait]
+    impl Transport for RecordingTransport {
+        async fn emit(&self, event: &RunEvent) -> Result<(), TransportError> {
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
+
+    /// The coarse gate denies a disallowed principal at physical-plan time
+    /// (statement path).
+    #[tokio::test]
+    async fn create_physical_plan_denies_on_policy() {
+        let ctx = ctx_with_table(Arc::new(DenyAll), None).await;
+        let session = ctx.session();
+        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let err = session.create_physical_plan(&plan).await.unwrap_err();
+        assert!(
+            err.to_string().contains("not authorized"),
+            "expected an authorization error, got: {err}"
+        );
+    }
+
+    /// The same gate also guards the ingest/delta-connect path
+    /// (`execute_logical_plan`).
+    #[tokio::test]
+    async fn execute_logical_plan_denies_on_policy() {
+        let ctx = ctx_with_table(Arc::new(DenyAll), None).await;
+        let plan = ctx.session().create_logical_plan("SELECT id FROM t").await.unwrap();
+        let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+        assert!(err.to_string().contains("not authorized"), "got: {err}");
+    }
+
+    /// An allow-all policy lets the query through and returns rows.
+    #[tokio::test]
+    async fn allow_all_returns_rows() {
+        let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), None).await;
+        let session = ctx.session();
+        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let physical = session.create_physical_plan(&plan).await.unwrap();
+        let batches = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
+            .await
+            .unwrap();
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 3);
+    }
+
+    /// OpenLineage emits START + COMPLETE (sharing a run id) around a real query
+    /// run through the session, and the SQL/parent context flows from a
+    /// per-request session into the event.
+    #[tokio::test]
+    async fn lineage_start_and_complete_share_run_id() {
+        use datafusion_open_lineage::context::LineageContext;
+        let transport = RecordingTransport::default();
+        let client = OpenLineageClient::new(Arc::new(transport.clone()));
+        let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), Some(client)).await;
+
+        // Attach a per-request lineage context (as the server's `session_for` does).
+        let session = ctx.session_with_lineage(LineageContext {
+            sql: Some("SELECT id FROM t".to_string()),
+            ..Default::default()
+        });
+        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let physical = session.create_physical_plan(&plan).await.unwrap();
+        let _ = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = transport.events.lock().unwrap();
+        let start = events.iter().find(|e| e.event_type == RunEventType::Start).expect("START");
+        let complete = events.iter().find(|e| e.event_type == RunEventType::Complete).expect("COMPLETE");
+        assert_eq!(start.run.run_id, complete.run.run_id, "START/COMPLETE share a run id");
+        // The SQL facet flowed from the per-request context.
+        let sql = start.job.facets.sql.as_ref().expect("sql job facet present");
+        assert_eq!(sql.query, "SELECT id FROM t");
+    }
+
+    /// With the governance feature, a `TablePolicy` filters rows and masks
+    /// columns end-to-end through the real session path.
+    #[cfg(feature = "governance")]
+    #[tokio::test]
+    async fn governance_filters_and_masks_rows() {
+        use std::collections::HashMap;
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::sql::TableReference;
+        use datafusion::common::DFSchema;
+        use datafusion_cedar::TablePolicy;
+
+        #[derive(Debug)]
+        struct GovPolicy;
+        #[async_trait]
+        impl Policy for GovPolicy {
+            async fn is_allowed(&self, _p: &LogicalPlan, _pr: &PrincipalIdentity) -> Result<Decision> {
+                Ok(Decision::Allow)
+            }
+            async fn table_policy(
+                &self,
+                _table: &TableReference,
+                _schema: &DFSchema,
+                _principal: &PrincipalIdentity,
+            ) -> Result<TablePolicy> {
+                let mut masks = HashMap::new();
+                masks.insert("ssn".to_string(), lit("***"));
+                Ok(TablePolicy {
+                    row_filters: vec![col("region").eq(lit("eu"))],
+                    column_masks: masks,
+                })
+            }
+        }
+
+        let ctx = ctx_with_table(Arc::new(GovPolicy), None).await;
+        let session = ctx.session();
+        let plan = session.create_logical_plan("SELECT id, region, ssn FROM t").await.unwrap();
+        let physical = session.create_physical_plan(&plan).await.unwrap();
+        let batches = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
+            .await
+            .unwrap();
+
+        // Only the two region='eu' rows survive, and ssn is masked to '***'.
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 2, "row filter keeps only region='eu'");
+        let pretty = datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string();
+        assert!(pretty.contains("***"), "ssn masked: {pretty}");
+        assert!(!pretty.contains(" a ") && !pretty.contains(" c "), "raw ssn must not leak: {pretty}");
     }
 }

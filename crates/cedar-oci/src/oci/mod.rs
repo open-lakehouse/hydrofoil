@@ -44,6 +44,10 @@ pub struct OciPolicyProvider {
     reference: Reference,
     entities: RwLock<Arc<Entities>>,
     policy_set: RwLock<Arc<PolicySet>>,
+    /// The Cedar schema pulled alongside the policy set, if the image carried
+    /// one. Retained for schema-aware authorization and fine-grained governance
+    /// (residual evaluation validates resource attributes against it).
+    schema: RwLock<Option<Arc<Schema>>>,
 }
 
 impl Debug for OciPolicyProvider {
@@ -121,7 +125,24 @@ impl OciPolicyProvider {
             reference,
             entities: RwLock::new(Arc::new(entities)),
             policy_set: RwLock::new(Arc::new(policy_set)),
+            schema: RwLock::new(schema.map(Arc::new)),
         })
+    }
+
+    /// Build a provider from an OCI reference string (e.g.
+    /// `localhost:10100/hydrofoil/plan-policy:latest`), using the default
+    /// (anonymous, HTTP) client configuration.
+    pub async fn from_reference(reference: &str) -> Result<Self, EntityProviderError> {
+        let client = Client::new(build_client_config());
+        let reference: Reference = reference
+            .parse()
+            .map_err(|e: oci_client::ParseError| EntityProviderError::General(e.into()))?;
+        Self::try_new(client, reference).await
+    }
+
+    /// The Cedar schema pulled with the policy image, if any.
+    pub async fn schema(&self) -> Option<Arc<Schema>> {
+        self.schema.read().await.clone()
     }
 }
 
@@ -158,6 +179,11 @@ mod tests {
             .unwrap();
 
         let provider = Arc::new(OciPolicyProvider::try_new(client, reference).await.unwrap());
+        // The plan-policy image ships a Cedar schema layer; confirm we retained it.
+        assert!(
+            provider.schema().await.is_some(),
+            "expected the pulled policy image to carry a Cedar schema"
+        );
         let authorizer = Authorizer::new(
             AuthorizerConfigBuilder::default()
                 .policy_set_provider(provider.clone())

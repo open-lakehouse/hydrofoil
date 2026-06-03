@@ -1,0 +1,33 @@
+[package]
+name = "datafusion-cedar"
+version = "0.1.0"
+edition = { workspace = true }
+rust-version = { workspace = true }
+description = "Cedar policy enforcement (access gate + row/column governance) for Apache DataFusion sessions"
+
+[dependencies]
+cedar-oci = { path = "../cedar-oci" }
+
+async-trait = { workspace = true }
+cedar-local-agent = { workspace = true }
+cedar-policy = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+# Layer 2 fine-grained governance (row filters + column masks) via Cedar
+# partial evaluation. Off by default; pulls the partial-eval feature through
+# the cedar stack when enabled, and the residual translator (serde_json).
+governance = [
+    "cedar-policy/partial-eval",
+    "cedar-local-agent/partial-eval",
+    "dep:serde_json",
+]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

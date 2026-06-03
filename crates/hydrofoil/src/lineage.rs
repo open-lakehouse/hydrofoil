@@ -2,15 +2,13 @@
 //!
 //! Bridges gRPC request metadata (parent-run headers a client sends) into the
 //! [`LineageContext`] the OpenLineage planner consumes. See
-//! `docs/session-management.md` for the broader session design; this module
-//! lands the header convention + provider, but is **not yet wired into the
-//! server's request lifecycle** (the `get_ctx` singleton is still a stub).
+//! `docs/session-management.md` for the broader session design.
 //!
-//! `context_from_metadata` and `with_lineage_context` are the seams the future
-//! `get_ctx` rework will call; they are intentionally unused until then.
-#![allow(dead_code)]
-
-use std::sync::Arc;
+//! The server parses parent-run context per request via [`context_from_metadata`]
+//! and attaches it to a request-scoped session
+//! (`LakehouseCtx::session_with_lineage`), where [`HydrofoilContextProvider`]
+//! reads it back at planning time. Per-statement run-id correlation across
+//! separate RPCs remains the deferred session-store work.
 
 use datafusion::execution::context::SessionState;
 use datafusion_open_lineage::config::OpenLineageConfig;
@@ -101,15 +99,6 @@ impl LineageContextProvider for HydrofoilContextProvider {
             .map(|ext| ext.0.clone())
             .unwrap_or_default()
     }
-}
-
-/// Attach a [`LineageContext`] to a `SessionConfig` so the
-/// [`HydrofoilContextProvider`] can read it back during planning.
-pub fn with_lineage_context(
-    config: datafusion::prelude::SessionConfig,
-    context: LineageContext,
-) -> datafusion::prelude::SessionConfig {
-    config.with_extension(Arc::new(LineageContextExt(context)))
 }
 
 #[cfg(test)]

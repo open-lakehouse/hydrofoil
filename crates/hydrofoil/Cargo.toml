@@ -6,16 +6,15 @@ rust-version = { workspace = true }
 
 [dependencies]
 datafusion-open-lineage = { path = "../open-lineage" }
+datafusion-cedar = { path = "../datafusion-cedar" }
 deltalake-datafusion = { path = "../datafusion" }
 hydrofoil-common = { path = "../common" }
-hydrofoil-policy = { path = "../policy" }
+cedar-oci = { path = "../cedar-oci" }
 
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-cedar-local-agent = { workspace = true, optional = true }
-cedar-policy = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-tracing = { workspace = true }
 delta_kernel = { workspace = true }
@@ -53,5 +52,8 @@ tracing-subscriber = { version = "0.3", features = [
 uuid = { version = "1.17", features = ["v4", "v7"] }
 
 [features]
-default = ["cedar"]
-cedar = ["cedar-local-agent", "cedar-policy"]
+default = []
+# Fine-grained governance (row filters + column masks) via Cedar partial
+# evaluation. The coarse Cedar access gate is always available through the
+# `datafusion-cedar` dependency; this feature opts into the Layer 2 machinery.
+governance = ["datafusion-cedar/governance"]

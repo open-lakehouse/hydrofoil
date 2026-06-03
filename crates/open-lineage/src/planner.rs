@@ -58,8 +58,11 @@ impl QueryPlanner for OpenLineageQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let lineage = extract(logical_plan, &self.config);
+        let mut lineage = extract(logical_plan, &self.config);
         let cx = self.context.context(session_state).await;
+        // The SQL text isn't recoverable from the plan; take it from the
+        // host-supplied context (absent on non-SQL paths, e.g. ingest).
+        lineage.sql = cx.sql.clone();
         let run_id = cx.run_id.unwrap_or_else(Uuid::now_v7);
 
         self.client

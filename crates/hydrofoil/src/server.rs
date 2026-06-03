@@ -17,7 +17,7 @@ use arrow_flight::{
     flight_service_server::FlightService,
 };
 use bytes::Bytes;
-use cedar_policy::Decision;
+use cedar_oci::Decision;
 use datafusion_open_lineage::OpenLineageClient;
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
@@ -48,9 +48,21 @@ macro_rules! status {
     };
 }
 
+/// A planned statement awaiting execution: the logical plan plus the SQL text
+/// it came from (so lineage can populate the `sql` job facet at execution time,
+/// in a later `do_get_*` RPC). A precursor to the deferred per-statement store
+/// in `docs/session-management.md`.
+#[derive(Clone)]
+pub(crate) struct Statement {
+    pub(crate) plan: LogicalPlan,
+    /// SQL text, when the statement originated from SQL (absent for non-SQL
+    /// command paths such as ingest / delta-connect).
+    pub(crate) sql: Option<String>,
+}
+
 pub struct FlightSqlServiceImpl {
     pub(crate) contexts: Arc<DashMap<String, Arc<LakehouseCtx>>>,
-    pub(crate) statements: Arc<DashMap<Uuid, LogicalPlan>>,
+    pub(crate) statements: Arc<DashMap<Uuid, Statement>>,
 
     executor: CpuRuntime,
     policy: Arc<dyn Policy>,
@@ -99,34 +111,64 @@ impl FlightSqlServiceImpl {
     }
 
     #[allow(clippy::result_large_err)]
-    fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
-        if let Some(ctx) = self.contexts.get("key") {
-            Ok(ctx.value().clone())
+    fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
+        // Resolve the principal from request metadata. This replaces the old
+        // hardcoded `"User:default"` and the single `"key"` context: contexts
+        // are cached per principal so a request's identity actually drives
+        // authorization (a full protocol-derived session store is the deferred
+        // follow-up in docs/session-management.md).
+        let principal = crate::identity::principal_from_metadata(req.metadata())?;
+        let cache_key = principal.uid.to_string();
+
+        if let Some(ctx) = self.contexts.get(&cache_key) {
+            return Ok(ctx.value().clone());
+        }
+
+        let session_id = Uuid::new_v4();
+        let session = create_session(session_id, self.lineage.clone())
+            .map_err(|e| status!("Failed to create session", e))?;
+        let mut ctx = LakehouseCtx::new(session.clone(), self.policy.clone(), principal);
+        if let Some(factory) = self.unity_factory.clone() {
+            ctx = ctx.with_unity(build_unity_resolver(&session, factory));
+        }
+        let ctx = Arc::new(ctx);
+        self.contexts.insert(cache_key, ctx.clone());
+        Ok(ctx)
+    }
+
+    /// Build a request-scoped [`LakehouseSession`] for query execution,
+    /// attaching the per-request OpenLineage context: the parent-run facet
+    /// parsed from the request metadata, plus the statement's SQL text (for the
+    /// `sql` job facet). When lineage is disabled, this is the plain session.
+    fn session_for<T>(
+        &self,
+        ctx: &LakehouseCtx,
+        req: &Request<T>,
+        sql: Option<String>,
+    ) -> crate::session::LakehouseSession {
+        if self.lineage.is_none() {
+            return ctx.session();
+        }
+        let mut lineage_ctx = crate::lineage::context_from_metadata(
+            req.metadata(),
+            &datafusion_open_lineage::config::OpenLineageConfig::default(),
+        );
+        lineage_ctx.sql = sql;
+        ctx.session_with_lineage(lineage_ctx)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn get_statement(&self, handle: &Uuid) -> Result<Statement, Status> {
+        if let Some(stmt) = self.statements.get(handle) {
+            Ok(stmt.clone())
         } else {
-            let session_id = Uuid::new_v4();
-            let session = create_session(session_id, self.lineage.clone())
-                .map_err(|e| status!("Failed to create session", e))?;
-            let mut ctx = LakehouseCtx::new(
-                session.clone(),
-                self.policy.clone(),
-                "User:default".parse().unwrap(),
-            );
-            if let Some(factory) = self.unity_factory.clone() {
-                ctx = ctx.with_unity(build_unity_resolver(&session, factory));
-            }
-            let ctx = Arc::new(ctx);
-            self.contexts.insert("key".to_string(), ctx.clone());
-            Ok(ctx)
+            Err(Status::internal(format!("Plan handle not found: {handle}")))?
         }
     }
 
     #[allow(clippy::result_large_err)]
     fn get_plan(&self, handle: &Uuid) -> Result<LogicalPlan, Status> {
-        if let Some(plan) = self.statements.get(handle) {
-            Ok(plan.clone())
-        } else {
-            Err(Status::internal(format!("Plan handle not found: {handle}")))?
-        }
+        Ok(self.get_statement(handle)?.plan)
     }
 
     #[allow(clippy::result_large_err)]
@@ -295,7 +337,13 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?;
 
         let plan_id = Uuid::now_v7();
-        self.statements.insert(plan_id.clone(), plan.clone());
+        self.statements.insert(
+            plan_id.clone(),
+            Statement {
+                plan: plan.clone(),
+                sql: Some(query.query.clone()),
+            },
+        );
 
         let ticket = TicketStatementQuery {
             statement_handle: Bytes::copy_from_slice(plan_id.as_bytes()),
@@ -389,7 +437,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let handle =
             Uuid::from_slice(&ticket.statement_handle).map_err(|e| status!("Invalid handle", e))?;
         let ctx = self.get_ctx(&request)?;
-        let result = self.do_get_handle(Arc::new(ctx.session()), handle);
+        let sql = self.get_statement(&handle)?.sql;
+        let session = self.session_for(&ctx, &request, sql);
+        let result = self.do_get_handle(Arc::new(session), handle);
         self.statements.remove(&handle);
         result
     }
@@ -403,7 +453,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let handle = Uuid::from_slice(&query.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
         let ctx = self.get_ctx(&request)?;
-        self.do_get_handle(Arc::new(ctx.session()), handle)
+        let sql = self.get_statement(&handle)?.sql;
+        let session = self.session_for(&ctx, &request, sql);
+        self.do_get_handle(Arc::new(session), handle)
     }
 
     #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
@@ -532,13 +584,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ctx = self.get_ctx(&request)?;
 
         let plan_id = Uuid::now_v7();
+        let sql = query.query.clone();
         let plan = self
             .executor
             .create_logical_plan(ctx, query.query)
             .await
             .map_err(|e| status!("Error building plan", e))?;
 
-        self.statements.insert(plan_id.clone(), plan.clone());
+        self.statements.insert(
+            plan_id.clone(),
+            Statement {
+                plan: plan.clone(),
+                sql: Some(sql),
+            },
+        );
         let message = SchemaAsIpc::new(plan.schema().as_arrow(), &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Error encoding schema", e))?;

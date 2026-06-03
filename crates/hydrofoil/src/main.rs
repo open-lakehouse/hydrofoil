@@ -9,6 +9,7 @@ use unitycatalog_object_store::UnityObjectStoreFactory;
 mod catalog;
 mod error;
 mod execution;
+mod identity;
 mod lineage;
 mod planner;
 mod policy;
@@ -43,6 +44,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             service = service.with_lineage(client);
         }
         Err(e) => tracing::warn!("OpenLineage disabled: {e}"),
+    }
+
+    // Wire Cedar policy enforcement when a policy reference is configured.
+    // `HYDROFOIL_POLICY_REF` is an OCI reference to a Cedar policy image (e.g.
+    // `localhost:10100/hydrofoil/plan-policy:latest`). Without it, the server
+    // runs with the allow-all default (an open, ungoverned server).
+    match std::env::var("HYDROFOIL_POLICY_REF") {
+        Ok(reference) if !reference.is_empty() => {
+            let policy = policy::CedarPolicy::from_oci(&reference).await?;
+            tracing::info!("Cedar policy enforcement enabled (ref: {reference})");
+            service = service.with_policy(Arc::new(policy));
+        }
+        _ => tracing::info!(
+            "Cedar policy enforcement disabled (set HYDROFOIL_POLICY_REF to enable)"
+        ),
     }
 
     // Wire Unity Catalog when an endpoint is configured. `UC_ENDPOINT` is the
