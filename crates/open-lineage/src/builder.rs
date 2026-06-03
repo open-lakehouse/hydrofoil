@@ -102,6 +102,9 @@ fn base_event(
             namespace: input.name.namespace.clone(),
             name: input.name.name.clone(),
             facets: input_dataset_facets(input, &lineage.column_lineage, config),
+            // Runtime read statistics are filled in by OpenLineageExec at end of
+            // execution (single-input queries only; see exec.rs).
+            input_facets: None,
             output_facets: None,
         })
         .collect();
@@ -113,6 +116,7 @@ fn base_event(
             namespace: output.name.namespace.clone(),
             name: output.name.name.clone(),
             facets: Default::default(),
+            input_facets: None,
             // Runtime statistics are filled in by OpenLineageExec at end of
             // execution, once the row count is known.
             output_facets: None,

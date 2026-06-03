@@ -32,10 +32,14 @@ use futures::Stream;
 
 use crate::client::OpenLineageClient;
 use crate::event::{RunEvent, RunEventType};
-use crate::facets::{BaseFacet, ErrorMessageRunFacet, OutputStatisticsOutputDatasetFacet};
+use crate::facets::{
+    BaseFacet, ErrorMessageRunFacet, InputStatisticsInputDatasetFacet,
+    OutputStatisticsOutputDatasetFacet,
+};
 
 const ERROR_FACET: &str = "1-0-0/ErrorMessageRunFacet.json";
 const OUTPUT_STATS_FACET: &str = "1-0-2/OutputStatisticsOutputDatasetFacet.json";
+const INPUT_STATS_FACET: &str = "1-0-0/InputStatisticsInputDatasetFacet.json";
 
 /// Shared completion state across the partitions of one query run.
 struct RunState {
@@ -109,6 +113,7 @@ impl RunState {
         } else {
             let mut event = self.complete.clone();
             self.attach_output_statistics(&mut event);
+            self.attach_input_statistics(&mut event);
             self.client.emit(event);
         }
     }
@@ -152,6 +157,76 @@ impl RunState {
             facets.output_statistics = Some(stats.clone());
         }
     }
+
+    /// Attach an `inputStatistics` facet to the input dataset — but only when
+    /// there is exactly ONE input.
+    ///
+    /// Scan metrics (`output_rows`, `bytes_scanned`) live on the per-node
+    /// `MetricsSet` of the scan nodes, not the root, so we walk the executed
+    /// plan tree and aggregate them. With a single input that aggregate is
+    /// unambiguously that dataset's read stats. With multiple inputs we cannot
+    /// attribute a summed total to the right source without matching each scan
+    /// node back to its dataset — which needs location-based dataset naming
+    /// (object-store URL + symlinks). That is deferred; see the design doc, so
+    /// we skip rather than emit a misleading aggregate.
+    fn attach_input_statistics(&self, event: &mut RunEvent) {
+        if event.inputs.len() != 1 {
+            return;
+        }
+
+        let inner = self.inner.lock().unwrap().clone();
+        let (rows, bytes) = aggregate_scan_metrics(&inner);
+        let row_count = rows.map(|n| n as i64);
+        let size = bytes.map(|n| n as i64);
+        if row_count.is_none() && size.is_none() {
+            return;
+        }
+
+        let stats = InputStatisticsInputDatasetFacet {
+            base: BaseFacet::new(&self.producer, INPUT_STATS_FACET),
+            row_count,
+            size,
+            file_count: None,
+        };
+        let facets = event.inputs[0]
+            .input_facets
+            .get_or_insert_with(Default::default);
+        facets.input_statistics = Some(stats);
+    }
+}
+
+/// Sum scan metrics across the whole executed plan tree.
+///
+/// `metrics()` is per-node, so we recurse. Returns aggregated
+/// (`output_rows`, `bytes_scanned`); either may be `None` if no node reported it.
+fn aggregate_scan_metrics(plan: &Arc<dyn ExecutionPlan>) -> (Option<usize>, Option<usize>) {
+    let mut rows: Option<usize> = None;
+    let mut bytes: Option<usize> = None;
+
+    if let Some(metrics) = plan.metrics() {
+        let metrics = metrics.aggregate_by_name();
+        // Only count rows from leaf scans, identified by a `bytes_scanned`
+        // metric; intermediate nodes also report `output_rows` and would
+        // double-count.
+        if let Some(b) = metrics.sum_by_name("bytes_scanned") {
+            *bytes.get_or_insert(0) += b.as_usize();
+            if let Some(r) = metrics.output_rows() {
+                *rows.get_or_insert(0) += r;
+            }
+        }
+    }
+
+    for child in plan.children() {
+        let (cr, cb) = aggregate_scan_metrics(child);
+        if let Some(r) = cr {
+            *rows.get_or_insert(0) += r;
+        }
+        if let Some(b) = cb {
+            *bytes.get_or_insert(0) += b;
+        }
+    }
+
+    (rows, bytes)
 }
 
 /// Wraps the root physical plan, emitting a terminal lineage event when

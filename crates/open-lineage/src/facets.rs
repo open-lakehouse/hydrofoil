@@ -190,6 +190,34 @@ pub struct OutputStatisticsOutputDatasetFacet {
     pub file_count: Option<i64>,
 }
 
+/// Input-only dataset facets (serialized under `inputFacets`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InputDatasetFacets {
+    #[serde(rename = "inputStatistics", skip_serializing_if = "Option::is_none")]
+    pub input_statistics: Option<InputStatisticsInputDatasetFacet>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl InputDatasetFacets {
+    pub fn is_empty(&self) -> bool {
+        self.input_statistics.is_none() && self.extra.is_empty()
+    }
+}
+
+/// Runtime statistics about the data read from an input dataset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputStatisticsInputDatasetFacet {
+    #[serde(flatten)]
+    pub base: BaseFacet,
+    #[serde(rename = "rowCount", skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    #[serde(rename = "fileCount", skip_serializing_if = "Option::is_none")]
+    pub file_count: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaDatasetFacet {
     #[serde(flatten)]

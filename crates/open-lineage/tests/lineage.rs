@@ -338,6 +338,133 @@ async fn write_emits_output_statistics() {
     assert!(stats["_schemaURL"].is_string());
 }
 
+#[tokio::test]
+async fn single_input_read_emits_input_statistics() {
+    use datafusion::prelude::ParquetReadOptions;
+
+    // Scan metrics (rows/bytes scanned) are only populated by file sources, so
+    // this test reads a real Parquet file (in-memory tables report nothing).
+    let dir = std::env::temp_dir().join("ol_input_stats_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let parquet = dir.join("data.parquet");
+
+    // Write a Parquet file via a throwaway context.
+    let writer = SessionContext::new();
+    writer
+        .sql("CREATE TABLE src (a INT) AS VALUES (1), (2), (3), (4), (5)")
+        .await
+        .unwrap();
+    writer
+        .sql(&format!(
+            "COPY src TO '{}' STORED AS PARQUET",
+            parquet.display()
+        ))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .register_parquet("t", parquet.to_str().unwrap(), ParquetReadOptions::default())
+        .await
+        .unwrap();
+
+    let df = instrumented.sql("SELECT a FROM t").await.unwrap();
+    let _ = df.collect().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let complete = events
+        .iter()
+        .find(|e| e.event_type == RunEventType::Complete && !e.inputs.is_empty())
+        .expect("a COMPLETE with an input dataset");
+
+    let json = serde_json::to_value(complete).unwrap();
+    let stats = &json["inputs"][0]["inputFacets"]["inputStatistics"];
+    assert_eq!(stats["rowCount"], 5, "five rows read: {json}");
+    assert!(stats["size"].is_number(), "bytes read present");
+    assert!(stats["_producer"].is_string());
+    assert!(stats["_schemaURL"].is_string());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn multi_input_read_omits_input_statistics() {
+    use datafusion::prelude::ParquetReadOptions;
+
+    // With more than one input we cannot attribute a summed scan total to the
+    // right source, so input statistics are intentionally omitted.
+    let dir = std::env::temp_dir().join("ol_multi_input_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let writer = SessionContext::new();
+    for (name, vals) in [("a", "(1), (2)"), ("b", "(3), (4), (5)")] {
+        writer
+            .sql(&format!("CREATE TABLE s (x INT) AS VALUES {vals}"))
+            .await
+            .unwrap();
+        writer
+            .sql(&format!(
+                "COPY s TO '{}' STORED AS PARQUET",
+                dir.join(format!("{name}.parquet")).display()
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        writer.sql("DROP TABLE s").await.unwrap();
+    }
+
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .register_parquet("ta", dir.join("a.parquet").to_str().unwrap(), ParquetReadOptions::default())
+        .await
+        .unwrap();
+    instrumented
+        .register_parquet("tb", dir.join("b.parquet").to_str().unwrap(), ParquetReadOptions::default())
+        .await
+        .unwrap();
+
+    let df = instrumented
+        .sql("SELECT ta.x FROM ta JOIN tb ON ta.x = tb.x")
+        .await
+        .unwrap();
+    let _ = df.collect().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let complete = events
+        .iter()
+        .find(|e| e.event_type == RunEventType::Complete && e.inputs.len() > 1)
+        .expect("a COMPLETE with multiple input datasets");
+
+    // No inputStatistics on any input (attribution would be ambiguous).
+    for input in &complete.inputs {
+        let has_stats = input
+            .input_facets
+            .as_ref()
+            .map(|f| f.input_statistics.is_some())
+            .unwrap_or(false);
+        assert!(!has_stats, "multi-input run must omit inputStatistics");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // 4. Context provider injects orchestration metadata
 // ---------------------------------------------------------------------------

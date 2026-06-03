@@ -118,6 +118,38 @@ when the plan exposes one. A read (`SELECT`) has no output dataset, so the facet
 is simply absent. This is a good example of "read the engine, not the docs": the
 authoritative signal was in the data path, not the metrics API.
 
+### Input statistics, and the attribution wall
+
+There is a symmetric **`inputStatistics`** facet (rows/bytes *read* per input
+dataset). Three things make it trickier than output stats:
+
+1. **The metrics are per-node, not on the root.** `ExecutionPlan::metrics()`
+   returns only that node's own metrics (the root often reports `None`); it is
+   not a recursive aggregate. So we walk the executed plan tree after completion
+   and sum the scan nodes' `output_rows` + `bytes_scanned`. To avoid
+   double-counting `output_rows` from intermediate nodes, we only count rows on
+   nodes that also expose `bytes_scanned` — i.e. leaf file scans.
+2. **Only file sources emit these metrics.** In-memory and CSV scans report
+   neither `output_rows` nor `bytes_scanned`; `bytes_scanned` is Parquet-specific
+   today. So `inputStatistics` appears for Parquet-backed reads and is absent
+   otherwise — correctly, rather than guessing.
+3. **Attribution is the real wall.** A summed scan total can only be attached to
+   *an* input dataset, not split across several, unless we can match each scan
+   node back to the dataset it reads. So we attach `inputStatistics` **only when
+   the query has exactly one input dataset** (unambiguous). Multi-input queries
+   get no input stats rather than a misleading aggregate.
+
+**Deferred — per-dataset input attribution.** Splitting scan stats across
+multiple inputs requires matching each `DataSourceExec` (which carries an
+`object_store_url` + `file_groups`, i.e. physical paths) to the corresponding
+input `Dataset`. Today our datasets are named from the *logical* `TableReference`
+(location-based naming and the `symlinks` facet are themselves deferred), so
+physical scan paths don't line up with dataset names. The clean sequencing is:
+do **location-based dataset naming first** (object-store URL + `symlinks`), which
+is independently valuable, then per-dataset input attribution becomes a small
+addition on top. Attempting fuzzy path↔name matching before that would be
+fragile, so we ship the single-input case and log the boundary instead.
+
 ## Critical decision 2 — Deriving lineage from the logical plan
 
 Lineage extraction is a `TreeNodeVisitor` walk over the optimized
@@ -280,9 +312,14 @@ model; spec-exact facets with `_producer`/`_schemaURL`; async fail-safe emission
 standard env-var config; pluggable transport; **end-of-execution COMPLETE/FAIL
 via a `Drop`-based physical-plan wrapper** (`OpenLineageExec`), so terminal events
 reflect runtime outcome, not just planning success; **`outputStatistics`
-facets** (rows written, from the write-result `count` batch).
+facets** (rows written, from the write-result `count` batch); **`inputStatistics`
+facets for single-input reads** (rows/bytes scanned, summed from the plan tree's
+file-scan nodes).
 
-**Deferred** (complexity that doesn't earn its place yet): the full
+**Deferred** (complexity that doesn't earn its place yet): **per-dataset input
+attribution** for multi-input queries — needs location-based dataset naming
+(object-store URL + `symlinks`) first, so scan nodes can be matched to datasets
+(see *Input statistics* above); the full
 `OpenLineageEventHandlerFactory` ServiceLoader-style SPI for third-party facet
 builders — Rust has no ServiceLoader, and a fixed visitor set plus trait seams
 covers us until a second consumer appears; Kafka/GCS/composite transports;
