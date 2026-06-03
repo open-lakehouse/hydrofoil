@@ -15,7 +15,8 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+# OpenLineage recommends time-ordered (v7) UUIDs for run ids.
+uuid = { workspace = true, features = ["v7", "serde"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
