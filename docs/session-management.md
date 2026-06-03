@@ -1,9 +1,14 @@
 # Session management & lineage context (design)
 
-> Status: **design + scaffolding only.** This documents where we want session
-> management to go and lands the small, non-invasive pieces needed to forward
-> OpenLineage context. It does **not** rewire the server's session lifecycle —
-> the current `get_ctx` singleton stub stays in place for now.
+> Status: **implemented** (2026-06). The session lifecycle described below is now
+> wired: a three-layer Engine / Session / per-query-context model with
+> protocol-derived session ids, per-statement run-id correlation, per-session
+> credential isolation, and a per-query agent-context seam. The decisions are
+> recorded as ADRs — see [`docs/adr/`](adr/README.md), specifically
+> [0001](adr/0001-layered-session-context-model.md)–[0005](adr/0005-per-query-agent-governance-context.md).
+> The taint ledger, central PDP, and agent PEP from
+> [`platform-policy-architecture.md`](platform-policy-architecture.md) remain
+> future work.
 
 ## Problem
 
@@ -103,19 +108,39 @@ run-id/job-namespace/job-name together; root is optional but, if present,
 requires all three of its fields. Partial sets are ignored. We watch
 OpenLineage#4412 in case a delivery mechanism is standardized later.
 
-## What lands now vs. later
+## What landed
 
-**Now (this change):**
-- Header key constants + a parser from gRPC `MetadataMap` → `LineageContext`
-  (`crates/hydrofoil/src/lineage.rs`).
-- `HydrofoilContextProvider` implementing `LineageContextProvider` by reading a
-  `LineageContext` from a `SessionConfig` extension.
-- Unit tests for header parsing and provider read-back.
+The session-management rework is implemented in
+`crates/hydrofoil/src/{engine,session,server,agent,identity,lineage}.rs`:
 
-**Later (explicitly out of scope here):**
-- Replacing the `get_ctx` `"key"` singleton with protocol-derived session ids
-  and a real session/statement store.
-- Minting + storing per-statement `run_id` so COMPLETE/FAIL correlate with START
-  across RPCs (prerequisite for the execution-accurate COMPLETE/FAIL follow-up).
-- Attaching the parsed `LineageContext` as a `SessionConfig` extension inside
-  `get_ctx` (wired once session management is reworked).
+- **Three-layer model** — `Engine` (process-wide) → `Session` (per connection,
+  keyed by session id) → `LakehouseSession` (per query, with `SessionConfig`
+  extensions). See [ADR-0001](adr/0001-layered-session-context-model.md).
+- **Protocol-derived session ids** — minted in `do_handshake`, returned via
+  `authorization: Bearer` + `x-session-id`, resolved from cookie/header/Bearer
+  with a stable per-principal ephemeral fallback for no-handshake clients. The
+  `get_ctx` per-principal singleton is gone. See
+  [ADR-0002](adr/0002-flight-sql-session-identity.md).
+- **Per-statement `run_id`** — minted and snapshotted into the session-scoped
+  statement store at planning, reused at `do_get`, so OpenLineage START and
+  COMPLETE/FAIL share one `runId`. See
+  [ADR-0003](adr/0003-per-statement-run-id-correlation.md).
+- **Per-session credential isolation** — each session owns its `RuntimeEnv` /
+  object-store registry, so vended Unity Catalog credentials never cross
+  principals. See [ADR-0004](adr/0004-per-session-credential-isolation.md).
+- **Per-query agent context** — `x-hydrofoil-agent-*` metadata parsed into an
+  `AgentContext` and attached as a `SessionConfig` extension per query (logged
+  for now). See [ADR-0005](adr/0005-per-query-agent-governance-context.md).
+- The `LineageContext` header parser and `HydrofoilContextProvider` (the earlier
+  scaffolding) are now driven end-to-end through the session layer.
+
+## Still later (explicitly out of scope)
+
+- **Per-user credential vending** — UC still vends with a shared `UC_TOKEN`;
+  threading the request identity/token into `for_table` is the next step (see
+  [ADR-0004](adr/0004-per-session-credential-isolation.md)).
+- A real **authentication interceptor** (mTLS / validated bearer token) upstream
+  of principal resolution, splitting session identity from the auth token.
+- The **agent PEP, session taint ledger, and central PDP** from
+  [`platform-policy-architecture.md`](platform-policy-architecture.md), which
+  will consume the `AgentContext` seam.

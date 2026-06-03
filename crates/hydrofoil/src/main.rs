@@ -6,7 +6,9 @@ use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware::{filters, server::OtelGrpcLayer};
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
+mod agent;
 mod catalog;
+mod engine;
 mod error;
 mod execution;
 mod identity;
@@ -80,6 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing::info!("Unity Catalog integration disabled (set UC_ENDPOINT to enable)");
     }
+
+    // Finalize the configured components into the engine + session store and
+    // start the background session sweeper.
+    let service = service.build();
 
     tracing::info!("Listening on {addr:?}");
     let svc = FlightServiceServer::new(service);
