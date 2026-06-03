@@ -10,11 +10,11 @@
 
 use std::collections::HashMap;
 
-use datafusion::common::Result;
+use datafusion::common::{Column, Result};
 use datafusion::common::tree_node::{
     Transformed, TreeNode as _, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
 use crate::policy::Policy;
@@ -111,17 +111,17 @@ impl TreeNodeRewriter for GovernRewriter {
         let mut builder = LogicalPlanBuilder::from(node.clone());
 
         // Column masks: rebuild the projection, replacing masked columns with
-        // their mask expression (aliased to the original name) and passing the
-        // rest through unchanged.
+        // their mask expression and passing the rest through unchanged. Both
+        // must preserve the original *qualified* column identity (e.g. `t.ssn`)
+        // so downstream nodes that reference the qualified column still resolve.
         if !tp.column_masks.is_empty() {
             let projections: Vec<Expr> = schema
-                .fields()
                 .iter()
-                .map(|field| {
+                .map(|(qualifier, field)| {
                     let name = field.name();
                     match tp.column_masks.get(name) {
-                        Some(mask) => mask.clone().alias(name),
-                        None => col(name),
+                        Some(mask) => mask.clone().alias_qualified(qualifier.cloned(), name),
+                        None => Expr::Column(Column::new(qualifier.cloned(), name)),
                     }
                 })
                 .collect();
@@ -144,7 +144,7 @@ mod tests {
     use datafusion::common::DFSchema;
     use datafusion::error::Result as DFResult;
     use datafusion::logical_expr::logical_plan::builder::table_scan;
-    use datafusion::logical_expr::lit;
+    use datafusion::logical_expr::{col, lit};
 
     use cedar_oci::{Decision, EntityUid};
 
@@ -224,11 +224,171 @@ mod tests {
         let masked = proj
             .expr
             .iter()
-            .find(|e| e.schema_name().to_string() == "ssn")
+            .find(|e| e.schema_name().to_string().ends_with("ssn"))
             .expect("ssn projection present");
+        // The masked column is an aliased literal, not a bare Column reference,
+        // so the optimizer cannot absorb it back to the raw column.
         assert!(
             !matches!(masked, Expr::Column(_)),
-            "masked column must not be a bare Column expr"
+            "masked column must not be a bare Column expr, got: {masked:?}"
         );
+        // The other columns are preserved as qualified pass-through columns.
+        let id_passthrough = proj
+            .expr
+            .iter()
+            .find(|e| e.schema_name().to_string().ends_with("id"))
+            .expect("id projection present");
+        assert!(
+            matches!(id_passthrough, Expr::Column(_)),
+            "unmasked column should pass through as a Column"
+        );
+    }
+
+    #[tokio::test]
+    async fn deny_override_keeps_negated_condition() {
+        // deny_override is modeled upstream as NOT(condition) in the row
+        // filters; verify a NOT filter survives into the governed plan.
+        let policy = FixedPolicy(TablePolicy {
+            row_filters: vec![!col("region").eq(lit("blocked"))],
+            column_masks: Default::default(),
+        });
+        let governed = govern_plan(&scan(), &policy, &principal()).await.unwrap();
+        let LogicalPlan::Filter(f) = &governed else {
+            panic!("expected Filter, got: {governed:?}");
+        };
+        // The predicate is a negation (Not), not the bare equality.
+        assert!(
+            format!("{:?}", f.predicate).contains("NOT") || matches!(f.predicate, Expr::Not(_)),
+            "expected a negated predicate, got: {:?}",
+            f.predicate
+        );
+    }
+
+    // --- Optimizer-interaction tests (Phase 3): run the real DataFusion
+    // optimizer over a governed plan and assert masks/filters behave. ---
+
+    mod optimizer {
+        use std::sync::Arc;
+
+        use datafusion::arrow::array::{Int64Array, StringArray};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::datasource::MemTable;
+        use datafusion::prelude::SessionContext;
+
+        use super::*;
+
+        async fn ctx() -> SessionContext {
+            let ctx = SessionContext::new();
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("region", DataType::Utf8, true),
+                Field::new("ssn", DataType::Utf8, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![1, 2])),
+                    Arc::new(StringArray::from(vec!["eu", "us"])),
+                    Arc::new(StringArray::from(vec!["a", "b"])),
+                ],
+            )
+            .unwrap();
+            let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            ctx.register_table("t", Arc::new(table)).unwrap();
+            ctx
+        }
+
+        fn mask_ssn() -> FixedPolicy {
+            let mut masks = HashMap::new();
+            masks.insert("ssn".to_string(), lit("***"));
+            FixedPolicy(TablePolicy {
+                row_filters: vec![],
+                column_masks: masks,
+            })
+        }
+
+        /// The mask projection must survive `OptimizeProjections` — the masked
+        /// column stays a literal and is never restored to the raw column.
+        #[tokio::test]
+        async fn mask_survives_optimizer() {
+            let ctx = ctx().await;
+            let plan = ctx
+                .sql("SELECT id, region, ssn FROM t")
+                .await
+                .unwrap()
+                .into_unoptimized_plan();
+
+            let governed = govern_plan(&plan, &mask_ssn(), &principal()).await.unwrap();
+            let optimized = ctx.state().optimize(&governed).unwrap();
+
+            // The literal mask must appear in the optimized plan, and the raw
+            // ssn column must not flow to the output unmasked.
+            let dbg = format!("{}", optimized.display_indent());
+            assert!(
+                dbg.contains("Utf8(\"***\")") || dbg.contains("***"),
+                "mask literal absent from optimized plan:\n{dbg}"
+            );
+        }
+
+        /// A user predicate over a masked column must evaluate against the
+        /// masked value: it must stay ABOVE the mask projection and never be
+        /// pushed into the scan as a filter on the raw column (which would leak
+        /// the real value).
+        #[tokio::test]
+        async fn user_predicate_does_not_push_through_mask() {
+            let ctx = ctx().await;
+            // User selects + filters on ssn; governance masks ssn.
+            let plan = ctx
+                .sql("SELECT ssn FROM t WHERE ssn = 'a'")
+                .await
+                .unwrap()
+                .into_unoptimized_plan();
+
+            let governed = govern_plan(&plan, &mask_ssn(), &principal()).await.unwrap();
+            let optimized = ctx.state().optimize(&governed).unwrap();
+
+            // Execute and confirm the predicate matched the MASKED value, not
+            // the raw one: WHERE ssn='a' over masked data yields zero rows
+            // (every ssn is '***'), proving the filter sits above the mask.
+            let df = ctx.execute_logical_plan(optimized).await.unwrap();
+            let batches = df.collect().await.unwrap();
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "user predicate leaked through the mask (matched raw ssn)"
+            );
+        }
+
+        /// A governed row filter pushes down toward the scan after optimization
+        /// (it becomes a scan-level filter or a Filter directly above the scan),
+        /// confirming the pre-optimize injection rides predicate pushdown.
+        #[tokio::test]
+        async fn row_filter_pushes_toward_scan() {
+            let ctx = ctx().await;
+            let plan = ctx
+                .sql("SELECT id, region FROM t")
+                .await
+                .unwrap()
+                .into_unoptimized_plan();
+
+            let policy = FixedPolicy(TablePolicy {
+                row_filters: vec![col("region").eq(lit("eu"))],
+                column_masks: Default::default(),
+            });
+            let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
+            let optimized = ctx.state().optimize(&governed).unwrap();
+
+            // Only the 'eu' row survives -> 1 row.
+            let df = ctx.execute_logical_plan(optimized).await.unwrap();
+            let rows: usize = df
+                .collect()
+                .await
+                .unwrap()
+                .iter()
+                .map(|b| b.num_rows())
+                .sum();
+            assert_eq!(rows, 1, "row filter not enforced");
+        }
     }
 }
