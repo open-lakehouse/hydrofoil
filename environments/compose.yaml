@@ -1,0 +1,15 @@
+name: open-lakehouse
+
+include:
+  - path: ./services/envoy.yaml
+    project_directory: .
+  - path: ./services/seaweedfs.yaml
+    project_directory: .
+  - path: ./services/postgres.yaml
+    project_directory: .
+  - path: ./services/unity-catalog.yaml
+    project_directory: .
+  - path: ./services/mlflow.yaml
+    project_directory: .
+  # - path: ./services/notebooks.yaml
+  #   project_directory: .

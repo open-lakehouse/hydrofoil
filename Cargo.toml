@@ -19,6 +19,7 @@ cedar-local-agent = "3.0.0"
 cedar-policy = { version = "4.8.2", features = ["protobufs"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
+dashmap = "6.0.1"
 datafusion = "53.1"
 datafusion-common = "53.1"
 datafusion-expr = "53.1"
@@ -51,6 +52,8 @@ unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unityca
     "rest-client",
     "axum",
 ] }
+unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
+unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
 deltalake-core = { version = "0.32.3", features = ["datafusion", "cloud"] }
 
 [workspace.metadata.typos]

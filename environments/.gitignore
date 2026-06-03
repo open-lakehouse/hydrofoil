@@ -1,0 +1,4 @@
+# Runtime data volumes for the compose stack
+.data/
+
+docker/unity-catalog/server-live.properties

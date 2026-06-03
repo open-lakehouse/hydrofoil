@@ -7,10 +7,12 @@ use std::{
 use arrow::array::RecordBatch;
 use bytes::Bytes;
 use datafusion::{
-    catalog::{CatalogProvider as _, MemoryCatalogProvider, Session},
+    catalog::{
+        AsyncCatalogProviderList as _, CatalogProvider as _, MemoryCatalogProvider, Session,
+    },
     common::{DFSchema, exec_err},
     config::{ConfigOptions, TableOptions},
-    datasource::provider_as_source,
+    datasource::{TableProvider, provider_as_source},
     error::Result,
     execution::{
         SessionState, SessionStateBuilder, TaskContext, context::ExecutionProps,
@@ -46,8 +48,11 @@ use tracing::{error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
+use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
+use unitycatalog_object_store::UnityObjectStoreFactory;
+
 use crate::{
-    catalog::{DeltaTableFactory, LakehouseSchemaProvider},
+    catalog::{DeltaTableFactory, LakehouseSchemaProvider, LakehouseTableProviderBuilder},
     policy::Policy,
 };
 
@@ -65,6 +70,9 @@ pub struct LakehouseCtx {
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
     principal: EntityUid,
+    /// Optional Unity Catalog resolver used to back catalog/schema/table
+    /// resolution with a live Unity Catalog instance during planning.
+    unity: Option<Arc<UnityCatalogProviderList>>,
 }
 
 impl LakehouseCtx {
@@ -73,8 +81,17 @@ impl LakehouseCtx {
             inner,
             policy,
             principal,
+            unity: None,
         }
     }
+
+    /// Attach a Unity Catalog resolver so qualified `catalog.schema.table`
+    /// references resolve against a live Unity Catalog instance.
+    pub fn with_unity(mut self, unity: Arc<UnityCatalogProviderList>) -> Self {
+        self.unity = Some(unity);
+        self
+    }
+
     pub fn ctx(&self) -> &SessionContext {
         &self.inner
     }
@@ -84,6 +101,7 @@ impl LakehouseCtx {
             inner: self.inner.state(),
             policy: self.policy.clone(),
             principal: self.principal.clone(),
+            unity: self.unity.clone(),
         }
     }
 
@@ -111,6 +129,9 @@ pub struct LakehouseSession {
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
     principal: EntityUid,
+    /// Optional Unity Catalog resolver used to back catalog/schema/table
+    /// resolution during planning.
+    unity: Option<Arc<UnityCatalogProviderList>>,
 }
 
 impl LakehouseSession {
@@ -118,7 +139,29 @@ impl LakehouseSession {
         &self,
         query: impl AsRef<str> + Send + 'static,
     ) -> Result<LogicalPlan> {
-        self.inner.create_logical_plan(query.as_ref()).await
+        let query = query.as_ref();
+        let Some(unity) = self.unity.as_ref() else {
+            return self.inner.create_logical_plan(query).await;
+        };
+
+        // Resolve any Unity Catalog references in the query once, before
+        // planning. UC catalogs are overlaid onto the live catalog list (which
+        // keeps the local `hydrofoil.default` catalog); unknown references fall
+        // through to existing catalogs.
+        let dialect = self.inner.config().options().sql_parser.dialect.clone();
+        let statement = self.inner.sql_to_statement(query, &dialect)?;
+        let references = self.inner.resolve_table_references(&statement)?;
+        let resolved = unity
+            .resolve(&references, self.inner.config())
+            .await?;
+
+        let state = self.inner.clone();
+        for name in resolved.catalog_names() {
+            if let Some(catalog) = resolved.catalog(&name) {
+                state.catalog_list().register_catalog(name, catalog);
+            }
+        }
+        state.statement_to_plan(statement).await
     }
 }
 
@@ -272,13 +315,35 @@ impl LakehouseTaskContext {
         Ok(snapshot.into())
     }
 
+    /// Build a Delta [`TableProvider`] for the table rooted at `location`.
+    ///
+    /// Resolves the log store and snapshot from the current task context and
+    /// returns a [`DeltaScanNext`] provider. The object store backing
+    /// `location` must already be registered on the runtime (e.g. via the
+    /// Unity Catalog routing store) so reads succeed at scan time.
+    #[instrument(skip(self), level = "info")]
+    pub async fn delta_provider_for(
+        &self,
+        location: &Url,
+        version: Option<Version>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let log_store = self.delta_logstore_for(location)?;
+        let snapshot = self.delta_snapshot_for(location, version).await?;
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .await?;
+
+        Ok(provider)
+    }
+
     #[instrument(skip(self), level = "info")]
     pub async fn scan_delta_table(
         &self,
         location: &Url,
         version: Option<Version>,
     ) -> Result<LogicalPlan> {
-        let log_store = self.delta_logstore_for(location)?;
         let snapshot = self.delta_snapshot_for(location, version).await?;
 
         let table_name = snapshot
@@ -287,10 +352,7 @@ impl LakehouseTaskContext {
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("__delta__{}", snapshot.metadata().id()));
 
-        let provider = DeltaScanNext::builder()
-            .with_snapshot(snapshot)
-            .with_log_store(log_store)
-            .await?;
+        let provider = self.delta_provider_for(location, version).await?;
 
         LogicalPlanBuilder::scan(table_name, provider_as_source(provider), None)?.build()
     }
@@ -362,6 +424,21 @@ pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionCont
     ctx.register_catalog("hydrofoil", Arc::new(catalog));
 
     Ok(ctx)
+}
+
+/// Build a Unity Catalog resolver for `ctx`, backed by `factory`.
+///
+/// The resolver looks tables up in Unity Catalog, vends credentials, and
+/// registers per-table object stores on `ctx`'s runtime. Delta provider
+/// construction is delegated to a [`LakehouseTableProviderBuilder`] over the
+/// session's task context.
+pub fn build_unity_resolver(
+    ctx: &SessionContext,
+    factory: Arc<UnityObjectStoreFactory>,
+) -> Arc<UnityCatalogProviderList> {
+    let runtime = ctx.runtime_env();
+    let builder = LakehouseTableProviderBuilder::new(ctx.task_ctx());
+    Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 
 fn update_session(session: &dyn Session) -> Result<()> {

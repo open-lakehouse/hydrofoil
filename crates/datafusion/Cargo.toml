@@ -7,6 +7,22 @@ rust-version.workspace = true
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
 datafusion = { workspace = true }
+deltalake-core = { workspace = true }
+delta_kernel = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
 sqlparser = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
+
+unitycatalog-client = { workspace = true }
+unitycatalog-common = { workspace = true }
+unitycatalog-object-store = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

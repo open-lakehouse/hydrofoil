@@ -1,0 +1,24 @@
+# Postgres backend shared by Unity Catalog (db: unitycatalog) and MLflow (db: mlflow).
+# Named `db` so service files referencing db:5432 (e.g. mlflow.yaml) resolve.
+# The `unitycatalog` and `mlflow` databases are created once, on a fresh volume, by the
+# init script mounted into /docker-entrypoint-initdb.d.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    profiles: [svc, full]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./.data/db:/var/lib/postgresql/data
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `-d unitycatalog` makes "healthy" imply the init script already created the DBs.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d unitycatalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

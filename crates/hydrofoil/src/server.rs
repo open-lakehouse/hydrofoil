@@ -29,7 +29,9 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
-use crate::session::{LakehouseCtx, create_session};
+use unitycatalog_object_store::UnityObjectStoreFactory;
+
+use crate::session::{LakehouseCtx, build_unity_resolver, create_session};
 use crate::stream::FlightDataReceiverStreamBuilder;
 use crate::{execution::CpuRuntime, policy::Policy};
 use crate::{
@@ -51,6 +53,9 @@ pub struct FlightSqlServiceImpl {
 
     executor: CpuRuntime,
     policy: Arc<dyn Policy>,
+    /// Optional Unity Catalog object store factory. When set, sessions resolve
+    /// `catalog.schema.table` references against a live Unity Catalog instance.
+    unity_factory: Option<Arc<UnityObjectStoreFactory>>,
 }
 
 impl FlightSqlServiceImpl {
@@ -60,6 +65,7 @@ impl FlightSqlServiceImpl {
             statements: Arc::new(DashMap::new()),
             executor: CpuRuntime::try_new()?,
             policy: Arc::new(StaticPolicy::new(Decision::Allow)),
+            unity_factory: None,
         })
     }
 
@@ -73,19 +79,30 @@ impl FlightSqlServiceImpl {
         self
     }
 
+    /// Attach a Unity Catalog object store factory so that sessions resolve
+    /// qualified table references against Unity Catalog with vended credentials.
+    pub fn with_unity(mut self, factory: Arc<UnityObjectStoreFactory>) -> Self {
+        self.unity_factory = Some(factory);
+        self
+    }
+
     #[allow(clippy::result_large_err)]
     fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
         if let Some(ctx) = self.contexts.get("key") {
             Ok(ctx.value().clone())
         } else {
             let session_id = Uuid::new_v4();
-            let ctx =
+            let session =
                 create_session(session_id).map_err(|e| status!("Failed to create session", e))?;
-            let ctx = Arc::new(LakehouseCtx::new(
-                ctx,
+            let mut ctx = LakehouseCtx::new(
+                session.clone(),
                 self.policy.clone(),
                 "User:default".parse().unwrap(),
-            ));
+            );
+            if let Some(factory) = self.unity_factory.clone() {
+                ctx = ctx.with_unity(build_unity_resolver(&session, factory));
+            }
+            let ctx = Arc::new(ctx);
             self.contexts.insert("key".to_string(), ctx.clone());
             Ok(ctx)
         }
