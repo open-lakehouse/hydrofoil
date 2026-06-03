@@ -18,6 +18,7 @@ use arrow_flight::{
 };
 use bytes::Bytes;
 use cedar_policy::Decision;
+use datafusion_open_lineage::OpenLineageClient;
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
@@ -56,6 +57,9 @@ pub struct FlightSqlServiceImpl {
     /// Optional Unity Catalog object store factory. When set, sessions resolve
     /// `catalog.schema.table` references against a live Unity Catalog instance.
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+    /// Optional OpenLineage client. When set, sessions emit lineage events
+    /// around query planning.
+    lineage: Option<OpenLineageClient>,
 }
 
 impl FlightSqlServiceImpl {
@@ -66,7 +70,15 @@ impl FlightSqlServiceImpl {
             executor: CpuRuntime::try_new()?,
             policy: Arc::new(StaticPolicy::new(Decision::Allow)),
             unity_factory: None,
+            lineage: None,
         })
+    }
+
+    /// Attach an OpenLineage client so sessions emit lineage events around
+    /// query planning.
+    pub fn with_lineage(mut self, lineage: OpenLineageClient) -> Self {
+        self.lineage = Some(lineage);
+        self
     }
 
     /// Set the policy for the server.
@@ -92,8 +104,8 @@ impl FlightSqlServiceImpl {
             Ok(ctx.value().clone())
         } else {
             let session_id = Uuid::new_v4();
-            let session =
-                create_session(session_id).map_err(|e| status!("Failed to create session", e))?;
+            let session = create_session(session_id, self.lineage.clone())
+                .map_err(|e| status!("Failed to create session", e))?;
             let mut ctx = LakehouseCtx::new(
                 session.clone(),
                 self.policy.clone(),

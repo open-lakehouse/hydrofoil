@@ -5,6 +5,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+datafusion-open-lineage = { path = "../open-lineage" }
 deltalake-datafusion = { path = "../datafusion" }
 hydrofoil-common = { path = "../common" }
 hydrofoil-policy = { path = "../policy" }
