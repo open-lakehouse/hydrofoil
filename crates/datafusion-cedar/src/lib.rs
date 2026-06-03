@@ -21,9 +21,17 @@ mod policy;
 mod principal;
 mod visitor;
 
+#[cfg(feature = "governance")]
+pub mod govern;
+#[cfg(feature = "governance")]
+mod translate;
+
 pub use cedar::CedarPolicy;
 pub use policy::{Policy, StaticPolicy};
 pub use principal::PrincipalIdentity;
+
+#[cfg(feature = "governance")]
+pub use govern::{TablePolicy, govern_plan};
 
 // Re-export the cedar identity/decision types through this crate so consumers
 // have a single import surface (they originate in `cedar-oci`).

@@ -60,6 +60,30 @@ use crate::{
     policy::Policy,
 };
 
+/// Inject fine-grained governance (row filters + column masks) into a plan
+/// before optimization.
+///
+/// With the `governance` feature this delegates to
+/// [`datafusion_cedar::govern_plan`]; without it (the default), it is a no-op
+/// that returns the plan unchanged — the coarse access gate still applies.
+#[cfg(feature = "governance")]
+async fn govern_plan(
+    plan: &LogicalPlan,
+    policy: &dyn Policy,
+    principal: &PrincipalIdentity,
+) -> Result<LogicalPlan> {
+    datafusion_cedar::govern_plan(plan, policy, principal).await
+}
+
+#[cfg(not(feature = "governance"))]
+async fn govern_plan(
+    plan: &LogicalPlan,
+    _policy: &dyn Policy,
+    _principal: &PrincipalIdentity,
+) -> Result<LogicalPlan> {
+    Ok(plan.clone())
+}
+
 /// Context for executing queries in a Lakehouse.
 ///
 /// This context is used to execute queries in a Lakehouse. It contains the
@@ -113,16 +137,18 @@ impl LakehouseCtx {
         // This path (ingest / delta-connect) executes on the inner
         // `SessionContext`, which does NOT route through
         // `LakehouseSession::create_physical_plan`, so it must enforce the gate
-        // itself. Gate on the optimized plan to match the statement path's
-        // contract (projections/filters pushed down before the decision).
-        let optimized_plan = self.inner.state().optimize(&plan)?;
+        // itself. Inject fine-grained governance (row filters + column masks)
+        // before optimization, then gate on the optimized plan to match the
+        // statement path's contract (projections/filters pushed down first).
+        let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal).await?;
+        let optimized_plan = self.inner.state().optimize(&governed)?;
         if self.policy.is_allowed(&optimized_plan, &self.principal).await? == Decision::Deny {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
                 self.principal.uid
             );
         }
-        self.inner.execute_logical_plan(plan).await
+        self.inner.execute_logical_plan(governed).await
     }
 }
 
@@ -193,11 +219,13 @@ impl Session for LakehouseSession {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // First optimize the logical plan to make sure all projections
-        // and filters are pushed down to the table scan level. This
-        // allows us to enforce policies based on the actual data
-        // being accessed.
-        let optimized_plan = self.inner.optimize(logical_plan)?;
+        // Inject fine-grained governance (row filters + column masks) before
+        // optimization, so the injected predicate pushes into the scan and
+        // masked-away columns are pruned. Then optimize, so the coarse gate
+        // sees projections/filters pushed down to the table scan level and can
+        // authorize based on the actual data being accessed.
+        let governed = govern_plan(logical_plan, self.policy.as_ref(), &self.principal).await?;
+        let optimized_plan = self.inner.optimize(&governed)?;
         if self
             .policy
             .is_allowed(&optimized_plan, &self.principal)

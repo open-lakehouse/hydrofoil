@@ -12,6 +12,17 @@ use crate::policy::Policy;
 use crate::principal::PrincipalIdentity;
 use crate::visitor::authorize_plan;
 
+#[cfg(feature = "governance")]
+use {
+    crate::govern::TablePolicy,
+    crate::translate::{CedarResidualTranslator, ResidualTranslator},
+    cedar_policy::{Context, EntityTypeName, RequestBuilder},
+    datafusion::common::DFSchema,
+    datafusion::logical_expr::lit,
+    datafusion::sql::TableReference,
+    std::str::FromStr as _,
+};
+
 /// A [`Policy`] backed by a Cedar [`Authorizer`].
 ///
 /// Generic over any policy-set and entity provider (e.g. `cedar-oci`'s
@@ -105,5 +116,95 @@ where
             }
         }
         Ok(Decision::Allow)
+    }
+
+    #[cfg(feature = "governance")]
+    async fn table_policy(
+        &self,
+        table: &TableReference,
+        _schema: &DFSchema,
+        principal: &PrincipalIdentity,
+    ) -> Result<TablePolicy> {
+        use cedar_oci::{EntityId, EntityUid};
+
+        // Partial request: concrete principal + read_table action, but an
+        // *unknown* resource of type `Table`. Policies that gate on
+        // `resource.<attr>` come back as residuals over the row.
+        let read_action = EntityUid::from_type_name_and_id(
+            "Action".parse().unwrap(),
+            EntityId::new("read_table"),
+        );
+        let table_type = EntityTypeName::from_str("Table")
+            .map_err(|e| datafusion::error::DataFusionError::Plan(e.to_string()))?;
+
+        let request = RequestBuilder::default()
+            .principal(principal.uid.clone())
+            .action(read_action)
+            .unknown_resource_with_type(table_type)
+            .context(Context::empty())
+            .build();
+
+        let principal_entities = Entities::from_entities([principal.to_entity()], None)
+            .unwrap_or_else(|_| Entities::empty());
+
+        let response = match self
+            .authorizer
+            .is_authorized_partial(&request, &principal_entities)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Fail closed: if partial evaluation fails we cannot prove what
+                // is safe, so deny all rows for this table.
+                tracing::warn!(error = %e, table = %table, "partial authorization failed; masking all rows (fail-closed)");
+                return Ok(TablePolicy {
+                    row_filters: vec![lit(false)],
+                    column_masks: Default::default(),
+                });
+            }
+        };
+
+        let translator = CedarResidualTranslator;
+        let mut tp = TablePolicy::default();
+
+        for residual in response.nontrivial_residuals() {
+            let filter_type = residual.annotation("filter_type").unwrap_or("row_filter");
+            // `Ok(Some(e))` -> predicate; `Ok(None)` -> trivially true (no
+            // constraint); `Err` -> untranslatable, fail closed.
+            let translated = translator.to_predicate(&residual);
+            match filter_type {
+                "row_filter" => match translated {
+                    Ok(Some(pred)) => tp.row_filters.push(pred),
+                    Ok(None) => {} // trivially permitted; no filter needed
+                    Err(e) => {
+                        tracing::warn!(error = %e, table = %table, "untranslatable row filter; denying all rows (fail-closed)");
+                        tp.row_filters.push(lit(false));
+                    }
+                },
+                "deny_override" => match translated {
+                    // Keep rows where the deny condition does NOT hold.
+                    Ok(Some(pred)) => tp.row_filters.push(!pred),
+                    Ok(None) => {} // deny condition trivially false; nothing denied
+                    Err(e) => {
+                        tracing::warn!(error = %e, table = %table, "untranslatable deny_override; denying all rows (fail-closed)");
+                        tp.row_filters.push(lit(false));
+                    }
+                },
+                "column_mask" => {
+                    // A surviving residual means the mask's exemption condition
+                    // is not fully discharged -> mask the column.
+                    if let Some(column) = residual.annotation("column") {
+                        tp.column_masks.insert(column.to_string(), lit("***"));
+                    } else {
+                        tracing::warn!(table = %table, "column_mask residual without @column annotation; ignoring (resolver should expand tags to concrete columns)");
+                    }
+                }
+                other => {
+                    tracing::warn!(filter_type = other, "unknown filter_type annotation; ignoring");
+                }
+            }
+        }
+
+        Ok(tp)
     }
 }

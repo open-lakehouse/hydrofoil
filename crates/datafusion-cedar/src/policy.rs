@@ -5,6 +5,11 @@ use cedar_oci::Decision;
 
 use crate::principal::PrincipalIdentity;
 
+#[cfg(feature = "governance")]
+use datafusion::common::DFSchema;
+#[cfg(feature = "governance")]
+use datafusion::sql::TableReference;
+
 /// Access-control policy applied during query planning.
 ///
 /// Layer 1 of the policy stack: a coarse allow/deny over the tables and actions
@@ -12,6 +17,10 @@ use crate::principal::PrincipalIdentity;
 /// whether `principal` may execute it. The principal is passed as a
 /// [`PrincipalIdentity`] (uid + attributes) so attribute-based policies
 /// (`principal.role == ...`) can be evaluated.
+///
+/// With the `governance` feature, the trait also exposes [`Policy::table_policy`]
+/// (Layer 2): the per-table row filters and column masks that apply to a
+/// principal's access.
 #[async_trait::async_trait]
 pub trait Policy: std::fmt::Debug + Send + Sync {
     async fn is_allowed(
@@ -19,6 +28,21 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
         logical_plan: &LogicalPlan,
         principal: &PrincipalIdentity,
     ) -> Result<Decision>;
+
+    /// Resolve the fine-grained enforcement (row filters + column masks) that
+    /// apply when `principal` reads `table` with schema `schema`.
+    ///
+    /// Default: no fine-grained enforcement. The Cedar implementation derives
+    /// filters and masks from policy residuals; see `crate::govern`.
+    #[cfg(feature = "governance")]
+    async fn table_policy(
+        &self,
+        _table: &TableReference,
+        _schema: &DFSchema,
+        _principal: &PrincipalIdentity,
+    ) -> Result<crate::govern::TablePolicy> {
+        Ok(crate::govern::TablePolicy::default())
+    }
 }
 
 /// A [`Policy`] that returns the same decision for every query.
