@@ -42,6 +42,11 @@ const OUTPUT_STATS_FACET: &str = "1-0-2/OutputStatisticsOutputDatasetFacet.json"
 const INPUT_STATS_FACET: &str = "1-0-0/InputStatisticsInputDatasetFacet.json";
 
 /// Shared completion state across the partitions of one query run.
+///
+/// The `Mutex` fields are locked with `.unwrap()`: the only way to poison one
+/// is to panic while holding it, which the short critical sections here never
+/// do (they touch plain data, never call back into user code). Recovering from
+/// poisoning is therefore intentionally not handled.
 struct RunState {
     client: OpenLineageClient,
     /// COMPLETE event template (cloned and mutated into FAIL on error).

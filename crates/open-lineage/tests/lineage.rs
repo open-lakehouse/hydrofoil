@@ -12,7 +12,8 @@ use datafusion_open_lineage::event::{RunEvent, RunEventType};
 use datafusion_open_lineage::extract::extract;
 use datafusion_open_lineage::transport::{Transport, TransportError};
 use datafusion_open_lineage::{
-    instrument_session_state_simple, LineageContextProvider, OpenLineageClient,
+    instrument_session_state, instrument_session_state_simple, LineageContextProvider,
+    OpenLineageClient,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -502,4 +503,205 @@ async fn context_run_id_flows_to_event() {
     // Provider trait is object-safe and usable.
     let provider: Arc<dyn LineageContextProvider> = Arc::new(FixedContextProvider(cx));
     let _ = format!("{provider:?}");
+}
+
+// ---------------------------------------------------------------------------
+// 5. Extraction of DELETE / UPDATE / CTAS write operations
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn extract_delete_has_output() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t (a INT) AS VALUES (1), (2)")
+        .await
+        .unwrap();
+    // DELETE is a DML write op -> the target table is an output dataset.
+    let plan = ctx
+        .state()
+        .create_logical_plan("DELETE FROM t WHERE a = 1")
+        .await
+        .unwrap();
+    let lineage = extract(&plan, &config());
+    assert_eq!(lineage.outputs.len(), 1, "delete target is an output");
+    assert!(lineage.outputs[0].name.name.contains("t"));
+}
+
+#[tokio::test]
+async fn extract_ctas_has_output() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE src (a INT) AS VALUES (1), (2)")
+        .await
+        .unwrap();
+    // CREATE TABLE AS SELECT -> the new table is an output, src an input.
+    let plan = ctx
+        .state()
+        .create_logical_plan("CREATE TABLE dst AS SELECT a FROM src")
+        .await
+        .unwrap();
+    let lineage = extract(&plan, &config());
+    assert_eq!(lineage.outputs.len(), 1, "CTAS target is an output");
+    assert!(!lineage.inputs.is_empty(), "src is an input");
+}
+
+// ---------------------------------------------------------------------------
+// 6. Transformation (non-identity) column lineage
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn extract_transformation_column_lineage() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t (a INT, b INT) AS VALUES (1, 2)")
+        .await
+        .unwrap();
+    // `a + b AS c` derives c from BOTH a and b, as a TRANSFORMATION (not IDENTITY).
+    let plan = ctx
+        .state()
+        .create_logical_plan("SELECT a + b AS c FROM t")
+        .await
+        .unwrap();
+    let optimized = ctx.state().optimize(&plan).unwrap();
+    let lineage = extract(&optimized, &config());
+
+    let c = lineage
+        .column_lineage
+        .get("c")
+        .expect("column lineage for c");
+    let mut sources: Vec<&str> = c.iter().filter_map(|f| f.field.as_deref()).collect();
+    sources.sort();
+    assert_eq!(sources, vec!["a", "b"], "c derives from a and b");
+    // The transformation type is DIRECT/TRANSFORMATION (not IDENTITY).
+    assert!(
+        c.iter().all(|f| f
+            .transformations
+            .iter()
+            .any(|t| t.subtype.as_deref() == Some("TRANSFORMATION"))),
+        "computed column must be a TRANSFORMATION"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Parent-run facet and SQL facet flow from the context into the event
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn parent_run_facet_flows_to_start_event() {
+    use datafusion_open_lineage::facets::{BaseFacet, ParentJob, ParentRun, ParentRunFacet};
+
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+    let cfg = config();
+    let cx = LineageContext {
+        parent_run: Some(ParentRunFacet {
+            base: BaseFacet::new(&cfg.producer, "1-0-0/ParentRunFacet.json"),
+            run: ParentRun {
+                run_id: "parent-run-1".to_string(),
+            },
+            job: ParentJob {
+                namespace: "airflow".to_string(),
+                name: "dag.task".to_string(),
+            },
+            root: None,
+        }),
+        sql: Some("SELECT a FROM t".to_string()),
+        ..Default::default()
+    };
+
+    let base = SessionContext::new();
+    let state = instrument_session_state(
+        base.state(),
+        client,
+        Arc::new(FixedContextProvider(cx)),
+        cfg,
+    );
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE t (a INT) AS VALUES (1)")
+        .await
+        .unwrap();
+    let _ = instrumented
+        .sql("SELECT a FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let start = events
+        .iter()
+        .find(|e| e.event_type == RunEventType::Start)
+        .expect("a START event");
+    let json = serde_json::to_value(start).unwrap();
+    // Parent facet populated from the context.
+    assert_eq!(
+        json["run"]["facets"]["parent"]["run"]["runId"],
+        "parent-run-1",
+        "parent run facet present: {json}"
+    );
+    // SQL job facet populated from the context.
+    assert_eq!(
+        json["job"]["facets"]["sql"]["query"], "SELECT a FROM t",
+        "sql facet present: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Stream cancellation (Drop before exhaustion) emits FAIL
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn dropped_stream_emits_fail() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE t (a INT) AS VALUES (1), (2), (3)")
+        .await
+        .unwrap();
+
+    let df = instrumented.sql("SELECT a FROM t").await.unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    // Find the run id for this SELECT (its START).
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let run_id = {
+        let events = transport.events.lock().unwrap();
+        events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == RunEventType::Start)
+            .expect("a START for the select")
+            .run
+            .run_id
+    };
+
+    // Start executing every partition, then drop the streams without draining.
+    let task_ctx = instrumented.task_ctx();
+    let partitions = plan.output_partitioning().partition_count();
+    let mut streams = Vec::new();
+    for p in 0..partitions {
+        streams.push(plan.execute(p, task_ctx.clone()).unwrap());
+    }
+    drop(streams);
+    drop(plan);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let for_run: Vec<RunEventType> = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id)
+        .map(|e| e.event_type)
+        .collect();
+    assert!(
+        for_run.contains(&RunEventType::Fail),
+        "an abandoned (dropped) stream must report FAIL: {for_run:?}"
+    );
+    assert!(
+        !for_run.contains(&RunEventType::Complete),
+        "a dropped stream must not report COMPLETE: {for_run:?}"
+    );
 }

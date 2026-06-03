@@ -264,6 +264,93 @@ mod tests {
         );
     }
 
+    /// A policy keyed per table, plus an option to error on resolution.
+    #[derive(Debug)]
+    struct PerTablePolicy {
+        by_table: HashMap<String, TablePolicy>,
+        err: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Policy for PerTablePolicy {
+        async fn is_allowed(
+            &self,
+            _plan: &LogicalPlan,
+            _principal: &PrincipalIdentity,
+        ) -> DFResult<Decision> {
+            Ok(Decision::Allow)
+        }
+        async fn table_policy(
+            &self,
+            table: &TableReference,
+            _schema: &DFSchema,
+            _principal: &PrincipalIdentity,
+        ) -> DFResult<TablePolicy> {
+            if self.err {
+                return Err(datafusion::error::DataFusionError::Plan("policy boom".into()));
+            }
+            Ok(self
+                .by_table
+                .get(table.table())
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    /// In a JOIN, each scanned table gets its own filter/mask from its own
+    /// policy — the rewriter keys by `scan.table_name`.
+    #[tokio::test]
+    async fn multi_table_join_governs_each_scan_independently() {
+        use std::sync::Arc;
+        use datafusion::datasource::MemTable;
+        use datafusion::prelude::SessionContext;
+
+        let ctx = SessionContext::new();
+        let s = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("region", DataType::Utf8, true),
+        ]));
+        for name in ["a", "b"] {
+            ctx.register_table(name, Arc::new(MemTable::try_new(s.clone(), vec![vec![]]).unwrap()))
+                .unwrap();
+        }
+        let plan = ctx
+            .sql("SELECT a.id FROM a JOIN b ON a.id = b.id")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+
+        // Only table `a` gets a row filter; `b` is ungoverned.
+        let mut by_table = HashMap::new();
+        by_table.insert(
+            "a".to_string(),
+            TablePolicy {
+                row_filters: vec![col("region").eq(lit("eu"))],
+                column_masks: Default::default(),
+            },
+        );
+        let policy = PerTablePolicy { by_table, err: false };
+
+        let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
+        let rendered = format!("{governed:?}");
+        // Exactly one Filter was injected (for `a`), not two — `b` is ungoverned.
+        assert_eq!(rendered.matches("Filter(Filter").count(), 1, "plan: {rendered}");
+        // The injected predicate filters on `a.region`.
+        assert!(rendered.contains(r#"name: "region""#));
+    }
+
+    /// A policy-resolution error propagates out of `govern_plan` (fail-closed:
+    /// the query fails rather than running ungoverned).
+    #[tokio::test]
+    async fn table_policy_error_propagates() {
+        let policy = PerTablePolicy {
+            by_table: HashMap::new(),
+            err: true,
+        };
+        let result = govern_plan(&scan(), &policy, &principal()).await;
+        assert!(result.is_err(), "policy resolution error must propagate");
+    }
+
     // --- Optimizer-interaction tests (Phase 3): run the real DataFusion
     // optimizer over a governed plan and assert masks/filters behave. ---
 

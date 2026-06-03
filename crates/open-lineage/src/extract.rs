@@ -133,13 +133,22 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 }
                 WriteOp::Truncate => {}
             },
-            LogicalPlan::Ddl(ddl) => {
-                if let DdlStatement::CreateExternalTable(cmd) = ddl {
+            LogicalPlan::Ddl(ddl) => match ddl {
+                DdlStatement::CreateExternalTable(cmd) => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&cmd.name),
                     });
                 }
-            }
+                // `CREATE TABLE ... AS SELECT` lowers to CreateMemoryTable; the
+                // new table is the output dataset (the SELECT's scans are its
+                // inputs, picked up by the TableScan arm).
+                DdlStatement::CreateMemoryTable(cmd) => {
+                    self.outputs.push(OutputTable {
+                        name: self.dataset_for(&cmd.name),
+                    });
+                }
+                _ => {}
+            },
             // Nodes we don't yet derive lineage from. Warn so coverage gaps are
             // visible rather than silently dropped.
             other => {

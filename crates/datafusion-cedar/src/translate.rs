@@ -86,6 +86,13 @@ fn translate_expr(node: &Value) -> Result<Expr> {
             "bare Cedar variable is not translatable to a predicate"
         ));
     }
+    // Leaf: a partial-evaluation unknown (the symbolic resource). Only meaningful
+    // as the base of a `.` access (handled in `translate_get_attr`).
+    if obj.contains_key("unknown") {
+        return Err(plan_datafusion_err!(
+            "bare Cedar unknown is not translatable to a predicate"
+        ));
+    }
 
     // Single-key operator nodes.
     let (op, args) = obj
@@ -101,7 +108,7 @@ fn translate_expr(node: &Value) -> Result<Expr> {
         "<=" => binary(args, |l, r| l.lt_eq(r)),
         ">" => binary(args, |l, r| l.gt(r)),
         ">=" => binary(args, |l, r| l.gt_eq(r)),
-        "&&" => binary(args, |l, r| l.and(r)),
+        "&&" => translate_and(args),
         "||" => binary(args, |l, r| l.or(r)),
         "!" => {
             let arg = args
@@ -116,7 +123,12 @@ fn translate_expr(node: &Value) -> Result<Expr> {
     }
 }
 
-/// `{ "left": <expr>, "attr": "<name>" }` over `resource` -> `col(name)`.
+/// `{ "left": <expr>, "attr": "<name>" }` over the (symbolic) resource ->
+/// `col(name)`.
+///
+/// Partial evaluation leaves the resource as an unknown, so its base appears
+/// either as the source `{"Var": "resource"}` form or, after substitution, as
+/// `{"unknown": [{"Value": "resource"}]}`. Both denote the per-row resource.
 fn translate_get_attr(args: &Value) -> Result<Expr> {
     let left = args
         .get("left")
@@ -126,13 +138,7 @@ fn translate_get_attr(args: &Value) -> Result<Expr> {
         .and_then(Value::as_str)
         .ok_or_else(|| plan_datafusion_err!("`.` missing attr"))?;
 
-    let base_is_resource = left
-        .as_object()
-        .and_then(|o| o.get("Var"))
-        .and_then(Value::as_str)
-        == Some("resource");
-
-    if base_is_resource {
+    if base_is_resource(left) {
         Ok(col(attr))
     } else {
         // principal.* should have been folded out by partial evaluation; any
@@ -141,6 +147,51 @@ fn translate_get_attr(args: &Value) -> Result<Expr> {
             "residual references a non-resource attribute '{attr}'; not a column"
         ))
     }
+}
+
+/// Whether an EST node denotes the (symbolic) `resource`, in either the source
+/// `{"Var": "resource"}` form or the post-substitution
+/// `{"unknown": [{"Value": "resource"}]}` form.
+fn base_is_resource(node: &Value) -> bool {
+    let Some(obj) = node.as_object() else {
+        return false;
+    };
+    if obj.get("Var").and_then(Value::as_str) == Some("resource") {
+        return true;
+    }
+    obj.get("unknown")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(|v| v.get("Value"))
+        .and_then(Value::as_str)
+        == Some("resource")
+}
+
+/// Translate `&&`, folding away the `true` guard operands Cedar inserts in
+/// partial-evaluation residuals (so `true && (true && x)` becomes `x`).
+fn translate_and(args: &Value) -> Result<Expr> {
+    let left = args
+        .get("left")
+        .ok_or_else(|| plan_datafusion_err!("`&&` missing left"))?;
+    let right = args
+        .get("right")
+        .ok_or_else(|| plan_datafusion_err!("`&&` missing right"))?;
+    let l = fold_true(left)?;
+    let r = fold_true(right)?;
+    Ok(match (l, r) {
+        (None, None) => lit(true),
+        (Some(e), None) | (None, Some(e)) => e,
+        (Some(l), Some(r)) => l.and(r),
+    })
+}
+
+/// Translate a node, returning `None` if it is the literal `true` (an
+/// always-satisfied guard that contributes nothing to the predicate).
+fn fold_true(node: &Value) -> Result<Option<Expr>> {
+    if node.as_object().and_then(|o| o.get("Value")) == Some(&Value::Bool(true)) {
+        return Ok(None);
+    }
+    Ok(Some(translate_expr(node)?))
 }
 
 /// `{ "left": <expr>, "right": <expr> }` binary op.
@@ -197,7 +248,15 @@ fn translate_value(value: &Value) -> Result<Expr> {
         Value::String(s) => Ok(lit(s.clone())),
         Value::Bool(b) => Ok(lit(*b)),
         Value::Number(n) if n.is_i64() => Ok(lit(n.as_i64().unwrap())),
-        Value::Number(n) if n.is_u64() => Ok(lit(n.as_u64().unwrap() as i64)),
+        // A `u64` above `i64::MAX` would wrap to a negative value and silently
+        // corrupt the predicate, so fail closed (the caller denies the row).
+        Value::Number(n) if n.is_u64() => {
+            let u = n.as_u64().unwrap();
+            let i = i64::try_from(u).map_err(|_| {
+                plan_datafusion_err!("Cedar integer literal {u} exceeds i64 range")
+            })?;
+            Ok(lit(i))
+        }
         _ => Err(plan_datafusion_err!(
             "unsupported Cedar literal in residual: {value}"
         )),
@@ -253,6 +312,85 @@ mod tests {
     #[test]
     fn rejects_unsupported_operator() {
         let node = json!({ "containsAll": { "left": { "Var": "resource" }, "right": { "Value": "x" } } });
+        assert!(translate_expr(&node).is_err());
+    }
+
+    // `resource.a == 1 || resource.b == 2`
+    #[test]
+    fn translates_disjunction() {
+        let node = json!({
+            "||": {
+                "left": { "==": { "left": { ".": { "left": { "Var": "resource" }, "attr": "a" } }, "right": { "Value": 1 } } },
+                "right": { "==": { "left": { ".": { "left": { "Var": "resource" }, "attr": "b" } }, "right": { "Value": 2 } } }
+            }
+        });
+        let expr = translate_expr(&node).unwrap();
+        assert_eq!(expr, col("a").eq(lit(1i64)).or(col("b").eq(lit(2i64))));
+    }
+
+    // `!(resource.a == 1)`
+    #[test]
+    fn translates_negation() {
+        let node = json!({
+            "!": { "arg": { "==": { "left": { ".": { "left": { "Var": "resource" }, "attr": "a" } }, "right": { "Value": 1 } } } }
+        });
+        let expr = translate_expr(&node).unwrap();
+        assert_eq!(expr, !col("a").eq(lit(1i64)));
+    }
+
+    // `resource.name like "a*c_"` -> SQL LIKE "a%c\_" (wildcard expands, `_` escaped).
+    #[test]
+    fn translates_like_with_wildcard_and_escape() {
+        let node = json!({
+            "like": {
+                "left": { ".": { "left": { "Var": "resource" }, "attr": "name" } },
+                "pattern": [ { "Literal": "a" }, "Wildcard", { "Literal": "c" }, { "Literal": "_" } ]
+            }
+        });
+        let expr = translate_expr(&node).unwrap();
+        assert_eq!(expr, col("name").like(lit("a%c\\_")));
+    }
+
+    // Cedar's partial-eval residual encodes the symbolic resource as
+    // `{"unknown": [{"Value": "resource"}]}`, wrapped in `true &&` guards.
+    #[test]
+    fn translates_unknown_resource_base_and_folds_true_guards() {
+        let node = json!({
+            "&&": {
+                "left": { "Value": true },
+                "right": {
+                    "==": {
+                        "left": { ".": { "left": { "unknown": [ { "Value": "resource" } ] }, "attr": "region" } },
+                        "right": { "Value": "eu" }
+                    }
+                }
+            }
+        });
+        let expr = translate_expr(&node).unwrap();
+        assert_eq!(expr, col("region").eq(lit("eu")));
+    }
+
+    // `unless { resource.a == 1 }` folds to `when { !(resource.a == 1) }`.
+    #[test]
+    fn unless_condition_is_negated() {
+        let policy = Policy::parse(
+            None,
+            r#"permit(principal, action, resource) unless { resource.a == 1 };"#,
+        )
+        .unwrap();
+        let expr = CedarResidualTranslator.to_predicate(&policy).unwrap().unwrap();
+        assert_eq!(expr, !col("a").eq(lit(1i64)));
+    }
+
+    // A `u64` literal beyond i64::MAX cannot be represented and must fail closed.
+    #[test]
+    fn rejects_u64_overflow_literal() {
+        let node = json!({
+            "==": {
+                "left": { ".": { "left": { "Var": "resource" }, "attr": "n" } },
+                "right": { "Value": u64::MAX }
+            }
+        });
         assert!(translate_expr(&node).is_err());
     }
 }

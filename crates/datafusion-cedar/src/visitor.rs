@@ -24,10 +24,13 @@ use crate::principal::PrincipalIdentity;
 pub(crate) enum PlanAction {
     /// Read `table`, accessing the listed columns.
     ReadTable(TableReference, Vec<String>),
-    /// Write (insert/delete) into `table`.
+    /// Write (insert/update/delete/truncate) into `table`.
     WriteTable(TableReference),
     /// Create `table`.
     CreateTable(TableReference),
+    /// A state-changing node we do not model. We cannot prove it is safe, so it
+    /// must be denied (fail-closed). Carries a short description for diagnostics.
+    DenyUnsupported(String),
 }
 
 pub(crate) struct AuthorizationVisitor {
@@ -53,18 +56,31 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
                 DdlStatement::CreateExternalTable(cmd) => {
                     self.actions.push(PlanAction::CreateTable(cmd.name.clone()));
                 }
-                DdlStatement::CreateCatalogSchema(_cmd) => {
-                    // Schema-level DDL is not yet modeled; see fail-closed note
-                    // in `authorize_plan` for unrecognized write/DDL nodes.
+                DdlStatement::CreateMemoryTable(cmd) => {
+                    self.actions.push(PlanAction::CreateTable(cmd.name.clone()));
                 }
-                _ => {}
+                // Any other (state-changing) DDL we do not model — schema/catalog
+                // create/drop, table drop, views, indexes, functions — is denied
+                // rather than silently allowed through.
+                other => {
+                    self.actions
+                        .push(PlanAction::DenyUnsupported(format!("DDL {}", other.name())));
+                }
             },
             LogicalPlan::Dml(dml) => match dml.op {
-                WriteOp::Insert(_) | WriteOp::Delete => {
+                // INSERT/UPDATE/DELETE/TRUNCATE all mutate the target table.
+                WriteOp::Insert(_)
+                | WriteOp::Update
+                | WriteOp::Delete
+                | WriteOp::Truncate => {
                     self.actions
                         .push(PlanAction::WriteTable(dml.table_name.clone()));
                 }
-                _ => {}
+                // CTAS produces a new table; treat as a create.
+                WriteOp::Ctas => {
+                    self.actions
+                        .push(PlanAction::CreateTable(dml.table_name.clone()));
+                }
             },
             _ => {}
         }
@@ -84,6 +100,14 @@ static READ_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
 static WRITE_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
     EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new("write_table"))
 });
+/// Action used for state-changing nodes we do not model. No policy is expected
+/// to permit it, so Cedar's default-deny rejects the query (fail-closed).
+static DENY_UNSUPPORTED_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
+    EntityUid::from_type_name_and_id(
+        "Action".parse().unwrap(),
+        EntityId::new("deny_unsupported"),
+    )
+});
 
 /// Build the `Table` resource uid for a table reference.
 fn table_resource(table_ref: &TableReference) -> EntityUid {
@@ -93,7 +117,11 @@ fn table_resource(table_ref: &TableReference) -> EntityUid {
 
 /// Build the request context carrying the table identity and accessed columns,
 /// so policies can condition on `context.catalog/schema/table/columns`.
-fn table_context(table_ref: &TableReference, columns: &[String]) -> Result<Context> {
+///
+/// Shared with Layer-2 governance (`cedar::table_policy`), which builds the same
+/// context (with an empty column set) for its partial-eval request so that
+/// row-filter policies can also condition on the table identity.
+pub(crate) fn table_context(table_ref: &TableReference, columns: &[String]) -> Result<Context> {
     let mut pairs: Vec<(String, RestrictedExpression)> = Vec::new();
     if let Some(catalog) = table_ref.catalog() {
         pairs.push((
@@ -144,6 +172,12 @@ pub(crate) fn authorize_plan(
             PlanAction::WriteTable(table_ref) => (WRITE_TABLE_ACTION.clone(), table_ref, vec![]),
             PlanAction::CreateTable(table_ref) => {
                 (CREATE_EXTERNAL_TABLE_ACTION.clone(), table_ref, vec![])
+            }
+            // Lower an unsupported node to a request no policy permits; Cedar's
+            // default-deny then rejects the query (fail-closed).
+            PlanAction::DenyUnsupported(what) => {
+                tracing::warn!(node = %what, "unsupported state-changing plan node; denying (fail-closed)");
+                (DENY_UNSUPPORTED_ACTION.clone(), TableReference::bare(what), vec![])
             }
         };
         let resource = table_resource(&table_ref);
@@ -210,5 +244,75 @@ mod tests {
         let plan = LogicalPlanBuilder::empty(false).build().unwrap();
         let requests = authorize_plan(&plan, &principal()).unwrap();
         assert!(requests.is_empty());
+    }
+
+    fn action_of(req: &Request) -> String {
+        req.action().unwrap().to_string()
+    }
+
+    // Build real plans through a SessionContext with registered tables, so the
+    // DML/DDL node shapes match what the engine actually produces.
+    async fn ctx_with_tables() -> datafusion::prelude::SessionContext {
+        use std::sync::Arc;
+        use datafusion::datasource::MemTable;
+        use datafusion::prelude::SessionContext;
+        let ctx = SessionContext::new();
+        let s = Arc::new(schema());
+        for name in ["a", "b", "dst"] {
+            let table = MemTable::try_new(s.clone(), vec![vec![]]).unwrap();
+            ctx.register_table(name, Arc::new(table)).unwrap();
+        }
+        ctx
+    }
+
+    #[tokio::test]
+    async fn insert_yields_write_table_request() {
+        let ctx = ctx_with_tables().await;
+        let plan = ctx
+            .sql("INSERT INTO dst SELECT * FROM a")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        let requests = authorize_plan(&plan, &principal()).unwrap();
+        assert!(requests.iter().any(|r| action_of(r) == "Action::\"write_table\""));
+        assert!(requests.iter().any(|r| action_of(r) == "Action::\"read_table\""));
+    }
+
+    #[tokio::test]
+    async fn join_yields_one_read_request_per_table() {
+        let ctx = ctx_with_tables().await;
+        let plan = ctx
+            .sql("SELECT a.id FROM a JOIN b ON a.id = b.id")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        let requests = authorize_plan(&plan, &principal()).unwrap();
+        let reads = requests
+            .iter()
+            .filter(|r| action_of(r) == "Action::\"read_table\"")
+            .count();
+        assert_eq!(reads, 2, "each joined table is authorized independently");
+    }
+
+    #[test]
+    fn unmodeled_ddl_yields_deny_unsupported() {
+        use datafusion::logical_expr::{
+            DdlStatement, DropTable, LogicalPlan,
+        };
+        use std::sync::Arc;
+        // DROP TABLE is state-changing and not modeled -> deny sentinel action.
+        let inner = table_scan(Some("t"), &schema(), None).unwrap().build().unwrap();
+        let plan = LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+            name: TableReference::bare("t"),
+            if_exists: false,
+            schema: Arc::new(inner.schema().as_ref().clone()),
+        }));
+        let requests = authorize_plan(&plan, &principal()).unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|r| action_of(r) == "Action::\"deny_unsupported\""),
+            "unmodeled DDL must produce a deny sentinel"
+        );
     }
 }
