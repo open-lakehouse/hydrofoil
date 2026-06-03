@@ -23,3 +23,6 @@ default = []
 # partial evaluation. Off by default; pulls the partial-eval feature through
 # the cedar stack when enabled.
 governance = ["cedar-policy/partial-eval", "cedar-local-agent/partial-eval"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

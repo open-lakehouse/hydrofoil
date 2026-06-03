@@ -42,7 +42,8 @@ use deltalake_core::{
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
-use cedar_oci::{Decision, EntityUid};
+use cedar_oci::Decision;
+use datafusion_cedar::PrincipalIdentity;
 use instrumented_object_store::instrument_object_store;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
@@ -72,14 +73,14 @@ pub struct LakehouseCtx {
     /// The policy used to enforce access control during query planning and execution.
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
-    principal: EntityUid,
+    principal: PrincipalIdentity,
     /// Optional Unity Catalog resolver used to back catalog/schema/table
     /// resolution with a live Unity Catalog instance during planning.
     unity: Option<Arc<UnityCatalogProviderList>>,
 }
 
 impl LakehouseCtx {
-    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: EntityUid) -> Self {
+    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: PrincipalIdentity) -> Self {
         Self {
             inner,
             policy,
@@ -109,10 +110,16 @@ impl LakehouseCtx {
     }
 
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
-        if self.policy.is_allowed(&plan, &self.principal).await? == Decision::Deny {
+        // This path (ingest / delta-connect) executes on the inner
+        // `SessionContext`, which does NOT route through
+        // `LakehouseSession::create_physical_plan`, so it must enforce the gate
+        // itself. Gate on the optimized plan to match the statement path's
+        // contract (projections/filters pushed down before the decision).
+        let optimized_plan = self.inner.state().optimize(&plan)?;
+        if self.policy.is_allowed(&optimized_plan, &self.principal).await? == Decision::Deny {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
-                self.principal
+                self.principal.uid
             );
         }
         self.inner.execute_logical_plan(plan).await
@@ -131,7 +138,7 @@ pub struct LakehouseSession {
     /// and other policies during query planning and execution.
     policy: Arc<dyn Policy>,
     /// The principal (user or service) on behalf of whom queries are executed.
-    principal: EntityUid,
+    principal: PrincipalIdentity,
     /// Optional Unity Catalog resolver used to back catalog/schema/table
     /// resolution during planning.
     unity: Option<Arc<UnityCatalogProviderList>>,
@@ -199,7 +206,7 @@ impl Session for LakehouseSession {
         {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
-                self.principal
+                self.principal.uid
             );
         }
         self.inner

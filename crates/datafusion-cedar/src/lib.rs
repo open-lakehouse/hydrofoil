@@ -18,14 +18,19 @@
 
 mod cedar;
 mod policy;
+mod principal;
 mod visitor;
 
 pub use cedar::CedarPolicy;
 pub use policy::{Policy, StaticPolicy};
+pub use principal::PrincipalIdentity;
 
 // Re-export the cedar identity/decision types through this crate so consumers
 // have a single import surface (they originate in `cedar-oci`).
 pub use cedar_oci::{Decision, EntityId, EntityTypeName, EntityUid};
+
+// Cedar value type the host needs to build principal/resource attributes.
+pub use cedar_policy::RestrictedExpression;
 
 // Cedar provider traits a `CedarPolicy` is generic over, re-exported for
 // consumers building an authorizer.

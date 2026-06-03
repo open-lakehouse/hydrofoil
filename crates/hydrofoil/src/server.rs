@@ -99,25 +99,29 @@ impl FlightSqlServiceImpl {
     }
 
     #[allow(clippy::result_large_err)]
-    fn get_ctx<T>(&self, _req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
-        if let Some(ctx) = self.contexts.get("key") {
-            Ok(ctx.value().clone())
-        } else {
-            let session_id = Uuid::new_v4();
-            let session = create_session(session_id, self.lineage.clone())
-                .map_err(|e| status!("Failed to create session", e))?;
-            let mut ctx = LakehouseCtx::new(
-                session.clone(),
-                self.policy.clone(),
-                "User:default".parse().unwrap(),
-            );
-            if let Some(factory) = self.unity_factory.clone() {
-                ctx = ctx.with_unity(build_unity_resolver(&session, factory));
-            }
-            let ctx = Arc::new(ctx);
-            self.contexts.insert("key".to_string(), ctx.clone());
-            Ok(ctx)
+    fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
+        // Resolve the principal from request metadata. This replaces the old
+        // hardcoded `"User:default"` and the single `"key"` context: contexts
+        // are cached per principal so a request's identity actually drives
+        // authorization (a full protocol-derived session store is the deferred
+        // follow-up in docs/session-management.md).
+        let principal = crate::identity::principal_from_metadata(req.metadata())?;
+        let cache_key = principal.uid.to_string();
+
+        if let Some(ctx) = self.contexts.get(&cache_key) {
+            return Ok(ctx.value().clone());
         }
+
+        let session_id = Uuid::new_v4();
+        let session = create_session(session_id, self.lineage.clone())
+            .map_err(|e| status!("Failed to create session", e))?;
+        let mut ctx = LakehouseCtx::new(session.clone(), self.policy.clone(), principal);
+        if let Some(factory) = self.unity_factory.clone() {
+            ctx = ctx.with_unity(build_unity_resolver(&session, factory));
+        }
+        let ctx = Arc::new(ctx);
+        self.contexts.insert(cache_key, ctx.clone());
+        Ok(ctx)
     }
 
     #[allow(clippy::result_large_err)]

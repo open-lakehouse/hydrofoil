@@ -129,6 +129,17 @@ impl OciPolicyProvider {
         })
     }
 
+    /// Build a provider from an OCI reference string (e.g.
+    /// `localhost:10100/hydrofoil/plan-policy:latest`), using the default
+    /// (anonymous, HTTP) client configuration.
+    pub async fn from_reference(reference: &str) -> Result<Self, EntityProviderError> {
+        let client = Client::new(build_client_config());
+        let reference: Reference = reference
+            .parse()
+            .map_err(|e: oci_client::ParseError| EntityProviderError::General(e.into()))?;
+        Self::try_new(client, reference).await
+    }
+
     /// The Cedar schema pulled with the policy image, if any.
     pub async fn schema(&self) -> Option<Arc<Schema>> {
         self.schema.read().await.clone()
