@@ -23,7 +23,7 @@ use datafusion::{
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
 use datafusion_open_lineage::{
-    OpenLineageClient, OpenLineageConfig, instrument_session_state_simple,
+    OpenLineageClient, OpenLineageConfig, instrument_session_state,
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
@@ -420,10 +420,14 @@ pub fn create_session(
         .build();
 
     // Emit OpenLineage events around physical planning when a client is wired.
+    // The context provider reads any per-session `LineageContext` attached to
+    // the `SessionConfig` (see `crate::lineage`); today none is attached yet, so
+    // it resolves to empty context until session management is reworked.
     if let Some(client) = lineage {
-        session_state = instrument_session_state_simple(
+        session_state = instrument_session_state(
             session_state,
             client,
+            Arc::new(crate::lineage::HydrofoilContextProvider),
             OpenLineageConfig::default(),
         );
     }

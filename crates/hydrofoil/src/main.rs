@@ -9,6 +9,7 @@ use unitycatalog_object_store::UnityObjectStoreFactory;
 mod catalog;
 mod error;
 mod execution;
+mod lineage;
 mod planner;
 mod policy;
 mod server;
