@@ -9,6 +9,7 @@ use unitycatalog_object_store::UnityObjectStoreFactory;
 mod catalog;
 mod error;
 mod execution;
+mod lineage;
 mod planner;
 mod policy;
 mod server;
@@ -26,6 +27,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = "0.0.0.0:50051".parse()?;
     let mut service = server::FlightSqlServiceImpl::try_new()?;
+
+    // Wire OpenLineage when an endpoint is configured. `OPENLINEAGE_URL` is the
+    // base URL of an OpenLineage-compatible service; `OPENLINEAGE_API_KEY` is an
+    // optional bearer token. Without `OPENLINEAGE_URL` lineage events are dropped.
+    match datafusion_open_lineage::OpenLineageClient::from_env() {
+        Ok(client) => {
+            if std::env::var("OPENLINEAGE_URL").is_ok() {
+                tracing::info!("OpenLineage integration enabled");
+            } else {
+                tracing::info!(
+                    "OpenLineage integration disabled (set OPENLINEAGE_URL to enable)"
+                );
+            }
+            service = service.with_lineage(client);
+        }
+        Err(e) => tracing::warn!("OpenLineage disabled: {e}"),
+    }
 
     // Wire Unity Catalog when an endpoint is configured. `UC_ENDPOINT` is the
     // Unity Catalog REST base URL (e.g.

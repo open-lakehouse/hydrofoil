@@ -22,6 +22,9 @@ use datafusion::{
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
+use datafusion_open_lineage::{
+    OpenLineageClient, OpenLineageConfig, instrument_session_state,
+};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -386,7 +389,10 @@ impl TaskExt for SessionContext {
     }
 }
 
-pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionContext> {
+pub fn create_session(
+    session_id: impl Into<Option<Uuid>>,
+    lineage: Option<OpenLineageClient>,
+) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
         .preview_limit(5)
@@ -403,7 +409,7 @@ pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionCont
         .with_information_schema(true)
         .with_default_catalog_and_schema("hydrofoil", "default");
 
-    let session_state = SessionStateBuilder::new_with_default_features()
+    let mut session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
         .with_table_factory(
@@ -412,6 +418,20 @@ pub fn create_session(session_id: impl Into<Option<Uuid>>) -> Result<SessionCont
         )
         .with_physical_optimizer_rule(instrument_rule)
         .build();
+
+    // Emit OpenLineage events around physical planning when a client is wired.
+    // The context provider reads any per-session `LineageContext` attached to
+    // the `SessionConfig` (see `crate::lineage`); today none is attached yet, so
+    // it resolves to empty context until session management is reworked.
+    if let Some(client) = lineage {
+        session_state = instrument_session_state(
+            session_state,
+            client,
+            Arc::new(crate::lineage::HydrofoilContextProvider),
+            OpenLineageConfig::default(),
+        );
+    }
+
     let ctx = SessionContext::new_with_state(session_state);
 
     update_session(&ctx.state())?;

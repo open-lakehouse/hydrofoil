@@ -31,8 +31,10 @@ delta_kernel = { package = "buoyant_kernel", version = "0.22", features = [
 futures = "0.3.32"
 itertools = "0.14"
 object_store = { version = "0.13.2", features = ["azure", "aws", "gcp"] }
+olai-http = { version = "0.0.1" }
 prost = { version = "0.14.1" }
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
 sqlparser = { version = "0.59", default-features = false, features = [
     "std",
     "visitor",
@@ -47,6 +49,7 @@ url = { version = "2.5.2", features = [
     "serde",
     "std",
 ], default-features = false }
+uuid = { version = "1", features = ["v4"] }
 
 unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3", features = [
     "rest-client",
