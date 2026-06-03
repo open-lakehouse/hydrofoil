@@ -1,14 +1,13 @@
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 
-use hydrofoil_policy::{Decision, EntityUid};
+use cedar_oci::{Decision, EntityUid};
 
-#[cfg(feature = "cedar")]
-pub use cedar::{CedarPolicy, SimpleEntityProvider, SimplePolicySetProvider};
-
-#[cfg(feature = "cedar")]
-mod cedar;
-
+/// Access-control policy applied during query planning.
+///
+/// Layer 1 of the policy stack: a coarse allow/deny over the tables and actions
+/// a query references. Implementations inspect the [`LogicalPlan`] and decide
+/// whether `principal` may execute it.
 #[async_trait::async_trait]
 pub trait Policy: std::fmt::Debug + Send + Sync {
     async fn is_allowed(
@@ -18,6 +17,10 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
     ) -> Result<Decision>;
 }
 
+/// A [`Policy`] that returns the same decision for every query.
+///
+/// Used as the default when no real policy engine is wired (e.g.
+/// `StaticPolicy::new(Decision::Allow)` for an open, ungoverned server).
 #[derive(Debug, Clone)]
 pub struct StaticPolicy {
     decision: Decision,

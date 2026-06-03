@@ -44,6 +44,10 @@ pub struct OciPolicyProvider {
     reference: Reference,
     entities: RwLock<Arc<Entities>>,
     policy_set: RwLock<Arc<PolicySet>>,
+    /// The Cedar schema pulled alongside the policy set, if the image carried
+    /// one. Retained for schema-aware authorization and fine-grained governance
+    /// (residual evaluation validates resource attributes against it).
+    schema: RwLock<Option<Arc<Schema>>>,
 }
 
 impl Debug for OciPolicyProvider {
@@ -121,7 +125,13 @@ impl OciPolicyProvider {
             reference,
             entities: RwLock::new(Arc::new(entities)),
             policy_set: RwLock::new(Arc::new(policy_set)),
+            schema: RwLock::new(schema.map(Arc::new)),
         })
+    }
+
+    /// The Cedar schema pulled with the policy image, if any.
+    pub async fn schema(&self) -> Option<Arc<Schema>> {
+        self.schema.read().await.clone()
     }
 }
 
@@ -158,6 +168,11 @@ mod tests {
             .unwrap();
 
         let provider = Arc::new(OciPolicyProvider::try_new(client, reference).await.unwrap());
+        // The plan-policy image ships a Cedar schema layer; confirm we retained it.
+        assert!(
+            provider.schema().await.is_some(),
+            "expected the pulled policy image to carry a Cedar schema"
+        );
         let authorizer = Authorizer::new(
             AuthorizerConfigBuilder::default()
                 .policy_set_provider(provider.clone())

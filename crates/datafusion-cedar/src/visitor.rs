@@ -1,73 +1,31 @@
+//! Walk a [`LogicalPlan`] and turn the tables/actions it references into Cedar
+//! authorization [`Request`]s.
+//!
+//! This mirrors `datafusion-open-lineage`'s `extract()`: a [`TreeNodeVisitor`]
+//! over the optimized plan that classifies each relevant node into a
+//! [`PlanAction`], which is then lowered to a Cedar request.
+
 use std::str::FromStr as _;
 use std::sync::LazyLock;
 
-use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
-pub use cedar_local_agent::public::{SimpleEntityProvider, SimplePolicySetProvider};
-use cedar_policy::{Context, Entities, EntityTypeName, Request};
+use cedar_policy::{Context, EntityTypeName, Request};
 use datafusion::common::plan_datafusion_err;
-use datafusion::common::tree_node::{TreeNode as _, TreeNodeRecursion};
-use datafusion::logical_expr::{DdlStatement, DmlStatement, LogicalPlan, WriteOp};
+use datafusion::common::tree_node::{TreeNode as _, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion::error::Result;
+use datafusion::logical_expr::{DdlStatement, LogicalPlan, WriteOp};
 use datafusion::sql::TableReference;
-use datafusion::{common::tree_node::TreeNodeVisitor, error::Result};
 
-use hydrofoil_policy::{Decision, EntityId, EntityUid};
+use cedar_oci::{EntityId, EntityUid};
 
-use super::Policy;
-
-#[derive(Debug)]
-pub struct CedarPolicy<P, E>
-where
-    P: SimplePolicySetProvider + 'static,
-    E: SimpleEntityProvider + 'static,
-{
-    authorizer: Authorizer<P, E>,
-}
-
-impl<P, E> CedarPolicy<P, E>
-where
-    P: SimplePolicySetProvider + 'static,
-    E: SimpleEntityProvider + 'static,
-{
-    fn new(authorizer: Authorizer<P, E>) -> Self {
-        Self { authorizer }
-    }
-}
-
-#[async_trait::async_trait]
-impl<P, E> Policy for CedarPolicy<P, E>
-where
-    P: SimplePolicySetProvider + 'static,
-    E: SimpleEntityProvider + 'static,
-{
-    async fn is_allowed(
-        &self,
-        logical_plan: &LogicalPlan,
-        principal: &EntityUid,
-    ) -> Result<Decision> {
-        let requests = authorize_plan(logical_plan, principal)?;
-        for request in requests {
-            let decision = self
-                .authorizer
-                .is_authorized(&request, &Entities::empty())
-                .await
-                .map_err(|e| plan_datafusion_err!("Failed to authorize plan: {}", e))?
-                .decision();
-            if decision == Decision::Deny {
-                return Ok(Decision::Deny);
-            }
-        }
-        Ok(Decision::Allow)
-    }
-}
-
-enum PlanAction {
+/// An access-relevant operation discovered in a logical plan.
+pub(crate) enum PlanAction {
     ReadTable(TableReference, Vec<String>),
     WriteTable,
     CreateTable(TableReference),
 }
 
-struct AuthorizationVisitor {
-    actions: Vec<PlanAction>,
+pub(crate) struct AuthorizationVisitor {
+    pub(crate) actions: Vec<PlanAction>,
 }
 
 impl TreeNodeVisitor<'_> for AuthorizationVisitor {
@@ -106,6 +64,8 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
     }
 }
 
+// Write/DDL authorization (and thus these actions) is implemented in Phase 1.
+#[allow(dead_code)]
 static CREATE_EXTERNAL_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
     EntityUid::from_type_name_and_id(
         "Action".parse().unwrap(),
@@ -115,18 +75,21 @@ static CREATE_EXTERNAL_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
 static READ_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
     EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new("read_table"))
 });
+#[allow(dead_code)]
 static WRITE_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
     EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new("write_table"))
 });
 
-fn authorize_plan(plan: &LogicalPlan, principal: &EntityUid) -> Result<Vec<Request>> {
+/// Lower a logical plan to the set of Cedar requests that must all be permitted
+/// for the plan to run.
+pub(crate) fn authorize_plan(plan: &LogicalPlan, principal: &EntityUid) -> Result<Vec<Request>> {
     let mut visitor = AuthorizationVisitor { actions: vec![] };
     plan.visit(&mut visitor)?;
 
     let mut requests = vec![];
     for action in visitor.actions {
         match action {
-            PlanAction::ReadTable(table_ref, fields) => {
+            PlanAction::ReadTable(table_ref, _fields) => {
                 let table_type_name = EntityTypeName::from_str("Table").unwrap();
                 let resource = EntityUid::from_type_name_and_id(
                     table_type_name,

@@ -42,7 +42,7 @@ use deltalake_core::{
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
-use hydrofoil_policy::{Decision, EntityUid};
+use cedar_oci::{Decision, EntityUid};
 use instrumented_object_store::instrument_object_store;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};

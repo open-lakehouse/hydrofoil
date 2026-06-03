@@ -17,7 +17,7 @@ use arrow_flight::{
     flight_service_server::FlightService,
 };
 use bytes::Bytes;
-use cedar_policy::Decision;
+use cedar_oci::Decision;
 use datafusion_open_lineage::OpenLineageClient;
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
