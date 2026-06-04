@@ -101,8 +101,10 @@ impl FlightSqlService for TestFlightSqlServer {
         &self,
         _ticket: TicketStatementQuery,
         _request: Request<Ticket>,
-    ) -> Result<Response<<Self as arrow_flight::flight_service_server::FlightService>::DoGetStream>, Status>
-    {
+    ) -> Result<
+        Response<<Self as arrow_flight::flight_service_server::FlightService>::DoGetStream>,
+        Status,
+    > {
         let schema = test_schema();
         // Mirrors crates/hydrofoil/src/stream.rs: rely on the encoder's 2 MiB
         // default to split the oversized batch into <4 MB FlightData messages.
@@ -215,7 +217,8 @@ async fn ingest_many_batches_preserves_rows() {
                 (0..per_batch).map(|i| format!("payload-value-{:012}", base as usize + i)),
             );
             Ok::<_, arrow_schema::ArrowError>(
-                RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(payload)]).unwrap(),
+                RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(payload)])
+                    .unwrap(),
             )
         })
         .collect();
