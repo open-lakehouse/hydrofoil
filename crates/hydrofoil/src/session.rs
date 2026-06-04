@@ -146,6 +146,7 @@ impl LakehouseCtx {
     /// caller's parent run onto every later request). The
     /// `HydrofoilContextProvider` reads it back at planning time via
     /// `SessionConfig::get_extension`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_with_lineage(&self, context: LineageContext) -> LakehouseSession {
         let mut inner = self.inner.state();
         inner
@@ -197,6 +198,26 @@ pub struct LakehouseSession {
 }
 
 impl LakehouseSession {
+    /// Construct a session directly from its parts.
+    ///
+    /// The per-connection [`crate::engine::Session`] uses this to build a
+    /// per-query session from a (cheaply cloned) `SessionState` it has already
+    /// decorated with per-request `SessionConfig` extensions (lineage / agent
+    /// context).
+    pub fn new(
+        inner: SessionState,
+        policy: Arc<dyn Policy>,
+        principal: PrincipalIdentity,
+        unity: Option<Arc<UnityCatalogProviderList>>,
+    ) -> Self {
+        Self {
+            inner,
+            policy,
+            principal,
+            unity,
+        }
+    }
+
     pub async fn create_logical_plan(
         &self,
         query: impl AsRef<str> + Send + 'static,
@@ -245,6 +266,23 @@ impl Session for LakehouseSession {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Per-query agent / governance context, if the request carried any. For
+        // now we only observe it; it is the seam the deferred agent PEP / taint
+        // ledger will read (see docs/adr/0005-per-query-agent-governance-context.md).
+        if let Some(agent) = self
+            .inner
+            .config()
+            .get_extension::<crate::agent::AgentContextExt>()
+        {
+            let agent = &agent.0;
+            tracing::info!(
+                agent.id = agent.agent_id.as_deref().unwrap_or(""),
+                agent.session = agent.agent_session.as_deref().unwrap_or(""),
+                agent.task = agent.task.as_deref().unwrap_or(""),
+                "executing query with agent context"
+            );
+        }
+
         // Inject fine-grained governance (row filters + column masks) before
         // optimization, so the injected predicate pushes into the scan and
         // masked-away columns are pruned. Then optimize, so the coarse gate
@@ -450,9 +488,25 @@ impl TaskExt for SessionContext {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn create_session(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
+) -> Result<SessionContext> {
+    create_session_for(session_id, lineage, None)
+}
+
+/// Build a session context, optionally binding a [`PrincipalIdentity`] into the
+/// session config so planning-time providers can read it back.
+///
+/// Each call constructs its own `RuntimeEnv` and registers the seaweedfs object
+/// store on it — so per-connection sessions are isolated (vended Unity Catalog
+/// credentials registered on one session's runtime cannot leak to another). See
+/// `docs/adr/0004-per-session-credential-isolation.md`.
+pub fn create_session_for(
+    session_id: impl Into<Option<Uuid>>,
+    lineage: Option<OpenLineageClient>,
+    principal: Option<PrincipalIdentity>,
 ) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
@@ -466,9 +520,16 @@ pub fn create_session(
         options: options,
     );
 
-    let session_config = SessionConfig::from_env()?
+    let mut session_config = SessionConfig::from_env()?
         .with_information_schema(true)
         .with_default_catalog_and_schema("hydrofoil", "default");
+
+    // Bind the principal (the access-control analog of the lineage context) into
+    // the config so the policy layer / providers can resolve it from a
+    // `SessionState` during planning.
+    if let Some(principal) = principal {
+        session_config = crate::identity::with_principal(session_config, principal);
+    }
 
     let mut session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())

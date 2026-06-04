@@ -9,7 +9,7 @@ use datafusion::{
 use tokio::{runtime::Handle, sync::Notify};
 use tracing::{Instrument, field, instrument};
 
-use crate::session::LakehouseCtx;
+use crate::session::{LakehouseCtx, LakehouseSession};
 
 /// Creates a Tokio [`Runtime`] for use with CPU bound tasks
 ///
@@ -128,10 +128,10 @@ impl CpuRuntime {
     )]
     pub async fn create_logical_plan(
         &self,
-        session: Arc<LakehouseCtx>,
+        session: LakehouseSession,
         query: impl AsRef<str> + Send + 'static,
     ) -> Result<LogicalPlan> {
-        let fut = async move { session.session().create_logical_plan(query).await };
+        let fut = async move { session.create_logical_plan(query).await };
         let plan = self
             .spawn(fut)
             .await

@@ -11,12 +11,15 @@
 //! never trusted on its own. Until that interceptor lands, this parses the
 //! principal directly from metadata for local/dev use.
 //!
-//! [`principal_from_metadata`] is wired into the server today. The
-//! `SessionConfig`-extension seams ([`PrincipalExt`], [`with_principal`],
-//! [`PrincipalProvider`]) are how the principal will reach planning-time policy
-//! evaluation (Layer 2 / the deferred session store); they are intentionally
-//! unused until then — mirroring [`crate::lineage`].
-#![allow(dead_code)]
+//! [`principal_from_metadata`] is wired into the server, and [`with_principal`]
+//! is now called when a session is built (`Engine::new_session` →
+//! `create_session_for`), so the principal reaches planning-time policy
+//! evaluation via the [`PrincipalExt`] `SessionConfig` extension. The
+//! [`PrincipalProvider`] read-back trait is the provider-facing seam for
+//! components that only see a `SessionState` (mirroring
+//! [`datafusion_open_lineage::context::LineageContextProvider`]); it is retained
+//! for that use even though the policy gate currently reads the principal from a
+//! struct field.
 
 use std::sync::Arc;
 
@@ -81,7 +84,9 @@ pub fn with_principal(config: SessionConfig, principal: PrincipalIdentity) -> Se
 ///
 /// Mirrors [`datafusion_open_lineage::context::LineageContextProvider`]: the
 /// provider only sees a `SessionState`, so per-request data reaches it through
-/// a typed `SessionConfig` extension.
+/// a typed `SessionConfig` extension. Retained as the provider-facing seam; the
+/// policy gate currently reads the principal from a `LakehouseSession` field.
+#[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
     async fn principal(&self, session_state: &SessionState) -> Option<PrincipalIdentity>;
@@ -89,6 +94,7 @@ pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
 
 /// A [`PrincipalProvider`] that reads the [`PrincipalIdentity`] attached to the
 /// session's `SessionConfig` as a [`PrincipalExt`] extension.
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct SessionConfigPrincipalProvider;
 

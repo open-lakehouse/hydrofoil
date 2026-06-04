@@ -1,4 +1,6 @@
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::AsArray;
 use arrow::datatypes::UInt64Type;
@@ -12,27 +14,27 @@ use arrow_flight::sql::{
     server::{FlightSqlService, PeekableFlightDataStream},
 };
 use arrow_flight::{
-    Action, FlightDescriptor, FlightEndpoint, FlightInfo, IpcMessage, PutResult, SchemaAsIpc,
-    Ticket, encode::FlightDataEncoderBuilder, flight_descriptor::DescriptorType,
-    flight_service_server::FlightService,
+    Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
+    IpcMessage, PutResult, SchemaAsIpc, Ticket, encode::FlightDataEncoderBuilder,
+    flight_descriptor::DescriptorType, flight_service_server::FlightService,
 };
 use bytes::Bytes;
 use cedar_oci::Decision;
 use datafusion_open_lineage::OpenLineageClient;
-use dashmap::DashMap;
+use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
-use datafusion::{catalog::Session, error::DataFusionError};
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
-use tonic::{Request, Response, Status};
+use tonic::metadata::{MetadataMap, MetadataValue};
+use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
-use crate::session::{LakehouseCtx, build_unity_resolver, create_session};
+use crate::engine::{Engine, Session, SessionStore, StoredStatement};
 use crate::stream::FlightDataReceiverStreamBuilder;
 use crate::{execution::CpuRuntime, policy::Policy};
 use crate::{
@@ -42,45 +44,67 @@ use crate::{
 
 mod metadata;
 
+/// gRPC metadata key carrying the Flight SQL session id (a slash-safe,
+/// header-friendly alternative to the `authorization: Bearer` channel ADBC
+/// uses). See `docs/adr/0002-flight-sql-session-identity.md`.
+const SESSION_ID_HEADER: &str = "x-session-id";
+
+/// Default idle TTL for sessions when `HYDROFOIL_SESSION_TTL_SECS` is unset.
+const DEFAULT_SESSION_TTL_SECS: u64 = 1800;
+
 macro_rules! status {
     ($desc:expr, $err:expr) => {
         Status::internal(format!("{}: {} at {}:{}", $desc, $err, file!(), line!()))
     };
 }
 
-/// A planned statement awaiting execution: the logical plan plus the SQL text
-/// it came from (so lineage can populate the `sql` job facet at execution time,
-/// in a later `do_get_*` RPC). A precursor to the deferred per-statement store
-/// in `docs/session-management.md`.
-#[derive(Clone)]
-pub(crate) struct Statement {
-    pub(crate) plan: LogicalPlan,
-    /// SQL text, when the statement originated from SQL (absent for non-SQL
-    /// command paths such as ingest / delta-connect).
-    pub(crate) sql: Option<String>,
+/// Resolve the Flight SQL session id from request metadata, checking (in order)
+/// the `x-session-id` header, the `cookie` header (`session_id=…`), and the
+/// `authorization: Bearer <id>` header that ADBC echoes from the handshake
+/// response.
+fn session_id_from_metadata(meta: &MetadataMap) -> Option<String> {
+    if let Some(id) = meta.get(SESSION_ID_HEADER).and_then(|v| v.to_str().ok()) {
+        return Some(id.to_string());
+    }
+    if let Some(cookie) = meta.get("cookie").and_then(|v| v.to_str().ok()) {
+        for part in cookie.split(';') {
+            if let Some(val) = part.trim().strip_prefix("session_id=") {
+                return Some(val.to_string());
+            }
+        }
+    }
+    if let Some(token) = meta
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|auth| auth.strip_prefix("Bearer "))
+    {
+        return Some(token.trim().to_string());
+    }
+    None
 }
 
 pub struct FlightSqlServiceImpl {
-    pub(crate) contexts: Arc<DashMap<String, Arc<LakehouseCtx>>>,
-    pub(crate) statements: Arc<DashMap<Uuid, Statement>>,
-
+    /// The session store (sessions own their statements). Built by [`Self::build`].
+    sessions: Arc<SessionStore>,
     executor: CpuRuntime,
+
+    // Builder-stage inputs, assembled into the `Engine` by [`Self::build`].
     policy: Arc<dyn Policy>,
-    /// Optional Unity Catalog object store factory. When set, sessions resolve
-    /// `catalog.schema.table` references against a live Unity Catalog instance.
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
-    /// Optional OpenLineage client. When set, sessions emit lineage events
-    /// around query planning.
     lineage: Option<OpenLineageClient>,
 }
 
 impl FlightSqlServiceImpl {
     pub fn try_new() -> Result<Self, DataFusionError> {
+        let policy: Arc<dyn Policy> = Arc::new(StaticPolicy::new(Decision::Allow));
+        // A placeholder store; replaced by `build()` once the optional
+        // components (lineage/policy/unity) are configured.
+        let engine = Engine::new(policy.clone(), None, None);
+        let ttl = Duration::from_secs(DEFAULT_SESSION_TTL_SECS);
         Ok(Self {
-            contexts: Arc::new(DashMap::new()),
-            statements: Arc::new(DashMap::new()),
+            sessions: SessionStore::new(engine, ttl),
             executor: CpuRuntime::try_new()?,
-            policy: Arc::new(StaticPolicy::new(Decision::Allow)),
+            policy,
             unity_factory: None,
             lineage: None,
         })
@@ -94,10 +118,6 @@ impl FlightSqlServiceImpl {
     }
 
     /// Set the policy for the server.
-    ///
-    /// # Arguments
-    ///
-    /// * `policy` - The [`Policy`] to set for the server.
     pub fn with_policy(mut self, policy: Arc<dyn Policy>) -> Self {
         self.policy = policy;
         self
@@ -110,83 +130,70 @@ impl FlightSqlServiceImpl {
         self
     }
 
-    #[allow(clippy::result_large_err)]
-    fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<LakehouseCtx>, Status> {
-        // Resolve the principal from request metadata. This replaces the old
-        // hardcoded `"User:default"` and the single `"key"` context: contexts
-        // are cached per principal so a request's identity actually drives
-        // authorization (a full protocol-derived session store is the deferred
-        // follow-up in docs/session-management.md).
-        let principal = crate::identity::principal_from_metadata(req.metadata())?;
-        let cache_key = principal.uid.to_string();
-
-        if let Some(ctx) = self.contexts.get(&cache_key) {
-            return Ok(ctx.value().clone());
-        }
-
-        let session_id = Uuid::new_v4();
-        let session = create_session(session_id, self.lineage.clone())
-            .map_err(|e| status!("Failed to create session", e))?;
-        let mut ctx = LakehouseCtx::new(session.clone(), self.policy.clone(), principal);
-        if let Some(factory) = self.unity_factory.clone() {
-            ctx = ctx.with_unity(build_unity_resolver(&session, factory));
-        }
-        let ctx = Arc::new(ctx);
-        self.contexts.insert(cache_key, ctx.clone());
-        Ok(ctx)
+    /// Finalize the configured components into an [`Engine`] + [`SessionStore`]
+    /// and start the background session sweeper. Call once before serving.
+    pub fn build(mut self) -> Self {
+        let ttl = std::env::var("HYDROFOIL_SESSION_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(DEFAULT_SESSION_TTL_SECS));
+        let engine = Engine::new(
+            self.policy.clone(),
+            self.unity_factory.clone(),
+            self.lineage.clone(),
+        );
+        let sessions = SessionStore::new(engine, ttl);
+        sessions.spawn_sweeper();
+        self.sessions = sessions;
+        self
     }
 
-    /// Build a request-scoped [`LakehouseSession`] for query execution,
-    /// attaching the per-request OpenLineage context: the parent-run facet
-    /// parsed from the request metadata, plus the statement's SQL text (for the
-    /// `sql` job facet). When lineage is disabled, this is the plain session.
-    fn session_for<T>(
-        &self,
-        ctx: &LakehouseCtx,
-        req: &Request<T>,
-        sql: Option<String>,
-    ) -> crate::session::LakehouseSession {
-        if self.lineage.is_none() {
-            return ctx.session();
+    /// Resolve the session for a request: by session id (handshake / cookie /
+    /// Bearer) when present, otherwise the principal's stable ephemeral session
+    /// (so no-handshake clients keep working — the two RPCs of one query still
+    /// share a statement store). See `docs/adr/0002-flight-sql-session-identity.md`.
+    #[allow(clippy::result_large_err)]
+    fn resolve_session<T>(&self, req: &Request<T>) -> Result<Arc<Session>, Status> {
+        if let Some(session) =
+            session_id_from_metadata(req.metadata()).and_then(|id| self.sessions.get(&id))
+        {
+            return Ok(session);
         }
-        let mut lineage_ctx = crate::lineage::context_from_metadata(
+        // No session id, or a known-shaped but unknown/expired one: fall through
+        // to the principal's ephemeral session rather than hard-failing.
+        let principal = crate::identity::principal_from_metadata(req.metadata())?;
+        self.sessions
+            .ephemeral_for(principal)
+            .map_err(|e| status!("Failed to resolve session", e))
+    }
+
+    /// Build the per-request lineage context: parent-run facet parsed from
+    /// metadata, the pinned `run_id`, and the statement's SQL text.
+    fn lineage_context<T>(
+        &self,
+        req: &Request<T>,
+        run_id: Uuid,
+        sql: Option<String>,
+    ) -> datafusion_open_lineage::context::LineageContext {
+        let mut ctx = crate::lineage::context_from_metadata(
             req.metadata(),
             &datafusion_open_lineage::config::OpenLineageConfig::default(),
         );
-        lineage_ctx.sql = sql;
-        ctx.session_with_lineage(lineage_ctx)
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn get_statement(&self, handle: &Uuid) -> Result<Statement, Status> {
-        if let Some(stmt) = self.statements.get(handle) {
-            Ok(stmt.clone())
-        } else {
-            Err(Status::internal(format!("Plan handle not found: {handle}")))?
-        }
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn get_plan(&self, handle: &Uuid) -> Result<LogicalPlan, Status> {
-        Ok(self.get_statement(handle)?.plan)
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn remove_plan(&self, handle: &Uuid) -> Result<(), Status> {
-        self.statements.remove(handle);
-        Ok(())
+        ctx.run_id = Some(run_id);
+        ctx.sql = sql;
+        ctx
     }
 
     fn do_get_handle(
         &self,
-        session: Arc<dyn Session>,
-        handle: Uuid,
+        session: Arc<dyn datafusion::catalog::Session>,
+        plan: LogicalPlan,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let options = SQLOptions::new()
             .with_allow_ddl(false)
             .with_allow_dml(false);
 
-        let plan = self.get_plan(&handle)?;
         options
             .verify_plan(&plan)
             .map_err(|e| Status::internal(format!("{e:?}")))?;
@@ -202,6 +209,45 @@ impl FlightSqlServiceImpl {
 #[tonic::async_trait]
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
+
+    /// Establish a session: mint a session id, return it to the client both as
+    /// the handshake payload and as `authorization: Bearer <id>` + `x-session-id`
+    /// response metadata (ADBC echoes the Bearer on subsequent RPCs). See
+    /// `docs/adr/0002-flight-sql-session-identity.md`.
+    #[instrument(skip_all, level = "info")]
+    async fn do_handshake(
+        &self,
+        request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    > {
+        let principal = crate::identity::principal_from_metadata(request.metadata())?;
+        let (session_id, _session) = self
+            .sessions
+            .create(principal)
+            .map_err(|e| status!("Failed to create session", e))?;
+
+        let payload = Bytes::from(session_id.clone());
+        let output = futures::stream::once(async move {
+            Ok(HandshakeResponse {
+                protocol_version: 0,
+                payload,
+            })
+        });
+        let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
+            Response::new(Box::pin(output));
+        let bearer = format!("Bearer {session_id}");
+        response.metadata_mut().insert(
+            "authorization",
+            MetadataValue::try_from(bearer).map_err(|e| status!("Invalid token", e))?,
+        );
+        response.metadata_mut().insert(
+            SESSION_ID_HEADER,
+            MetadataValue::try_from(session_id).map_err(|e| status!("Invalid session id", e))?,
+        );
+        Ok(response)
+    }
 
     #[instrument(skip_all, level = "info")]
     async fn get_flight_info_catalogs(
@@ -321,11 +367,21 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let ctx = self.get_ctx(&request)?;
+        let session = self.resolve_session(&request)?;
+
+        // Mint the lineage run id now and snapshot the lineage context from this
+        // (planning) RPC. Planning runs through a session decorated with that
+        // context so the OpenLineage START event carries the pinned run id; the
+        // later do_get reuses the same snapshot so COMPLETE/FAIL correlate. See
+        // docs/adr/0003-per-statement-run-id-correlation.md.
+        let run_id = Uuid::now_v7();
+        let lineage = self.lineage_context(&request, run_id, Some(query.query.clone()));
+        let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
         let plan = self
             .executor
-            .create_logical_plan(ctx, query.query.clone())
+            .create_logical_plan(lh, query.query.clone())
             .await
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
 
@@ -337,11 +393,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?;
 
         let plan_id = Uuid::now_v7();
-        self.statements.insert(
-            plan_id.clone(),
-            Statement {
+        session.statements().insert(
+            plan_id,
+            StoredStatement {
                 plan: plan.clone(),
-                sql: Some(query.query.clone()),
+                lineage,
+                created_at: std::time::Instant::now(),
             },
         );
 
@@ -369,11 +426,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let handle = Uuid::from_slice(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-        let plan = self.get_plan(&handle)?;
+        let session = self.resolve_session(&request)?;
+        let plan = session
+            .statements()
+            .get(&handle)
+            .map(|s| s.plan.clone())
+            .ok_or_else(|| Status::internal(format!("Plan handle not found: {handle}")))?;
 
         let ticket = CommandPreparedStatementQuery {
             prepared_statement_handle: cmd.prepared_statement_handle.clone(),
@@ -436,11 +498,19 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle =
             Uuid::from_slice(&ticket.statement_handle).map_err(|e| status!("Invalid handle", e))?;
-        let ctx = self.get_ctx(&request)?;
-        let sql = self.get_statement(&handle)?.sql;
-        let session = self.session_for(&ctx, &request, sql);
-        let result = self.do_get_handle(Arc::new(session), handle);
-        self.statements.remove(&handle);
+        let session = self.resolve_session(&request)?;
+        let stored = session
+            .statements()
+            .get(&handle)
+            .map(|s| s.clone())
+            .ok_or_else(|| Status::internal(format!("Plan handle not found: {handle}")))?;
+
+        // Reuse the run_id + lineage snapshot from planning so START and
+        // COMPLETE/FAIL share one runId; layer this request's agent context on top.
+        let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lh = session.lakehouse_for_query(stored.lineage.clone(), agent);
+        let result = self.do_get_handle(Arc::new(lh), stored.plan.clone());
+        session.statements().remove(&handle);
         result
     }
 
@@ -452,10 +522,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle = Uuid::from_slice(&query.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-        let ctx = self.get_ctx(&request)?;
-        let sql = self.get_statement(&handle)?.sql;
-        let session = self.session_for(&ctx, &request, sql);
-        self.do_get_handle(Arc::new(session), handle)
+        let session = self.resolve_session(&request)?;
+        let stored = session
+            .statements()
+            .get(&handle)
+            .map(|s| s.clone())
+            .ok_or_else(|| Status::internal(format!("Plan handle not found: {handle}")))?;
+        // Prepared statements are removed on ClosePreparedStatement, not here.
+        let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lh = session.lakehouse_for_query(stored.lineage.clone(), agent);
+        self.do_get_handle(Arc::new(lh), stored.plan.clone())
     }
 
     #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
@@ -508,7 +584,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ticket: CommandStatementIngest,
         request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        let ctx = self.get_ctx(&request)?;
+        let session = self.resolve_session(&request)?;
+        let ctx = Arc::new(session.ctx());
         let planner = FlightPlanner::new();
 
         let ctx_inner = ctx.clone();
@@ -555,7 +632,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?
             .ok_or_else(|| Status::internal("Expected DeltaCommand but got None!"))?;
 
-        let ctx = self.get_ctx(&request)?;
+        let session = self.resolve_session(&request)?;
+        let ctx = Arc::new(session.ctx());
         let planner = DeltaPlanner::new();
         let plan = planner
             .plan_delta_connect(&ctx.session(), &command)
@@ -581,21 +659,26 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: ActionCreatePreparedStatementRequest,
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        let ctx = self.get_ctx(&request)?;
+        let session = self.resolve_session(&request)?;
 
         let plan_id = Uuid::now_v7();
-        let sql = query.query.clone();
+        let run_id = Uuid::now_v7();
+        let lineage = self.lineage_context(&request, run_id, Some(query.query.clone()));
+        let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lh = session.lakehouse_for_query(lineage.clone(), agent);
+
         let plan = self
             .executor
-            .create_logical_plan(ctx, query.query)
+            .create_logical_plan(lh, query.query)
             .await
             .map_err(|e| status!("Error building plan", e))?;
 
-        self.statements.insert(
-            plan_id.clone(),
-            Statement {
+        session.statements().insert(
+            plan_id,
+            StoredStatement {
                 plan: plan.clone(),
-                sql: Some(sql),
+                lineage,
+                created_at: std::time::Instant::now(),
             },
         );
         let message = SchemaAsIpc::new(plan.schema().as_arrow(), &IpcWriteOptions::default())
@@ -614,10 +697,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_close_prepared_statement(
         &self,
         handle: ActionClosePreparedStatementRequest,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<(), Status> {
-        if let Ok(handle) = Uuid::from_slice(&handle.prepared_statement_handle) {
-            let _ = self.remove_plan(&handle);
+        if let Ok(handle) = Uuid::from_slice(&handle.prepared_statement_handle)
+            && let Ok(session) = self.resolve_session(&request)
+        {
+            session.statements().remove(&handle);
         }
         Ok(())
     }

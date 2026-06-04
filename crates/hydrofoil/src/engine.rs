@@ -1,0 +1,479 @@
+//! The session layer: a long-lived [`Engine`], per-connection [`Session`]s, and
+//! the [`SessionStore`] that owns their lifecycle.
+//!
+//! This is the three-layer context model
+//! (`docs/adr/0001-layered-session-context-model.md`):
+//!
+//! ```text
+//! Engine    — one per process; identity-independent inputs for building sessions
+//!   └─ Session   — one per client connection; OWNS its RuntimeEnv / object-store
+//!        │          registry (credential isolation), principal binding, statements
+//!        └─ LakehouseSession — one per query; cheap SessionState clone + per-request
+//!                              SessionConfig extensions (lineage / agent context)
+//! ```
+//!
+//! **Credential isolation** is load-bearing here
+//! (`docs/adr/0004-per-session-credential-isolation.md`): Unity Catalog vends
+//! short-lived credentials and registers them as object stores on a session's
+//! `RuntimeEnv`, keyed by table URL. If sessions shared one `RuntimeEnv` (e.g. by
+//! forking from a single base via `SessionStateBuilder::new_from_existing`), one
+//! principal's vended (possibly elevated) store would be visible to another's
+//! queries. So each [`Session`] is built fresh via [`create_session`] and owns
+//! its own runtime; the `Engine` shares only identity-independent inputs.
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
+use datafusion::error::Result;
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionContext;
+use datafusion_cedar::PrincipalIdentity;
+use datafusion_open_lineage::OpenLineageClient;
+use datafusion_open_lineage::context::LineageContext;
+use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
+use unitycatalog_object_store::UnityObjectStoreFactory;
+use uuid::Uuid;
+
+use crate::agent::{AgentContext, AgentContextExt};
+use crate::lineage::LineageContextExt;
+use crate::policy::Policy;
+use crate::session::{LakehouseCtx, LakehouseSession, build_unity_resolver, create_session_for};
+
+/// A planned statement awaiting execution, scoped to the [`Session`] that
+/// planned it.
+///
+/// Holds the lineage `run_id` minted at plan time so the later `do_get_*` RPC
+/// can reuse it: OpenLineage START (plan time) and COMPLETE/FAIL (execution
+/// time) then carry one shared `runId`
+/// (`docs/adr/0003-per-statement-run-id-correlation.md`).
+#[derive(Clone)]
+pub struct StoredStatement {
+    pub plan: LogicalPlan,
+    /// Snapshot of the lineage context captured from the planning RPC's
+    /// metadata (parent-run facet + sql), with the minted `run_id` pinned in
+    /// `lineage.run_id`. Reattached verbatim at execution so START and
+    /// COMPLETE/FAIL correlate on one run id.
+    pub lineage: LineageContext,
+    pub created_at: Instant,
+}
+
+/// Long-lived, process-wide factory for sessions.
+///
+/// Holds only the identity-independent inputs used to build a session — **no
+/// live `RuntimeEnv` / object stores**, so no vended credentials can leak across
+/// principals (see module docs).
+pub struct Engine {
+    policy: Arc<dyn Policy>,
+    unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+    lineage: Option<OpenLineageClient>,
+}
+
+impl Engine {
+    pub fn new(
+        policy: Arc<dyn Policy>,
+        unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+        lineage: Option<OpenLineageClient>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            policy,
+            unity_factory,
+            lineage,
+        })
+    }
+
+    /// Build a fresh, principal-scoped [`Session`].
+    ///
+    /// Each session gets its own `SessionContext` (and therefore its own
+    /// `RuntimeEnv` / object-store registry) via [`create_session`], binds the
+    /// principal into the session config, and attaches a Unity Catalog resolver
+    /// bound to *this* session's runtime — so vended credentials land on this
+    /// session's registry and nowhere else.
+    pub fn new_session(&self, principal: PrincipalIdentity) -> Result<Arc<Session>> {
+        let ctx = create_session_for(
+            Uuid::new_v4(),
+            self.lineage.clone(),
+            Some(principal.clone()),
+        )?;
+
+        let unity = self
+            .unity_factory
+            .clone()
+            .map(|factory| build_unity_resolver(&ctx, factory));
+
+        Ok(Arc::new(Session {
+            ctx,
+            policy: self.policy.clone(),
+            principal,
+            unity,
+            statements: DashMap::new(),
+            created_at: Instant::now(),
+            last_used_ms: AtomicU64::new(0),
+        }))
+    }
+}
+
+/// A per-connection session: its own DataFusion context (and runtime), the bound
+/// principal, and the statements it has planned.
+pub struct Session {
+    /// Owns this session's `RuntimeEnv` / object-store registry. Vended UC
+    /// credentials registered here are isolated to this session.
+    ctx: SessionContext,
+    policy: Arc<dyn Policy>,
+    principal: PrincipalIdentity,
+    unity: Option<Arc<UnityCatalogProviderList>>,
+    /// Statements this session has planned, keyed by handle.
+    statements: DashMap<Uuid, StoredStatement>,
+    created_at: Instant,
+    /// Millis since `created_at` of the last use, for idle-TTL eviction.
+    last_used_ms: AtomicU64,
+}
+
+impl Session {
+    /// Record activity, resetting the idle timer.
+    pub fn touch(&self) {
+        let elapsed = self.created_at.elapsed().as_millis() as u64;
+        self.last_used_ms.store(elapsed, Ordering::Relaxed);
+    }
+
+    /// How long this session has been idle since its last use.
+    pub fn idle(&self) -> Duration {
+        let last = self.last_used_ms.load(Ordering::Relaxed);
+        self.created_at
+            .elapsed()
+            .saturating_sub(Duration::from_millis(last))
+    }
+
+    /// The principal this session runs as. Retained as part of the session
+    /// surface; the policy gate reads the principal off the per-query
+    /// `LakehouseSession`.
+    #[allow(dead_code)]
+    pub fn principal(&self) -> &PrincipalIdentity {
+        &self.principal
+    }
+
+    pub fn statements(&self) -> &DashMap<Uuid, StoredStatement> {
+        &self.statements
+    }
+
+    /// A [`LakehouseCtx`] over this session, for the ingest / delta-connect
+    /// paths and the CPU-runtime planning call sites that take an
+    /// `Arc<LakehouseCtx>`.
+    pub fn ctx(&self) -> LakehouseCtx {
+        let mut ctx = LakehouseCtx::new(self.ctx.clone(), self.policy.clone(), self.principal.clone());
+        if let Some(unity) = self.unity.clone() {
+            ctx = ctx.with_unity(unity);
+        }
+        ctx
+    }
+
+    /// A per-query [`LakehouseSession`] with no per-request extensions, for
+    /// metadata RPCs and planning where no lineage/agent context applies.
+    /// (Query paths use [`Self::lakehouse_for_query`]; this is the plain variant.)
+    #[allow(dead_code)]
+    pub fn lakehouse(&self) -> LakehouseSession {
+        LakehouseSession::new(
+            self.ctx.state(),
+            self.policy.clone(),
+            self.principal.clone(),
+            self.unity.clone(),
+        )
+    }
+
+    /// A per-query [`LakehouseSession`] decorated with the request's lineage
+    /// context (run_id pinned) and optional agent/governance context.
+    ///
+    /// Clones the session's `SessionState` (cheap — internals are `Arc`-shared)
+    /// and attaches the per-request context as `SessionConfig` extensions, which
+    /// the OpenLineage provider and the policy layer read back at planning time.
+    /// The extensions live only on this clone; the long-lived session is
+    /// untouched.
+    pub fn lakehouse_for_query(
+        &self,
+        lineage: LineageContext,
+        agent: Option<AgentContext>,
+    ) -> LakehouseSession {
+        let mut state = self.ctx.state();
+        state
+            .config_mut()
+            .set_extension(Arc::new(LineageContextExt(lineage)));
+        if let Some(agent) = agent {
+            state
+                .config_mut()
+                .set_extension(Arc::new(AgentContextExt(agent)));
+        }
+        LakehouseSession::new(
+            state,
+            self.policy.clone(),
+            self.principal.clone(),
+            self.unity.clone(),
+        )
+    }
+
+    /// Drop statements idle longer than `ttl` (backstops `get_flight_info` calls
+    /// that mint a handle but are never fetched).
+    pub fn sweep_statements(&self, ttl: Duration) {
+        self.statements.retain(|_, s| s.created_at.elapsed() < ttl);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_env(&self) -> Arc<datafusion::execution::runtime_env::RuntimeEnv> {
+        self.ctx.runtime_env()
+    }
+}
+
+/// Owns the set of live [`Session`]s, keyed by session id, with idle-TTL
+/// eviction.
+pub struct SessionStore {
+    engine: Arc<Engine>,
+    sessions: DashMap<String, Arc<Session>>,
+    ttl: Duration,
+}
+
+impl SessionStore {
+    pub fn new(engine: Arc<Engine>, ttl: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            engine,
+            sessions: DashMap::new(),
+            ttl,
+        })
+    }
+
+    /// Mint a brand-new session for a connection, returning its id and handle.
+    pub fn create(&self, principal: PrincipalIdentity) -> Result<(String, Arc<Session>)> {
+        let id = Uuid::new_v4().to_string();
+        let session = self.engine.new_session(principal)?;
+        self.sessions.insert(id.clone(), session.clone());
+        Ok((id, session))
+    }
+
+    /// Resolve a session by id, touching its idle timer. `None` if unknown.
+    pub fn get(&self, id: &str) -> Option<Arc<Session>> {
+        let session = self.sessions.get(id)?.clone();
+        session.touch();
+        Some(session)
+    }
+
+    /// Resolve (or create) the stable ephemeral session for a principal that did
+    /// not establish a session via handshake.
+    ///
+    /// Keyed by `ephemeral:{principal_uid}` so the two RPCs of one logical query
+    /// (`get_flight_info_*` then `do_get_*`) share a statement store even without
+    /// a client-provided session id. This preserves today's no-handshake demo
+    /// behaviour (DuckDB, plain pyarrow) under the new model.
+    pub fn ephemeral_for(&self, principal: PrincipalIdentity) -> Result<Arc<Session>> {
+        let key = format!("ephemeral:{}", principal.uid);
+        if let Some(session) = self.get(&key) {
+            return Ok(session);
+        }
+        let session = self.engine.new_session(principal)?;
+        // `entry` guards against a concurrent insert racing between the `get`
+        // above and here.
+        let session = self
+            .sessions
+            .entry(key)
+            .or_insert(session)
+            .clone();
+        session.touch();
+        Ok(session)
+    }
+
+    /// Evict sessions idle longer than the configured TTL, and prune stale
+    /// statements from survivors.
+    pub fn sweep(&self) {
+        let ttl = self.ttl;
+        self.sessions.retain(|_, s| s.idle() < ttl);
+        for s in self.sessions.iter() {
+            s.sweep_statements(ttl);
+        }
+    }
+
+    /// Spawn a background sweeper on the **main** tokio runtime.
+    ///
+    /// Must not run on the CPU runtime, whose handle has IO/time disabled.
+    pub fn spawn_sweeper(self: &Arc<Self>) {
+        let store = self.clone();
+        let interval = std::cmp::max(self.ttl / 4, Duration::from_secs(30));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            loop {
+                tick.tick().await;
+                store.sweep();
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use cedar_oci::{Decision, EntityUid};
+
+    use super::*;
+    use crate::policy::StaticPolicy;
+
+    fn principal(name: &str) -> PrincipalIdentity {
+        PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
+    }
+
+    fn engine() -> Arc<Engine> {
+        Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, None)
+    }
+
+    #[tokio::test]
+    async fn store_create_and_resolve() {
+        let store = SessionStore::new(engine(), Duration::from_secs(60));
+        let (id, session) = store.create(principal("alice")).unwrap();
+
+        let resolved = store.get(&id).expect("session resolves by id");
+        assert!(Arc::ptr_eq(&session, &resolved), "same Arc<Session> handed back");
+        assert!(store.get("unknown").is_none());
+    }
+
+    #[tokio::test]
+    async fn ttl_evicts_idle_sessions() {
+        // Zero TTL: any positive idle time evicts on the next sweep.
+        let store = SessionStore::new(engine(), Duration::ZERO);
+        let (id, session) = store.create(principal("alice")).unwrap();
+        // Back-date last-used so idle() is clearly positive without sleeping.
+        session.last_used_ms.store(0, Ordering::Relaxed);
+        // created_at is ~now, so idle() ~= 0; force a measurable gap.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        store.sweep();
+        assert!(store.get(&id).is_none(), "idle session evicted by sweep");
+    }
+
+    #[tokio::test]
+    async fn ephemeral_is_stable_per_principal() {
+        let store = SessionStore::new(engine(), Duration::from_secs(60));
+        let a = store.ephemeral_for(principal("alice")).unwrap();
+        let a2 = store.ephemeral_for(principal("alice")).unwrap();
+        let b = store.ephemeral_for(principal("bob")).unwrap();
+
+        assert!(Arc::ptr_eq(&a, &a2), "same principal -> same ephemeral session");
+        assert!(!Arc::ptr_eq(&a, &b), "different principal -> different session");
+    }
+
+    /// Credential isolation: distinct sessions must own distinct RuntimeEnvs so
+    /// vended UC object stores cannot cross principals.
+    #[tokio::test]
+    async fn sessions_have_isolated_runtimes() {
+        let store = SessionStore::new(engine(), Duration::from_secs(60));
+        let (_, a) = store.create(principal("alice")).unwrap();
+        let (_, b) = store.create(principal("bob")).unwrap();
+        assert!(
+            !Arc::ptr_eq(&a.runtime_env(), &b.runtime_env()),
+            "each session must own its own RuntimeEnv / object-store registry"
+        );
+    }
+
+    /// The per-query agent/governance context attached via `lakehouse_for_query`
+    /// is readable back from the session config (the seam the deferred agent PEP
+    /// will use).
+    #[tokio::test]
+    async fn agent_context_round_trips_through_session_config() {
+        use datafusion::catalog::Session as _;
+
+        let (_, session) = SessionStore::new(engine(), Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+        let agent = AgentContext {
+            agent_id: Some("agent-7".into()),
+            task: Some("summarize".into()),
+            ..Default::default()
+        };
+        let lh = session.lakehouse_for_query(LineageContext::default(), Some(agent.clone()));
+        let read = lh
+            .config()
+            .get_extension::<AgentContextExt>()
+            .expect("agent context attached");
+        assert_eq!(read.0, agent);
+    }
+
+    /// Regression guard for the cross-RPC correlation bug: the run id pinned in a
+    /// `StoredStatement` at planning time is reused at execution time, so every
+    /// OpenLineage event (START at plan, COMPLETE at stream end) carries the same
+    /// run id — even though planning and execution build separate per-query
+    /// sessions. See docs/adr/0003-per-statement-run-id-correlation.md.
+    #[tokio::test]
+    async fn pinned_run_id_correlates_start_and_complete() {
+        use std::sync::Mutex;
+
+        use async_trait::async_trait;
+        use datafusion::catalog::Session as _;
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::datasource::MemTable;
+        use datafusion_open_lineage::OpenLineageClient;
+        use datafusion_open_lineage::event::{RunEvent, RunEventType};
+        use datafusion_open_lineage::transport::{Transport, TransportError};
+
+        #[derive(Debug, Default, Clone)]
+        struct Recorder {
+            events: Arc<Mutex<Vec<RunEvent>>>,
+        }
+        #[async_trait]
+        impl Transport for Recorder {
+            async fn emit(&self, event: &RunEvent) -> Result<(), TransportError> {
+                self.events.lock().unwrap().push(event.clone());
+                Ok(())
+            }
+        }
+
+        let recorder = Recorder::default();
+        let client = OpenLineageClient::new(Arc::new(recorder.clone()));
+        let eng = Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, Some(client));
+        let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+
+        // A tiny table to scan.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])
+                .unwrap();
+        session
+            .ctx
+            .register_table("t", Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()))
+            .unwrap();
+
+        // Pin a run id in a stored statement (as get_flight_info_statement does).
+        let run_id = Uuid::now_v7();
+        let lineage = LineageContext {
+            run_id: Some(run_id),
+            sql: Some("SELECT id FROM t".into()),
+            ..Default::default()
+        };
+
+        // Execute through a per-query session decorated with the pinned context,
+        // as do_get_statement does (a separate session clone from planning).
+        let lh = session.lakehouse_for_query(lineage, None);
+        let plan = lh.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let physical = lh.create_physical_plan(&plan).await.unwrap();
+        let _ = datafusion::physical_plan::collect(physical, session.ctx.task_ctx())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events = recorder.events.lock().unwrap();
+        assert!(!events.is_empty(), "lineage events emitted");
+        for e in events.iter() {
+            assert_eq!(e.run.run_id, run_id, "every event carries the pinned run id");
+        }
+        assert!(
+            events.iter().any(|e| e.event_type == RunEventType::Start),
+            "a START event was emitted"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event_type == RunEventType::Complete),
+            "a COMPLETE event was emitted"
+        );
+    }
+}

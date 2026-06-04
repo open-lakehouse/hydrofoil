@@ -37,7 +37,10 @@ futures = "0.3"
 instrumented-object-store = "53.0.0"
 mimalloc = { version = "0.1", default-features = false }
 opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31.0", features = [
+    "http-proto",
+    "reqwest-blocking-client",
+] }
 opentelemetry_sdk = "0.31.0"
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = { version = "0.3", features = [
