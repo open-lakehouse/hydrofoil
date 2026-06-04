@@ -275,7 +275,12 @@ where
 }
 
 pin_project! {
-    /// Stream that buffers and chunks RecordBatches to respect size limits
+    /// Stream that buffers and chunks RecordBatches to respect size limits.
+    ///
+    /// Alternative to [`BatchSizer`] (the adapter the ingest path uses today);
+    /// retained as a seam for size-bounded chunking on the client. Not yet wired
+    /// in, hence `allow(dead_code)`.
+    #[allow(dead_code)]
     pub(crate) struct BatchChunkStream<S> {
         max_message_size: usize,
 
@@ -290,6 +295,7 @@ pin_project! {
     }
 }
 
+#[allow(dead_code)] // see BatchChunkStream: retained, not yet wired in
 impl<S> BatchChunkStream<S>
 where
     S: Stream<Item = Result<RecordBatch, ArrowError>>,

@@ -30,5 +30,8 @@ deltalake-core = { workspace = true, optional = true }
 rstest = { version = "0.26.1" }
 
 [features]
-default = ["tpcds"]
+# TPC-DS benchmark scaffolding (query set + table registration) is opt-in: it is
+# only exercised by the benchmark/integration tests, so it stays out of the
+# default build to keep that build warning-free. Enable with `--features tpcds`.
+default = []
 tpcds = ["deltalake-core"]

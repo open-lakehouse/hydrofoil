@@ -30,7 +30,7 @@ use datafusion_tracing::{
 };
 use delta_kernel::{Engine, Version};
 use deltalake_core::{
-    DeltaResult, DeltaTableConfig,
+    DeltaResult, DeltaTableConfig, DeltaTableError,
     delta_datafusion::DeltaScanNext,
     kernel::Snapshot,
     logstore::{ObjectStoreRef, commit_uri_from_version},
@@ -445,6 +445,10 @@ impl LakehouseTaskContext {
         Ok(provider)
     }
 
+    /// Build a logical scan of a Delta table by object-store URL (optionally at a
+    /// specific version). Retained as a seam for direct-by-location scans; the
+    /// catalog path resolves tables by name instead, so this isn't wired in yet.
+    #[allow(dead_code)]
     #[instrument(skip(self), level = "info")]
     pub async fn scan_delta_table(
         &self,
@@ -655,7 +659,12 @@ impl LogStore for DataFusionLogStore {
     }
 
     async fn read_commit_entry(&self, _version: u64) -> DeltaResult<Option<Bytes>> {
-        todo!("read_commit_entry")
+        // Deliberately unsupported: this is one of the deprecated/legacy `LogStore`
+        // APIs in delta-rs that hydrofoil does not use. Return a clean error rather
+        // than panicking; drop the override entirely once delta-rs removes it.
+        Err(DeltaTableError::generic(
+            "DataFusionLogStore::read_commit_entry is not implemented (deprecated LogStore API)",
+        ))
     }
 
     #[instrument(skip_all, level = "info")]
@@ -696,11 +705,19 @@ impl LogStore for DataFusionLogStore {
         _commit_or_bytes: CommitOrBytes,
         _: Uuid,
     ) -> Result<(), TransactionError> {
-        todo!("abort_commit_entry")
+        // Deliberately unsupported (deprecated LogStore API); see read_commit_entry.
+        Err(TransactionError::LogStoreError {
+            msg: "DataFusionLogStore::abort_commit_entry is not implemented (deprecated LogStore API)"
+                .to_string(),
+            source: "not implemented".into(),
+        })
     }
 
     async fn get_latest_version(&self, _current_version: u64) -> DeltaResult<u64> {
-        todo!("not get_latest_version")
+        // Deliberately unsupported (deprecated LogStore API); see read_commit_entry.
+        Err(DeltaTableError::generic(
+            "DataFusionLogStore::get_latest_version is not implemented (deprecated LogStore API)",
+        ))
     }
 
     fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
