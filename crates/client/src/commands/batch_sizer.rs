@@ -334,8 +334,7 @@ where
 
             let mut end = batch.num_rows();
 
-            if bytes_per_row > 0 {
-                let max_rows = *this.max_message_size / bytes_per_row;
+            if let Some(max_rows) = this.max_message_size.checked_div(bytes_per_row) {
                 end = std::cmp::min(start + max_rows, batch.num_rows());
             }
 

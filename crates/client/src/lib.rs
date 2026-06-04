@@ -132,7 +132,7 @@ mod tests {
             Field::new("value", DataType::Utf8, false),
         ]);
 
-        let _result = client
+        client
             .create_delta_table()
             .with_location("s3://open-lakehouse/test_table/")
             .with_table_name("test_table")

@@ -20,7 +20,8 @@ pub struct DeltaTableFactory;
 impl DeltaTableFactory {
     pub const FILE_FORMAT: &'static str = "DELTA";
 
-    pub fn new() -> Arc<dyn TableProviderFactory> {
+    /// The shared [`TableProviderFactory`] singleton for Delta external tables.
+    pub fn instance() -> Arc<dyn TableProviderFactory> {
         static INSTANCE: LazyLock<Arc<DeltaTableFactory>> =
             LazyLock::new(|| Arc::new(DeltaTableFactory));
         INSTANCE.clone()

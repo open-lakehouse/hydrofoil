@@ -21,11 +21,14 @@ use object_store::{
 ///
 /// Each backing store is expected to be rooted at the bucket (e.g. a
 /// `UCStore::root()`), so the full request path is forwarded unchanged.
+/// A registered route: a path `prefix` and the store that serves paths beneath
+/// it. `prefix` is matched on path-segment boundaries.
+type Route = (Path, Arc<dyn ObjectStore>);
+
 #[derive(Clone)]
 pub struct RoutingObjectStore {
     /// Routes ordered so that lookups can pick the longest matching prefix.
-    /// `(prefix, store)` — `prefix` is matched on path-segment boundaries.
-    routes: Arc<RwLock<Vec<(Path, Arc<dyn ObjectStore>)>>>,
+    routes: Arc<RwLock<Vec<Route>>>,
 }
 
 impl RoutingObjectStore {
@@ -45,7 +48,7 @@ impl RoutingObjectStore {
         routes.retain(|(p, _)| p != &prefix);
         routes.push((prefix, store));
         // Longest (most segments) first.
-        routes.sort_by(|(a, _), (b, _)| b.parts_count().cmp(&a.parts_count()));
+        routes.sort_by_key(|(p, _)| std::cmp::Reverse(p.parts_count()));
     }
 
     /// Resolve the backing store for `location`, returning the most specific

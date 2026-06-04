@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  ci:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # edition 2024 / rust-version 1.91 (see the workspace Cargo.toml). `stable`
+      # tracks the latest release, which satisfies that floor.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Caches ~/.cargo and ./target keyed on the lockfile; first run warms it,
+      # later runs skip recompiling the (large) git dependency tree.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # The same gate enforced locally: deny all warnings across every target and
+      # feature (incl. `governance` and the opt-in `tpcds` bench scaffolding).
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Live-integration tests (UC / OCI registry / a running hydrofoil) are
+      # marked #[ignore], so the default run needs no services.
+      - name: Test
+        run: cargo test --workspace --all-features
