@@ -32,6 +32,8 @@ pub use principal::PrincipalIdentity;
 
 #[cfg(feature = "governance")]
 pub use govern::{TablePolicy, govern_plan};
+#[cfg(feature = "governance")]
+pub use translate::{CedarResidualTranslator, ResidualTranslator};
 
 // Re-export the cedar identity/decision types through this crate so consumers
 // have a single import surface (they originate in `cedar-oci`).
