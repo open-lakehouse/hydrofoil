@@ -17,9 +17,23 @@ use serde::Serialize;
 use unitycatalog_client::UnityCatalogClient;
 
 pub use self::catalogs::*;
-use crate::unity::exec::ExecutableUnityCatalogStement;
+pub use self::exec::*;
+pub use self::schemas::*;
 
 mod catalogs;
+mod exec;
+mod schemas;
+
+/// A Unity Catalog DDL statement that can be executed against a live Unity
+/// Catalog instance, returning a single result [`RecordBatch`].
+#[async_trait::async_trait]
+pub trait ExecutableUnityCatalogStatement {
+    /// The Arrow schema of the [`RecordBatch`] returned by [`Self::execute`].
+    fn return_schema(&self) -> &DFSchemaRef;
+
+    /// Execute the statement against `client` and return its result batch.
+    async fn execute(&self, client: UnityCatalogClient) -> Result<RecordBatch>;
+}
 
 pub(crate) static CREATE_UC_RETURN_SCHEMA: LazyLock<DFSchemaRef> = LazyLock::new(|| {
     let arrow_schema = Schema::new(vec![
@@ -43,6 +57,8 @@ pub(crate) static DROP_UC_RETURN_SCHEMA: LazyLock<DFSchemaRef> = LazyLock::new(|
 pub enum UnityCatalogStatement {
     CreateCatalog(CreateCatalogStatement),
     DropCatalog(DropCatalogStatement),
+    CreateSchema(CreateSchemaStatement),
+    DropSchema(DropSchemaStatement),
 }
 
 impl From<CreateCatalogStatement> for UnityCatalogStatement {
@@ -57,6 +73,18 @@ impl From<DropCatalogStatement> for UnityCatalogStatement {
     }
 }
 
+impl From<CreateSchemaStatement> for UnityCatalogStatement {
+    fn from(value: CreateSchemaStatement) -> Self {
+        UnityCatalogStatement::CreateSchema(value)
+    }
+}
+
+impl From<DropSchemaStatement> for UnityCatalogStatement {
+    fn from(value: DropSchemaStatement) -> Self {
+        UnityCatalogStatement::DropSchema(value)
+    }
+}
+
 impl UnityCatalogStatement {
     pub fn command_name(&self) -> &str {
         use UnityCatalogStatement::*;
@@ -64,6 +92,8 @@ impl UnityCatalogStatement {
         match &self {
             CreateCatalog(_) => "CreateCatalog",
             DropCatalog(_) => "DropCatalog",
+            CreateSchema(_) => "CreateSchema",
+            DropSchema(_) => "DropSchema",
         }
     }
 
@@ -75,6 +105,12 @@ impl UnityCatalogStatement {
             DropCatalog(cmd) => write!(
                 f,
                 "DropCatalog: name={} if_exists={} cascade={}",
+                cmd.name, cmd.if_exists, cmd.cascade
+            ),
+            CreateSchema(cmd) => write!(f, "CreateSchema: name={}", cmd.name),
+            DropSchema(cmd) => write!(
+                f,
+                "DropSchema: name={} if_exists={} cascade={}",
                 cmd.name, cmd.if_exists, cmd.cascade
             ),
         }
@@ -117,13 +153,13 @@ impl UserDefinedLogicalNodeCore for ExecuteUnityCatalogPlanNode {
 }
 
 #[async_trait::async_trait]
-impl ExecutableUnityCatalogStement for UnityCatalogStatement {
+impl ExecutableUnityCatalogStatement for UnityCatalogStatement {
     fn return_schema(&self) -> &DFSchemaRef {
         use UnityCatalogStatement::*;
 
         match &self {
-            CreateCatalog(_) => &CREATE_UC_RETURN_SCHEMA,
-            DropCatalog(_) => &DROP_UC_RETURN_SCHEMA,
+            CreateCatalog(_) | CreateSchema(_) => &CREATE_UC_RETURN_SCHEMA,
+            DropCatalog(_) | DropSchema(_) => &DROP_UC_RETURN_SCHEMA,
         }
     }
 
@@ -133,6 +169,8 @@ impl ExecutableUnityCatalogStement for UnityCatalogStatement {
         match &self {
             CreateCatalog(cmd) => cmd.execute(client).await,
             DropCatalog(cmd) => cmd.execute(client).await,
+            CreateSchema(cmd) => cmd.execute(client).await,
+            DropSchema(cmd) => cmd.execute(client).await,
         }
     }
 }
@@ -173,4 +211,99 @@ pub(crate) fn drop_response_to_batch(
             Arc::new(StringArray::from(status)),
         ],
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlparser::ast::Ident;
+
+    use super::*;
+    use crate::sql::{CreateCatalogStatement, DropCatalogStatement, DropSchemaStatement};
+
+    fn name(parts: &[&str]) -> sqlparser::ast::ObjectName {
+        parts
+            .iter()
+            .map(|p| Ident::new(*p))
+            .collect::<Vec<_>>()
+            .into()
+    }
+
+    #[test]
+    fn create_statements_use_create_return_schema() {
+        let create_catalog: UnityCatalogStatement = CreateCatalogStatement {
+            name: name(&["c"]),
+            if_not_exists: false,
+            using_share: None,
+            managed_location: None,
+            default_collation: None,
+            comment: None,
+            options: None,
+        }
+        .into();
+        let create_schema: UnityCatalogStatement = CreateSchemaStatement {
+            name: name(&["c", "s"]),
+            if_not_exists: false,
+            managed_location: None,
+            comment: None,
+            properties: None,
+        }
+        .into();
+        for stmt in [create_catalog, create_schema] {
+            assert_eq!(stmt.return_schema(), &*CREATE_UC_RETURN_SCHEMA);
+            // The logical node mirrors the statement's return schema.
+            let node = ExecuteUnityCatalogPlanNode { statement: stmt };
+            assert_eq!(node.schema(), &*CREATE_UC_RETURN_SCHEMA);
+        }
+    }
+
+    #[test]
+    fn drop_statements_use_drop_return_schema() {
+        let drop_catalog: UnityCatalogStatement = DropCatalogStatement {
+            name: name(&["c"]),
+            if_exists: false,
+            cascade: false,
+        }
+        .into();
+        let drop_schema: UnityCatalogStatement = DropSchemaStatement {
+            name: name(&["c", "s"]),
+            if_exists: false,
+            cascade: false,
+        }
+        .into();
+        for stmt in [drop_catalog, drop_schema] {
+            assert_eq!(stmt.return_schema(), &*DROP_UC_RETURN_SCHEMA);
+        }
+    }
+
+    #[test]
+    fn command_names_are_stable() {
+        // These names are the contract the Cedar visitor matches on.
+        let cases: [(UnityCatalogStatement, &str); 2] = [
+            (
+                CreateCatalogStatement {
+                    name: name(&["c"]),
+                    if_not_exists: false,
+                    using_share: None,
+                    managed_location: None,
+                    default_collation: None,
+                    comment: None,
+                    options: None,
+                }
+                .into(),
+                "CreateCatalog",
+            ),
+            (
+                DropSchemaStatement {
+                    name: name(&["c", "s"]),
+                    if_exists: false,
+                    cascade: false,
+                }
+                .into(),
+                "DropSchema",
+            ),
+        ];
+        for (stmt, expected) in cases {
+            assert_eq!(stmt.command_name(), expected);
+        }
+    }
 }

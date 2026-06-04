@@ -14,7 +14,7 @@ use datafusion::{
         SessionState, SessionStateBuilder, TaskContext, context::ExecutionProps,
         runtime_env::RuntimeEnv,
     },
-    logical_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF},
+    logical_expr::{AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF},
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
@@ -39,6 +39,7 @@ use url::Url;
 use uuid::Uuid;
 
 use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
+use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension};
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use datafusion_open_lineage::context::LineageContext;
@@ -222,6 +223,18 @@ impl LakehouseSession {
         query: impl AsRef<str> + Send + 'static,
     ) -> Result<LogicalPlan> {
         let query = query.as_ref();
+
+        // Recognize Unity Catalog DDL (`CREATE`/`DROP CATALOG`/`SCHEMA`) up
+        // front via hydrofoil's custom parser. Such statements are lowered to an
+        // `ExecuteUnityCatalogPlanNode` extension that runs against the live UC
+        // client at execution time; authorization is the Cedar gate's job (the
+        // node is an `Extension`, deliberately authorized in `create_physical_plan`,
+        // not waved through the `SQLOptions` DDL gate). Everything else falls
+        // through to DataFusion's planner.
+        if let Some(plan) = self.try_plan_unity_ddl(query)? {
+            return Ok(plan);
+        }
+
         let Some(unity) = self.unity.as_ref() else {
             return self.inner.create_logical_plan(query).await;
         };
@@ -242,6 +255,36 @@ impl LakehouseSession {
             }
         }
         state.statement_to_plan(statement).await
+    }
+
+    /// If `query` is a single Unity Catalog DDL statement, lower it to an
+    /// `ExecuteUnityCatalogPlanNode` extension plan; otherwise return `None` so
+    /// the caller falls through to DataFusion's planner.
+    ///
+    /// Only the leading keywords hydrofoil's parser recognizes (`CREATE`/`DROP
+    /// CATALOG`/`SCHEMA`) produce a UC statement; for anything else `HFParser`
+    /// delegates to DataFusion and we hand control back. A parse error here is
+    /// also handed back so DataFusion produces the canonical diagnostic.
+    fn try_plan_unity_ddl(&self, query: &str) -> Result<Option<LogicalPlan>> {
+        use deltalake_datafusion::sql::{ExecuteUnityCatalogPlanNode, HFParser, Statement};
+
+        let Ok(mut statements) = HFParser::parse_sql(query) else {
+            return Ok(None);
+        };
+        // A UC DDL request is exactly one statement; multi-statement or non-UC
+        // input is not ours to plan.
+        if statements.len() != 1 {
+            return Ok(None);
+        }
+        match statements.pop_front() {
+            Some(Statement::UnityCatalog(statement)) => {
+                let node = ExecuteUnityCatalogPlanNode { statement };
+                Ok(Some(LogicalPlan::Extension(Extension {
+                    node: Arc::new(node),
+                })))
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -489,12 +532,49 @@ impl TaskExt for SessionContext {
     }
 }
 
+/// A `QueryPlanner` that lowers logical plans with `DefaultPhysicalPlanner`,
+/// extended to recognize the Unity Catalog DDL extension node via
+/// [`UnityCatalogPlanner`].
+struct UnityQueryPlanner {
+    inner: datafusion::physical_planner::DefaultPhysicalPlanner,
+}
+
+impl std::fmt::Debug for UnityQueryPlanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnityQueryPlanner").finish_non_exhaustive()
+    }
+}
+
+impl Default for UnityQueryPlanner {
+    fn default() -> Self {
+        Self {
+            inner: datafusion::physical_planner::DefaultPhysicalPlanner::with_extension_planners(
+                vec![Arc::new(UnityCatalogPlanner)],
+            ),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl datafusion::execution::context::QueryPlanner for UnityQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_planner::PhysicalPlanner as _;
+        self.inner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn create_session(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
 ) -> Result<SessionContext> {
-    create_session_for(session_id, lineage, None)
+    create_session_for(session_id, lineage, None, None)
 }
 
 /// Build a session context, optionally binding a [`PrincipalIdentity`] into the
@@ -508,6 +588,7 @@ pub fn create_session_for(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
     principal: Option<PrincipalIdentity>,
+    unity_factory: Option<Arc<UnityObjectStoreFactory>>,
 ) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
@@ -532,9 +613,24 @@ pub fn create_session_for(
         session_config = crate::identity::with_principal(session_config, principal);
     }
 
+    // When Unity Catalog is wired, make its client available to the physical
+    // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
+    if let Some(factory) = unity_factory.as_ref() {
+        session_config.set_extension(Arc::new(UnityClientExtension(
+            factory.unity_client().clone(),
+        )));
+    }
+
+    // Base physical planner that also lowers the Unity Catalog DDL extension
+    // node (`ExecuteUnityCatalogPlanNode`) to its executor. OpenLineage wraps
+    // this planner below, so the wrapping preserves UC-DDL planning.
+    let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
+        Arc::new(UnityQueryPlanner::default());
+
     let mut session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
+        .with_query_planner(query_planner)
         .with_table_factory(
             DeltaTableFactory::FILE_FORMAT.to_string(),
             DeltaTableFactory::instance(),

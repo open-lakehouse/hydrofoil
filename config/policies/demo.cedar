@@ -68,3 +68,28 @@ permit (
     resource
 )
 when { resource.region == principal.region };
+
+// ---------------------------------------------------------------------------
+// Layer 1 — Unity Catalog DDL gate. Permit catalog/schema create + drop only for
+// principals carrying an `admin` attribute. A caller without it (e.g. a
+// read-only analyst) is denied the DDL outright — the statement is rejected
+// before execution (fail-closed). This keys on a principal attribute so the demo
+// needs no per-securable entity wiring, mirroring the read gate above.
+//
+// Written as four per-action `==` permits (rather than one `action in [...]`)
+// so each folds cleanly against a concrete request action under Cedar partial
+// evaluation — the Layer-2 governance pass evaluates the whole policy set over a
+// `read_table` request, and an unresolved `action in [...]` membership would
+// otherwise survive as a residual and be (incorrectly) treated as a row filter.
+// ---------------------------------------------------------------------------
+permit (principal, action == Action::"create_catalog", resource)
+when { principal has admin && principal.admin == "true" };
+
+permit (principal, action == Action::"drop_catalog", resource)
+when { principal has admin && principal.admin == "true" };
+
+permit (principal, action == Action::"create_schema", resource)
+when { principal has admin && principal.admin == "true" };
+
+permit (principal, action == Action::"drop_schema", resource)
+when { principal has admin && principal.admin == "true" };

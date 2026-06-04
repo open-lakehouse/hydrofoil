@@ -370,6 +370,71 @@ mod tests {
         assert_eq!(decision, Decision::Deny);
     }
 
+    /// Minimal extension node named after a Unity Catalog DDL command, used to
+    /// build a UC-DDL logical plan without depending on the UC crate.
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+    struct FakeDdlNode;
+
+    impl datafusion::logical_expr::UserDefinedLogicalNodeCore for FakeDdlNode {
+        fn name(&self) -> &str {
+            "CreateCatalog"
+        }
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![]
+        }
+        fn schema(&self) -> &datafusion::common::DFSchemaRef {
+            use std::sync::LazyLock;
+            static EMPTY: LazyLock<datafusion::common::DFSchemaRef> =
+                LazyLock::new(|| Arc::new(datafusion::common::DFSchema::empty()));
+            &EMPTY
+        }
+        fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
+            vec![]
+        }
+        fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "CreateCatalog: name=demo")
+        }
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<datafusion::logical_expr::Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self)
+        }
+    }
+
+    fn create_catalog_plan() -> LogicalPlan {
+        use datafusion::logical_expr::Extension;
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(FakeDdlNode),
+        })
+    }
+
+    #[tokio::test]
+    async fn uc_ddl_denied_without_permit() {
+        // No policy grants create_catalog -> Cedar default-deny (fail-closed).
+        let pol = policy(
+            InMemory::new(
+                r#"permit(principal, action == Action::"read_table", resource);"#,
+            ),
+            InMemory::new(""),
+        );
+        let decision = pol.is_allowed(&create_catalog_plan(), &alice()).await.unwrap();
+        assert_eq!(decision, Decision::Deny);
+    }
+
+    #[tokio::test]
+    async fn uc_ddl_allowed_with_permit() {
+        let pol = policy(
+            InMemory::new(
+                r#"permit(principal == User::"alice", action == Action::"create_catalog", resource);"#,
+            ),
+            InMemory::new(""),
+        );
+        let decision = pol.is_allowed(&create_catalog_plan(), &alice()).await.unwrap();
+        assert_eq!(decision, Decision::Allow);
+    }
+
     #[cfg(feature = "governance")]
     mod governance {
         use super::*;

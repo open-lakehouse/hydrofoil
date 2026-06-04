@@ -97,6 +97,7 @@ impl Engine {
             Uuid::new_v4(),
             self.lineage.clone(),
             Some(principal.clone()),
+            self.unity_factory.clone(),
         )?;
 
         let unity = self
