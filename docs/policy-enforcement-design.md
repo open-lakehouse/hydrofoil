@@ -428,6 +428,25 @@ The backlog that originally appeared here (the gaps that made the gate unsound) 
 | Error semantics undefined | `cedar.rs` / `govern.rs` fail closed: authorizer/partial-eval error ⇒ deny / mask-all; unsupported DDL ⇒ `DenyUnsupported` | ✅ done |
 | **Authentication interceptor (trust boundary)** | not yet built — tonic interceptor validating bearer token / mTLS upstream of `principal_from_metadata` | ⛔ open |
 
+## Layer 2 — shipped, with one known limitation
+
+Layer 2 (`govern_plan` / `Policy::table_policy` in `datafusion-cedar`, behind the
+`governance` feature) injects row filters and column masks from partial-eval
+residuals, and is wired into both the statement and ingest paths. The demo
+(`config/policies/demo.cedar`, `notebooks/policy_demo.py`) exercises it.
+
+**Known limitation — column masking is per-table, not per-principal at the column
+level.** A residual only survives partial evaluation when its condition references
+the *unknown* `resource` (e.g. `resource.region == principal.region`). A mask
+condition over the *concrete* principal alone (e.g. `principal.region == "eu"`)
+resolves fully — to permit (no residual ⇒ no mask) or to inapplicable (no residual
+⇒ also no mask) — so it never masks. Consequently a column mask applies to *all*
+callers of a table, not a per-principal subset. Row filters do not share this
+limitation: principal attributes fold into the surviving residual as literals
+(`col("region") == "eu"`), so the row set genuinely varies per principal. Lifting
+this would need value-level conditional masking (a `CASE` keyed on the principal)
+rather than the present column-replacement projection — tracked as future work.
+
 ## Risks
 
 - **`partial-eval` maturity.** Non-default, evolving Cedar feature; reachable via

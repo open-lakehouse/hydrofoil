@@ -349,6 +349,27 @@ mod tests {
         assert_eq!(decision, Decision::Deny);
     }
 
+    // The shipped demo policy's Layer-1 gate (`notebooks/policy_demo.py`):
+    // a principal with a `region` attribute is permitted to read; one without is
+    // denied the whole query.
+    const DEMO_POLICY: &str = include_str!("../../../config/policies/demo.cedar");
+
+    #[tokio::test]
+    async fn demo_policy_gate_allows_principal_with_region() {
+        let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
+        // alice() carries region=eu.
+        let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
+        assert_eq!(decision, Decision::Allow);
+    }
+
+    #[tokio::test]
+    async fn demo_policy_gate_denies_principal_without_region() {
+        let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
+        let carol = PrincipalIdentity::new(EntityUid::from_str("User::\"carol\"").unwrap());
+        let decision = pol.is_allowed(&scan_plan(), &carol).await.unwrap();
+        assert_eq!(decision, Decision::Deny);
+    }
+
     #[cfg(feature = "governance")]
     mod governance {
         use super::*;
@@ -474,6 +495,43 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
+        }
+
+        // ---- Regression tests for the shipped demo policy --------------------
+        // `config/policies/demo.cedar` backs `notebooks/policy_demo.py`. These
+        // assert the policy still produces the governance the notebook narrates,
+        // so the demo can't silently rot. (`DEMO_POLICY` comes from `super`.)
+
+        fn bob() -> PrincipalIdentity {
+            PrincipalIdentity::new(EntityUid::from_str("User::\"bob\"").unwrap())
+                .with_attribute("region", "us")
+        }
+
+        #[tokio::test]
+        async fn demo_policy_alice_eu_sees_eu_rows_ssn_masked() {
+            let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
+            // Row filter restricts to the principal's region (eu).
+            assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
+            // The column mask is over the unknown resource, so it always survives:
+            // ssn is masked for every caller of the table.
+            assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
+        }
+
+        #[tokio::test]
+        async fn demo_policy_bob_us_sees_us_rows_ssn_masked() {
+            let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &bob())
+                .await
+                .unwrap();
+            // Row filter restricts to the principal's region (us) — the
+            // per-principal axis differs from alice purely via the folded literal.
+            assert_eq!(tp.row_filters, vec![col("region").eq(lit("us"))]);
+            assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
         }
     }
 }
