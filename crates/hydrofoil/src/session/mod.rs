@@ -18,7 +18,7 @@ use datafusion::{
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
-use datafusion_cedar::PrincipalIdentity;
+use datafusion_cedar::{EvalContext, PrincipalIdentity};
 use datafusion_open_lineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
@@ -65,8 +65,9 @@ async fn govern_plan(
     plan: &LogicalPlan,
     policy: &dyn Policy,
     principal: &PrincipalIdentity,
+    eval: &EvalContext,
 ) -> Result<LogicalPlan> {
-    datafusion_cedar::govern_plan(plan, policy, principal).await
+    datafusion_cedar::govern_plan(plan, policy, principal, eval).await
 }
 
 #[cfg(not(feature = "governance"))]
@@ -74,6 +75,7 @@ async fn govern_plan(
     plan: &LogicalPlan,
     _policy: &dyn Policy,
     _principal: &PrincipalIdentity,
+    _eval: &EvalContext,
 ) -> Result<LogicalPlan> {
     Ok(plan.clone())
 }
@@ -162,11 +164,14 @@ impl LakehouseCtx {
         // itself. Inject fine-grained governance (row filters + column masks)
         // before optimization, then gate on the optimized plan to match the
         // statement path's contract (projections/filters pushed down first).
-        let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal).await?;
+        // No catalog facts are gathered on this path yet; PR6 populates the
+        // EvalContext (catalog facts + correlation id + fact store).
+        let eval = EvalContext::default();
+        let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal, &eval).await?;
         let optimized_plan = self.inner.state().optimize(&governed)?;
         if self
             .policy
-            .is_allowed(&optimized_plan, &self.principal)
+            .is_allowed(&optimized_plan, &self.principal, &eval)
             .await?
             == Decision::Deny
         {
@@ -328,11 +333,15 @@ impl Session for LakehouseSession {
         // masked-away columns are pruned. Then optimize, so the coarse gate
         // sees projections/filters pushed down to the table scan level and can
         // authorize based on the actual data being accessed.
-        let governed = govern_plan(logical_plan, self.policy.as_ref(), &self.principal).await?;
+        // No catalog facts are gathered yet; PR6 populates the EvalContext
+        // (catalog facts + correlation id + fact store).
+        let eval = EvalContext::default();
+        let governed =
+            govern_plan(logical_plan, self.policy.as_ref(), &self.principal, &eval).await?;
         let optimized_plan = self.inner.optimize(&governed)?;
         if self
             .policy
-            .is_allowed(&optimized_plan, &self.principal)
+            .is_allowed(&optimized_plan, &self.principal, &eval)
             .await?
             == Decision::Deny
         {
@@ -768,6 +777,7 @@ mod integration_tests {
             &self,
             _plan: &LogicalPlan,
             _p: &PrincipalIdentity,
+            _eval: &EvalContext,
         ) -> Result<Decision> {
             Ok(Decision::Deny)
         }
@@ -901,6 +911,7 @@ mod integration_tests {
                 &self,
                 _p: &LogicalPlan,
                 _pr: &PrincipalIdentity,
+                _eval: &EvalContext,
             ) -> Result<Decision> {
                 Ok(Decision::Allow)
             }
@@ -909,6 +920,7 @@ mod integration_tests {
                 _table: &TableReference,
                 _schema: &DFSchema,
                 _principal: &PrincipalIdentity,
+                _eval: &EvalContext,
             ) -> Result<TablePolicy> {
                 let mut masks = HashMap::new();
                 masks.insert("ssn".to_string(), lit("***"));

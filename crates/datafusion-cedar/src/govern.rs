@@ -17,6 +17,7 @@ use datafusion::common::{Column, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
+use crate::facts::EvalContext;
 use crate::policy::Policy;
 use crate::principal::PrincipalIdentity;
 
@@ -65,6 +66,7 @@ pub async fn govern_plan(
     plan: &LogicalPlan,
     policy: &dyn Policy,
     principal: &PrincipalIdentity,
+    eval: &EvalContext,
 ) -> Result<LogicalPlan> {
     // Phase 1: collect tables, then await per-table policy.
     let mut collector = TableCollector { tables: vec![] };
@@ -76,7 +78,7 @@ pub async fn govern_plan(
             continue;
         }
         let tp = policy
-            .table_policy(&table, schema.as_ref(), principal)
+            .table_policy(&table, schema.as_ref(), principal, eval)
             .await?;
         if !tp.is_empty() {
             policies.insert(table, tp);
@@ -163,6 +165,7 @@ mod tests {
             &self,
             _plan: &LogicalPlan,
             _principal: &PrincipalIdentity,
+            _eval: &EvalContext,
         ) -> DFResult<Decision> {
             Ok(Decision::Allow)
         }
@@ -171,6 +174,7 @@ mod tests {
             _table: &TableReference,
             _schema: &DFSchema,
             _principal: &PrincipalIdentity,
+            _eval: &EvalContext,
         ) -> DFResult<TablePolicy> {
             Ok(self.0.clone())
         }
@@ -197,7 +201,7 @@ mod tests {
     async fn no_policy_leaves_plan_unchanged() {
         let policy = FixedPolicy(TablePolicy::default());
         let plan = scan();
-        let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
+        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
         assert_eq!(format!("{plan:?}"), format!("{governed:?}"));
     }
 
@@ -207,7 +211,7 @@ mod tests {
             row_filters: vec![col("region").eq(lit("eu"))],
             column_masks: Default::default(),
         });
-        let governed = govern_plan(&scan(), &policy, &principal()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
         // Top of the governed subtree is a Filter.
         assert!(
             matches!(governed, LogicalPlan::Filter(_)),
@@ -223,7 +227,7 @@ mod tests {
             row_filters: vec![],
             column_masks: masks,
         });
-        let governed = govern_plan(&scan(), &policy, &principal()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
         // A Projection wraps the scan; the masked column is a literal, not a
         // bare column reference (so the optimizer cannot absorb it).
         let LogicalPlan::Projection(proj) = &governed else {
@@ -260,7 +264,7 @@ mod tests {
             row_filters: vec![!col("region").eq(lit("blocked"))],
             column_masks: Default::default(),
         });
-        let governed = govern_plan(&scan(), &policy, &principal()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
         let LogicalPlan::Filter(f) = &governed else {
             panic!("expected Filter, got: {governed:?}");
         };
@@ -285,6 +289,7 @@ mod tests {
             &self,
             _plan: &LogicalPlan,
             _principal: &PrincipalIdentity,
+            _eval: &EvalContext,
         ) -> DFResult<Decision> {
             Ok(Decision::Allow)
         }
@@ -293,6 +298,7 @@ mod tests {
             table: &TableReference,
             _schema: &DFSchema,
             _principal: &PrincipalIdentity,
+            _eval: &EvalContext,
         ) -> DFResult<TablePolicy> {
             if self.err {
                 return Err(datafusion::common::plan_datafusion_err!("policy boom"));
@@ -345,7 +351,7 @@ mod tests {
             err: false,
         };
 
-        let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
+        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
         let rendered = format!("{governed:?}");
         // Exactly one Filter was injected (for `a`), not two — `b` is ungoverned.
         assert_eq!(
@@ -365,7 +371,7 @@ mod tests {
             by_table: HashMap::new(),
             err: true,
         };
-        let result = govern_plan(&scan(), &policy, &principal()).await;
+        let result = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await;
         assert!(result.is_err(), "policy resolution error must propagate");
     }
 
@@ -424,7 +430,7 @@ mod tests {
                 .unwrap()
                 .into_unoptimized_plan();
 
-            let governed = govern_plan(&plan, &mask_ssn(), &principal()).await.unwrap();
+            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default()).await.unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // The literal mask must appear in the optimized plan, and the raw
@@ -450,7 +456,7 @@ mod tests {
                 .unwrap()
                 .into_unoptimized_plan();
 
-            let governed = govern_plan(&plan, &mask_ssn(), &principal()).await.unwrap();
+            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default()).await.unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // Execute and confirm the predicate matched the MASKED value, not
@@ -481,7 +487,7 @@ mod tests {
                 row_filters: vec![col("region").eq(lit("eu"))],
                 column_masks: Default::default(),
             });
-            let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
+            let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // Only the 'eu' row survives -> 1 row.

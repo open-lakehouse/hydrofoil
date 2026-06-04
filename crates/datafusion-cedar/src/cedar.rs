@@ -1,17 +1,58 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
 use cedar_local_agent::public::{SimpleEntityProvider, SimplePolicySetProvider};
-use cedar_policy::Entities;
+use cedar_policy::{Entities, Entity, RestrictedExpression};
 use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::sql::TableReference;
 
 use cedar_oci::{Decision, OciPolicyProvider};
 
+use crate::facts::{EvalContext, TableFacts};
 use crate::policy::Policy;
 use crate::principal::PrincipalIdentity;
-use crate::visitor::authorize_plan;
+use crate::visitor::{PlanRequest, authorize_plan, table_resource_uid};
+
+/// Build the request-time `Table` resource entity carrying the catalog facts,
+/// so policies can resolve `resource.owner/readers/writers/tags/column_tags`.
+///
+/// The entity uid is exactly `table_resource_uid(table_ref)` — the same uid the
+/// authorization request resolves against — so cedar-local-agent merges this
+/// attributed entity onto the request's `resource`. Returns `None` when there
+/// are no facts to fold (the resource then resolves from the provider's static
+/// bundle alone, as before).
+fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity> {
+    if facts.is_empty() {
+        return None;
+    }
+    let set = |items: &std::collections::BTreeSet<String>| {
+        RestrictedExpression::new_set(items.iter().map(|s| RestrictedExpression::new_string(s.clone())))
+    };
+
+    let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
+    if let Some(owner) = &facts.owner {
+        attrs.insert("owner".into(), RestrictedExpression::new_string(owner.clone()));
+    }
+    attrs.insert("readers".into(), set(&facts.readers));
+    attrs.insert("writers".into(), set(&facts.writers));
+    attrs.insert("tags".into(), set(&facts.tags));
+    // column_tags as a Cedar record { <col>: Set<String>, ... }.
+    let column_tags = facts
+        .column_tags
+        .iter()
+        .map(|(col, tags)| (col.clone(), set(tags)));
+    if let Ok(rec) = RestrictedExpression::new_record(column_tags) {
+        attrs.insert("column_tags".into(), rec);
+    }
+
+    // Parents (group hierarchy) are not a resource concept here; an attribute
+    // failure falls back to no entity so authorization stays fail-closed
+    // (resource attrs simply don't resolve) rather than erroring open.
+    Entity::new(table_resource_uid(table_ref), attrs, Default::default()).ok()
+}
 
 #[cfg(feature = "governance")]
 use {
@@ -20,7 +61,6 @@ use {
     cedar_policy::{EntityTypeName, RequestBuilder},
     datafusion::common::DFSchema,
     datafusion::logical_expr::lit,
-    datafusion::sql::TableReference,
     std::str::FromStr as _,
 };
 
@@ -80,21 +120,32 @@ where
         &self,
         logical_plan: &LogicalPlan,
         principal: &PrincipalIdentity,
+        eval: &EvalContext,
     ) -> Result<Decision> {
         let requests = authorize_plan(logical_plan, principal)?;
 
-        // Supply the principal as a request-time entity so policies can resolve
-        // `principal.<attr>` references. cedar-local-agent merges this with the
-        // entities the provider vends.
-        let principal_entities = Entities::from_entities([principal.to_entity()], None)
-            .unwrap_or_else(|_| Entities::empty());
+        for PlanRequest { request, table } in requests {
+            // Supply the principal as a request-time entity so policies can
+            // resolve `principal.<attr>` references, plus — when this request is
+            // over a table with gathered catalog facts — the `Table` resource
+            // entity carrying `resource.owner/readers/writers/tags/column_tags`.
+            // cedar-local-agent merges these with the entities the provider vends.
+            let mut entities = vec![principal.to_entity()];
+            if let Some(table_ref) = &table {
+                if let Some(facts) = eval.catalog_facts.get(table_ref) {
+                    if let Some(entity) = table_entity(table_ref, &facts) {
+                        entities.push(entity);
+                    }
+                }
+            }
+            let request_entities =
+                Entities::from_entities(entities, None).unwrap_or_else(|_| Entities::empty());
 
-        for request in requests {
             // Fail closed: any authorizer error denies the query rather than
             // letting it through.
             let decision = match self
                 .authorizer
-                .is_authorized(&request, &principal_entities)
+                .is_authorized(&request, &request_entities)
                 .await
             {
                 Ok(response) => response.decision(),
@@ -119,6 +170,7 @@ where
         table: &TableReference,
         _schema: &DFSchema,
         principal: &PrincipalIdentity,
+        _eval: &EvalContext,
     ) -> Result<TablePolicy> {
         use cedar_oci::{EntityId, EntityUid};
 
@@ -325,7 +377,9 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
+        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Allow);
     }
 
@@ -338,15 +392,87 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
+        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Deny);
     }
 
     #[tokio::test]
     async fn is_allowed_fails_closed_on_provider_error() {
         let pol = policy(ErrProvider, ErrProvider);
-        let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
+        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Deny);
+    }
+
+    // --- Resource entity folding (PR3): catalog facts gathered at resolution
+    // are folded into the request-time `Table` resource entity, so a policy can
+    // gate on `resource.<attr>` with no static-bundle entity for the table. ---
+
+    /// An `EvalContext` whose sink records `facts` for the bare table `t` that
+    /// `scan_plan()` reads.
+    fn eval_with_table_facts(facts: crate::TableFacts) -> EvalContext {
+        let sink = crate::CatalogFactSink::new();
+        sink.record(TableReference::bare("t"), facts);
+        EvalContext {
+            catalog_facts: sink,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn is_allowed_resolves_resource_tags_from_folded_facts() {
+        // The policy permits only when the table carries the `pii` tag — an
+        // attribute that exists *only* in the gathered catalog facts (the entity
+        // provider is empty, so without folding there is no `resource.tags`).
+        let pol = policy(
+            InMemory::new(
+                r#"permit(principal, action == Action::"read_table", resource)
+                   when { resource.tags.contains("pii") };"#,
+            ),
+            InMemory::new(""),
+        );
+
+        let facts = crate::TableFacts {
+            tags: ["pii".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        let allow = pol
+            .is_allowed(&scan_plan(), &alice(), &eval_with_table_facts(facts))
+            .await
+            .unwrap();
+        assert_eq!(allow, Decision::Allow, "pii-tagged table is permitted");
+
+        // Without the fact (empty EvalContext) the attribute does not resolve,
+        // so the `when` guard is unsatisfied and default-deny applies.
+        let deny = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
+        assert_eq!(deny, Decision::Deny, "untagged table falls to default-deny");
+    }
+
+    #[tokio::test]
+    async fn is_allowed_resolves_resource_readers_from_folded_facts() {
+        // Membership-style gate keyed on `resource.readers` carried by the facts.
+        let pol = policy(
+            InMemory::new(
+                r#"permit(principal, action == Action::"read_table", resource)
+                   when { resource.readers.contains("User::\"alice\"") };"#,
+            ),
+            InMemory::new(""),
+        );
+        let facts = crate::TableFacts {
+            readers: ["User::\"alice\"".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        let allow = pol
+            .is_allowed(&scan_plan(), &alice(), &eval_with_table_facts(facts))
+            .await
+            .unwrap();
+        assert_eq!(allow, Decision::Allow);
     }
 
     // The shipped demo policy's Layer-1 gate (`notebooks/policy_demo.py`):
@@ -358,7 +484,9 @@ mod tests {
     async fn demo_policy_gate_allows_principal_with_region() {
         let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
         // alice() carries region=eu.
-        let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
+        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Allow);
     }
 
@@ -366,7 +494,10 @@ mod tests {
     async fn demo_policy_gate_denies_principal_without_region() {
         let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
         let carol = PrincipalIdentity::new(EntityUid::from_str("User::\"carol\"").unwrap());
-        let decision = pol.is_allowed(&scan_plan(), &carol).await.unwrap();
+        let decision = pol
+            .is_allowed(&scan_plan(), &carol, &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Deny);
     }
 
@@ -419,7 +550,10 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&create_catalog_plan(), &alice()).await.unwrap();
+        let decision = pol
+            .is_allowed(&create_catalog_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Deny);
     }
 
@@ -431,7 +565,10 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&create_catalog_plan(), &alice()).await.unwrap();
+        let decision = pol
+            .is_allowed(&create_catalog_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(decision, Decision::Allow);
     }
 
@@ -464,7 +601,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
@@ -483,7 +620,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
@@ -502,7 +639,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("REDACTED")));
@@ -521,7 +658,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -539,7 +676,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -556,7 +693,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -576,7 +713,7 @@ mod tests {
         async fn demo_policy_alice_eu_sees_eu_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice())
+                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (eu).
@@ -590,7 +727,7 @@ mod tests {
         async fn demo_policy_bob_us_sees_us_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &bob())
+                .table_policy(&table(), &empty_schema(), &bob(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (us) — the

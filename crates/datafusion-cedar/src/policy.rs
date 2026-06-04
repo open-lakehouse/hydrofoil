@@ -3,6 +3,7 @@ use datafusion::logical_expr::LogicalPlan;
 
 use cedar_oci::Decision;
 
+use crate::facts::EvalContext;
 use crate::principal::PrincipalIdentity;
 
 #[cfg(feature = "governance")]
@@ -23,10 +24,17 @@ use datafusion::sql::TableReference;
 /// principal's access.
 #[async_trait::async_trait]
 pub trait Policy: std::fmt::Debug + Send + Sync {
+    /// Decide whether `principal` may execute `logical_plan`.
+    ///
+    /// `eval` carries the per-query facts gathered outside the plan — the
+    /// catalog facts to fold into `resource` entities, the correlation id, and
+    /// (with `governance`) the session fact store. Pass
+    /// [`EvalContext::default()`] when no such facts are available.
     async fn is_allowed(
         &self,
         logical_plan: &LogicalPlan,
         principal: &PrincipalIdentity,
+        eval: &EvalContext,
     ) -> Result<Decision>;
 
     /// Resolve the fine-grained enforcement (row filters + column masks) that
@@ -40,6 +48,7 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
         _table: &TableReference,
         _schema: &DFSchema,
         _principal: &PrincipalIdentity,
+        _eval: &EvalContext,
     ) -> Result<crate::govern::TablePolicy> {
         Ok(crate::govern::TablePolicy::default())
     }
@@ -66,6 +75,7 @@ impl Policy for StaticPolicy {
         &self,
         _logical_plan: &LogicalPlan,
         _principal: &PrincipalIdentity,
+        _eval: &EvalContext,
     ) -> Result<Decision> {
         Ok(self.decision)
     }
@@ -91,11 +101,16 @@ mod tests {
         let allow = StaticPolicy::new(Decision::Allow);
         let deny = StaticPolicy::new(Decision::Deny);
         assert_eq!(
-            allow.is_allowed(&plan, &principal()).await.unwrap(),
+            allow
+                .is_allowed(&plan, &principal(), &EvalContext::default())
+                .await
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            deny.is_allowed(&plan, &principal()).await.unwrap(),
+            deny.is_allowed(&plan, &principal(), &EvalContext::default())
+                .await
+                .unwrap(),
             Decision::Deny
         );
     }
