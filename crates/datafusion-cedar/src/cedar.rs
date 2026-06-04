@@ -3,6 +3,7 @@ use std::sync::Arc;
 use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
 use cedar_local_agent::public::{SimpleEntityProvider, SimplePolicySetProvider};
 use cedar_policy::Entities;
+use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 
@@ -55,20 +56,16 @@ impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
     pub async fn from_oci(reference: &str) -> Result<Self> {
         let provider = Arc::new(OciPolicyProvider::from_reference(reference).await.map_err(
             |e| {
-                datafusion::error::DataFusionError::Plan(format!(
+                plan_datafusion_err!(
                     "Failed to load Cedar policy from OCI reference '{reference}': {e}"
-                ))
+                )
             },
         )?);
         let config = AuthorizerConfigBuilder::default()
             .policy_set_provider(provider.clone())
             .entity_provider(provider)
             .build()
-            .map_err(|e| {
-                datafusion::error::DataFusionError::Plan(format!(
-                    "Failed to build Cedar authorizer: {e}"
-                ))
-            })?;
+            .map_err(|e| plan_datafusion_err!("Failed to build Cedar authorizer: {e}"))?;
         Ok(Self::new(Authorizer::new(config)))
     }
 }
@@ -133,7 +130,7 @@ where
             EntityId::new("read_table"),
         );
         let table_type = EntityTypeName::from_str("Table")
-            .map_err(|e| datafusion::error::DataFusionError::Plan(e.to_string()))?;
+            .map_err(|e| plan_datafusion_err!("invalid entity type name 'Table': {e}"))?;
 
         // Carry the table identity (catalog/schema/table) in the context so
         // row-filter policies can condition on `context.catalog/schema/table`,

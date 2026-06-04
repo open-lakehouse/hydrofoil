@@ -295,9 +295,7 @@ mod tests {
             _principal: &PrincipalIdentity,
         ) -> DFResult<TablePolicy> {
             if self.err {
-                return Err(datafusion::error::DataFusionError::Plan(
-                    "policy boom".into(),
-                ));
+                return Err(datafusion::common::plan_datafusion_err!("policy boom"));
             }
             Ok(self
                 .by_table
