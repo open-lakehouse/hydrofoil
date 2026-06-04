@@ -135,17 +135,22 @@ pub struct EvalContext {
     /// The session/trace id that keys shared-session-scoped facts (the taint
     /// ledger). `None` when no session correlation is available.
     pub correlation_id: Option<String>,
-    // The session fact store (taints recorded / read back) is added with the
-    // `FactStore` trait, behind the `governance` feature, alongside the
-    // governance PEP that consumes it.
+    /// The session fact store taints are recorded into (at the governance PEP)
+    /// and read back from (at a later PEP). `None` when no store is wired —
+    /// taint recording then no-ops. Behind `governance`, alongside the PEP that
+    /// consumes it.
+    #[cfg(feature = "governance")]
+    pub fact_store: Option<Arc<dyn crate::FactStore>>,
 }
 
 impl std::fmt::Debug for EvalContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EvalContext")
-            .field("catalog_facts", &self.catalog_facts)
-            .field("correlation_id", &self.correlation_id)
-            .finish()
+        let mut s = f.debug_struct("EvalContext");
+        s.field("catalog_facts", &self.catalog_facts)
+            .field("correlation_id", &self.correlation_id);
+        #[cfg(feature = "governance")]
+        s.field("fact_store", &self.fact_store.is_some());
+        s.finish()
     }
 }
 

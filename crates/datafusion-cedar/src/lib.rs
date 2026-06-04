@@ -23,6 +23,8 @@ mod principal;
 mod visitor;
 
 #[cfg(feature = "governance")]
+mod fact_store;
+#[cfg(feature = "governance")]
 pub mod govern;
 #[cfg(feature = "governance")]
 mod translate;
@@ -32,6 +34,8 @@ pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
 pub use policy::{Policy, StaticPolicy};
 pub use principal::PrincipalIdentity;
 
+#[cfg(feature = "governance")]
+pub use fact_store::{FactStore, InMemoryFactStore};
 #[cfg(feature = "governance")]
 pub use govern::{TablePolicy, govern_plan};
 #[cfg(feature = "governance")]
