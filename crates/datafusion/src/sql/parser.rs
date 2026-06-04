@@ -10,9 +10,10 @@ use sqlparser::tokenizer::{Token, TokenWithSpan, Word};
 use url::Url;
 
 use crate::sql::commands::{Mode, VacuumStatement};
-// WIP / disabled module (see `sql/mod.rs`): these statement types live in
-// `sql/unity` and must be imported here once this parser is re-enabled.
-// use crate::sql::{CreateCatalogStatement, DropCatalogStatement, UnityCatalogStatement};
+use crate::sql::unity::{
+    CreateCatalogStatement, CreateSchemaStatement, DropCatalogStatement, DropSchemaStatement,
+    UnityCatalogStatement,
+};
 
 /// Same as `sqlparser`
 const DEFAULT_RECURSION_LIMIT: usize = 50;
@@ -354,7 +355,82 @@ impl<'a> HFParser<'a> {
     }
 
     fn parse_create_schema(&mut self) -> Result<Statement, DataFusionError> {
-        todo!("Implement parse_create_schema")
+        let if_not_exists =
+            self.parser
+                .parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+        let schema_name = self.parser.parser.parse_object_name(false)?;
+        if schema_name.0.len() > 2 {
+            return parser_err!(
+                "Expected schema name to be a one- or two-part identifier (<schema> or <catalog>.<schema>)"
+            );
+        }
+
+        #[derive(Default)]
+        struct Builder {
+            pub managed_location: Option<Url>,
+            pub comment: Option<String>,
+            pub properties: Option<Vec<(String, Value)>>,
+        }
+        let mut builder = Builder::default();
+
+        loop {
+            if let Some(keyword) = self.parser.parser.parse_one_of_keywords(&[
+                Keyword::MANAGED,
+                Keyword::COMMENT,
+                Keyword::WITH,
+            ]) {
+                match keyword {
+                    Keyword::MANAGED => {
+                        self.parser.parser.expect_keyword(Keyword::LOCATION)?;
+                        ensure_not_set(&builder.managed_location, "MANAGED LOCATION")?;
+                        let managed_location = self.parser.parser.parse_literal_string()?;
+                        let Ok(managed_location) = Url::parse(&managed_location) else {
+                            return parser_err!("Expected managed location to be a valid URL");
+                        };
+                        builder.managed_location = Some(managed_location);
+                    }
+                    Keyword::COMMENT => {
+                        ensure_not_set(&builder.comment, "COMMENT")?;
+                        let comment = self.parser.parser.parse_literal_string()?;
+                        builder.comment = Some(comment);
+                    }
+                    Keyword::WITH => {
+                        // `DBPROPERTIES` is not a reserved keyword in sqlparser,
+                        // so match it as a plain identifier.
+                        let next = self.parser.parser.next_token();
+                        match &next.token {
+                            Token::Word(w)
+                                if w.value.eq_ignore_ascii_case("DBPROPERTIES") => {}
+                            _ => return self.expected("DBPROPERTIES", next),
+                        }
+                        ensure_not_set(&builder.properties, "WITH DBPROPERTIES")?;
+                        builder.properties = Some(self.parse_value_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                let token = self.parser.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return self.expected("end of statement or ;", token)?;
+                }
+            }
+        }
+
+        Ok(Statement::UnityCatalog(
+            CreateSchemaStatement {
+                name: schema_name,
+                if_not_exists,
+                managed_location: builder.managed_location,
+                comment: builder.comment,
+                properties: builder.properties,
+            }
+            .into(),
+        ))
     }
 
     fn parse_create_share(&mut self) -> Result<Statement, DataFusionError> {
@@ -368,6 +444,12 @@ impl<'a> HFParser<'a> {
             .parse_keywords(&[Keyword::DROP, Keyword::CATALOG])
         {
             self.parse_drop_catalog()
+        } else if self
+            .parser
+            .parser
+            .parse_keywords(&[Keyword::DROP, Keyword::SCHEMA])
+        {
+            self.parse_drop_schema()
         } else {
             self.parse_and_handle_statement()
         }
@@ -385,6 +467,28 @@ impl<'a> HFParser<'a> {
         let cascade = self.parser.parser.parse_keyword(Keyword::CASCADE);
         Ok(Statement::UnityCatalog(
             DropCatalogStatement {
+                name,
+                if_exists,
+                cascade,
+            }
+            .into(),
+        ))
+    }
+
+    fn parse_drop_schema(&mut self) -> Result<Statement, DataFusionError> {
+        let if_exists = self
+            .parser
+            .parser
+            .parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
+        let name = self.parser.parser.parse_object_name(false)?;
+        if name.0.len() > 2 {
+            return parser_err!(
+                "Expected schema name to be a one- or two-part identifier (<schema> or <catalog>.<schema>)"
+            );
+        }
+        let cascade = self.parser.parser.parse_keyword(Keyword::CASCADE);
+        Ok(Statement::UnityCatalog(
+            DropSchemaStatement {
                 name,
                 if_exists,
                 cascade,
@@ -540,6 +644,92 @@ mod tests {
                 managed_location,
                 ..
             })) if managed_location == &Some(expected_location)
+        ));
+    }
+
+    #[test]
+    fn test_parse_create_schema() {
+        let sql = "CREATE SCHEMA IF NOT EXISTS sales";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let expected_name: ObjectName = vec![Ident::new("sales")].into();
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::CreateSchema(CreateSchemaStatement {
+                name,
+                if_not_exists: true,
+                managed_location: None,
+                comment: None,
+                properties: None,
+            })) if name == &expected_name
+        ));
+
+        let sql = "CREATE SCHEMA my_catalog.sales COMMENT 'sales data'";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let expected_name: ObjectName =
+            vec![Ident::new("my_catalog"), Ident::new("sales")].into();
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::CreateSchema(CreateSchemaStatement {
+                name,
+                comment: Some(c),
+                ..
+            })) if name == &expected_name && c == "sales data"
+        ));
+
+        let sql = "CREATE SCHEMA my_catalog.sales WITH DBPROPERTIES (owner 'team-a', tier 'gold')";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        match &statements[0] {
+            Statement::UnityCatalog(UnityCatalogStatement::CreateSchema(stmt)) => {
+                let props = stmt.properties.as_ref().expect("expected properties");
+                assert_eq!(props.len(), 2);
+                assert_eq!(props[0].0, "owner");
+                assert_eq!(props[1].0, "tier");
+            }
+            other => panic!("expected CreateSchema, got {other:?}"),
+        }
+
+        let sql = "CREATE SCHEMA sales MANAGED LOCATION 's3://bucket/sales'";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let expected_location = Url::parse("s3://bucket/sales").unwrap();
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::CreateSchema(CreateSchemaStatement {
+                managed_location: Some(loc),
+                ..
+            })) if loc == &expected_location
+        ));
+    }
+
+    #[test]
+    fn test_parse_drop_schema() {
+        let sql = "DROP SCHEMA my_catalog.sales";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let expected_name: ObjectName =
+            vec![Ident::new("my_catalog"), Ident::new("sales")].into();
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::DropSchema(DropSchemaStatement {
+                name,
+                if_exists: false,
+                cascade: false,
+            })) if name == &expected_name
+        ));
+
+        let sql = "DROP SCHEMA IF EXISTS sales CASCADE";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::DropSchema(DropSchemaStatement {
+                if_exists: true,
+                cascade: true,
+                ..
+            }))
         ));
     }
 

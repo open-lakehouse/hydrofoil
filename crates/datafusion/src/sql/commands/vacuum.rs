@@ -16,6 +16,10 @@ use sqlparser::ast::ObjectName;
 /// We define and alias because:
 /// - more idiomatic naming in planner
 /// - allows us to replace with a dedicated struct more easily.
+///
+/// `VACUUM` is parsed but not yet routed to an executor (unlike the Unity
+/// Catalog DDL statements), so this alias is currently unused.
+#[allow(dead_code)]
 pub type VacuumPlanNode = VacuumStatement;
 
 pub(crate) static VACUUM_RETURN_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {

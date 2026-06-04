@@ -13,6 +13,10 @@ entity Table in [Namespace] = {
   writers: UserGroup,
 };
 
+// Unity Catalog securables that DDL operates on.
+entity Catalog in [Namespace];
+entity Schema in [Catalog, Namespace];
+
 entity GovernedTag = {
   readers: UserGroup,
 };
@@ -30,5 +34,23 @@ action read_field appliesTo {
   resource: [Field],
   context: {
     "in_trusted_environment": Bool
+  }
+};
+
+// Unity Catalog DDL. The securable's name is carried in the request context so
+// policies may gate on `context.securable` in addition to the action.
+action create_catalog, drop_catalog appliesTo {
+  principal: [User, Agent],
+  resource: [Catalog],
+  context: {
+    "securable": String
+  }
+};
+
+action create_schema, drop_schema appliesTo {
+  principal: [User, Agent],
+  resource: [Schema],
+  context: {
+    "securable": String
   }
 };

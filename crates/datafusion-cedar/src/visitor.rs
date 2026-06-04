@@ -28,9 +28,38 @@ pub(crate) enum PlanAction {
     WriteTable(TableReference),
     /// Create `table`.
     CreateTable(TableReference),
+    /// Unity Catalog DDL on a `Catalog` or `Schema` securable, recognized from
+    /// the `ExecuteUnityCatalogPlanNode` extension node. `action` is the Cedar
+    /// action id (e.g. `create_catalog`); `resource_type` is `Catalog`/`Schema`;
+    /// `name` is the securable's name.
+    UnityDdl {
+        action: &'static str,
+        resource_type: &'static str,
+        name: String,
+    },
     /// A state-changing node we do not model. We cannot prove it is safe, so it
     /// must be denied (fail-closed). Carries a short description for diagnostics.
     DenyUnsupported(String),
+}
+
+/// Recognize a Unity Catalog DDL extension node by its command name and lower
+/// it to a [`PlanAction::UnityDdl`].
+///
+/// `datafusion-cedar` stays free of any Unity-Catalog dependency: it matches on
+/// the stable command-name contract exposed by the extension node's
+/// [`name`](datafusion::logical_expr::UserDefinedLogicalNode::name) — one of
+/// `CreateCatalog`/`DropCatalog`/`CreateSchema`/`DropSchema` — rather than
+/// downcasting to a concrete type. The securable name is carried in the request
+/// context (see [`unity_ddl_context`]); a policy may gate on the action alone or
+/// additionally on `context.securable`.
+fn recognize_unity_ddl(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "CreateCatalog" => Some(("create_catalog", "Catalog")),
+        "DropCatalog" => Some(("drop_catalog", "Catalog")),
+        "CreateSchema" => Some(("create_schema", "Schema")),
+        "DropSchema" => Some(("drop_schema", "Schema")),
+        _ => None,
+    }
 }
 
 pub(crate) struct AuthorizationVisitor {
@@ -79,6 +108,20 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
                         .push(PlanAction::CreateTable(dml.table_name.clone()));
                 }
             },
+            LogicalPlan::Extension(ext) => {
+                let node = ext.node.as_ref();
+                // Only Unity Catalog DDL extension nodes are state-changing and
+                // must be authorized; other extension nodes (e.g. instrumentation
+                // wrappers) are pass-through and ignored, matching the default
+                // arm below.
+                if let Some((action, resource_type)) = recognize_unity_ddl(node.name()) {
+                    self.actions.push(PlanAction::UnityDdl {
+                        action,
+                        resource_type,
+                        name: securable_name_from_node(node),
+                    });
+                }
+            }
             _ => {}
         }
         Ok(TreeNodeRecursion::Continue)
@@ -107,6 +150,49 @@ static DENY_UNSUPPORTED_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
 fn table_resource(table_ref: &TableReference) -> EntityUid {
     let table_type_name = EntityTypeName::from_str("Table").unwrap();
     EntityUid::from_type_name_and_id(table_type_name, EntityId::new(table_ref.to_string()))
+}
+
+/// Build a resource uid of an arbitrary entity type from a name (used for the
+/// `Catalog`/`Schema` securables of Unity Catalog DDL).
+fn named_resource(resource_type: &str, name: &str) -> EntityUid {
+    let type_name = EntityTypeName::from_str(resource_type).unwrap();
+    EntityUid::from_type_name_and_id(type_name, EntityId::new(name))
+}
+
+/// Extract the securable name from a Unity Catalog DDL extension node.
+///
+/// The node's `Display` (via `fmt_for_explain`) has the stable shape
+/// `"<Command>: name=<securable> ..."`. We read the `name=` token defensively;
+/// if it cannot be found the securable is reported as empty, which still
+/// authorizes the action (the per-action gate applies) but carries no securable
+/// in the request context.
+fn securable_name_from_node(node: &dyn datafusion::logical_expr::UserDefinedLogicalNode) -> String {
+    let rendered = format!("{}", DisplayNode(node));
+    rendered
+        .split("name=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Adapter to render a `UserDefinedLogicalNode` via its `fmt_for_explain`.
+struct DisplayNode<'a>(&'a dyn datafusion::logical_expr::UserDefinedLogicalNode);
+
+impl std::fmt::Display for DisplayNode<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt_for_explain(f)
+    }
+}
+
+/// Build the request context for Unity Catalog DDL, carrying the securable name
+/// so policies may gate on `context.securable` in addition to the action.
+fn unity_ddl_context(name: &str) -> Result<Context> {
+    Context::from_pairs([(
+        "securable".to_string(),
+        RestrictedExpression::new_string(name.to_string()),
+    )])
+    .map_err(|e| plan_datafusion_err!("Failed to build request context: {}", e))
 }
 
 /// Build the request context carrying the table identity and accessed columns,
@@ -159,27 +245,42 @@ pub(crate) fn authorize_plan(
 
     let mut requests = vec![];
     for action in visitor.actions {
-        let (action_uid, table_ref, columns) = match action {
-            PlanAction::ReadTable(table_ref, columns) => {
-                (READ_TABLE_ACTION.clone(), table_ref, columns)
-            }
-            PlanAction::WriteTable(table_ref) => (WRITE_TABLE_ACTION.clone(), table_ref, vec![]),
-            PlanAction::CreateTable(table_ref) => {
-                (CREATE_EXTERNAL_TABLE_ACTION.clone(), table_ref, vec![])
-            }
+        let (action_uid, resource, context) = match action {
+            PlanAction::ReadTable(table_ref, columns) => (
+                READ_TABLE_ACTION.clone(),
+                table_resource(&table_ref),
+                table_context(&table_ref, &columns)?,
+            ),
+            PlanAction::WriteTable(table_ref) => (
+                WRITE_TABLE_ACTION.clone(),
+                table_resource(&table_ref),
+                table_context(&table_ref, &[])?,
+            ),
+            PlanAction::CreateTable(table_ref) => (
+                CREATE_EXTERNAL_TABLE_ACTION.clone(),
+                table_resource(&table_ref),
+                table_context(&table_ref, &[])?,
+            ),
+            PlanAction::UnityDdl {
+                action,
+                resource_type,
+                name,
+            } => (
+                EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new(action)),
+                named_resource(resource_type, &name),
+                unity_ddl_context(&name)?,
+            ),
             // Lower an unsupported node to a request no policy permits; Cedar's
             // default-deny then rejects the query (fail-closed).
             PlanAction::DenyUnsupported(what) => {
                 tracing::warn!(node = %what, "unsupported state-changing plan node; denying (fail-closed)");
                 (
                     DENY_UNSUPPORTED_ACTION.clone(),
-                    TableReference::bare(what),
-                    vec![],
+                    table_resource(&TableReference::bare(what)),
+                    table_context(&TableReference::bare("unsupported"), &[])?,
                 )
             }
         };
-        let resource = table_resource(&table_ref);
-        let context = table_context(&table_ref, &columns)?;
         requests.push(
             Request::new(principal.uid.clone(), action_uid, resource, context, None)
                 .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?,
@@ -298,6 +399,81 @@ mod tests {
             .filter(|r| action_of(r) == "Action::\"read_table\"")
             .count();
         assert_eq!(reads, 2, "each joined table is authorized independently");
+    }
+
+    /// Minimal extension node standing in for `ExecuteUnityCatalogPlanNode`,
+    /// named after a Unity Catalog DDL command, used to drive the name-based
+    /// recognition in the visitor without depending on the UC crate.
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+    struct FakeDdlNode {
+        command: &'static str,
+        securable: &'static str,
+    }
+
+    impl datafusion::logical_expr::UserDefinedLogicalNodeCore for FakeDdlNode {
+        fn name(&self) -> &str {
+            self.command
+        }
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![]
+        }
+        fn schema(&self) -> &datafusion::common::DFSchemaRef {
+            static EMPTY: LazyLock<datafusion::common::DFSchemaRef> =
+                LazyLock::new(|| std::sync::Arc::new(datafusion::common::DFSchema::empty()));
+            &EMPTY
+        }
+        fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
+            vec![]
+        }
+        fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "{}: name={}", self.command, self.securable)
+        }
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<datafusion::logical_expr::Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                command: self.command,
+                securable: self.securable,
+            })
+        }
+    }
+
+    fn ddl_plan(command: &'static str, securable: &'static str) -> LogicalPlan {
+        use datafusion::logical_expr::Extension;
+        use std::sync::Arc;
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(FakeDdlNode { command, securable }),
+        })
+    }
+
+    #[test]
+    fn unity_ddl_extension_yields_matching_action() {
+        for (command, action) in [
+            ("CreateCatalog", "create_catalog"),
+            ("DropCatalog", "drop_catalog"),
+            ("CreateSchema", "create_schema"),
+            ("DropSchema", "drop_schema"),
+        ] {
+            let plan = ddl_plan(command, "my_catalog.sales");
+            let requests = authorize_plan(&plan, &principal()).unwrap();
+            assert_eq!(requests.len(), 1, "{command} -> one request");
+            assert_eq!(
+                action_of(&requests[0]),
+                format!("Action::\"{action}\""),
+                "{command} lowers to {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_extension_is_ignored() {
+        // A non-UC extension node is pass-through (no request), so it neither
+        // grants nor blocks on its own.
+        let plan = ddl_plan("SomeOtherExtension", "whatever");
+        let requests = authorize_plan(&plan, &principal()).unwrap();
+        assert!(requests.is_empty());
     }
 
     #[test]
