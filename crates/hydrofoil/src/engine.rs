@@ -31,7 +31,7 @@ use dashmap::DashMap;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_cedar::PrincipalIdentity;
+use datafusion_cedar::{IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity};
 use datafusion_open_lineage::OpenLineageClient;
 use datafusion_open_lineage::context::LineageContext;
 use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
@@ -70,6 +70,16 @@ pub struct Engine {
     policy: Arc<dyn Policy>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
     lineage: Option<OpenLineageClient>,
+    /// The principal/identity PIP: resolves a principal's attributes + group
+    /// membership from external systems (`docs/adr/0008-...`). Defaults to a
+    /// no-op provider (empty enrichment) so an unconfigured server / the
+    /// anonymous dev path still works.
+    identity: Arc<dyn IdentityProvider>,
+    /// Process-wide enrichment cache, keyed by principal uid. v1 resolves once
+    /// per session and reuses; the cache being here (rather than baked into a
+    /// `Session`) is what lets enrichment move to a per-query lookup with a TTL
+    /// later without re-plumbing.
+    enrichment_cache: DashMap<String, PrincipalEnrichment>,
 }
 
 impl Engine {
@@ -82,7 +92,41 @@ impl Engine {
             policy,
             unity_factory,
             lineage,
+            identity: Arc::new(NoopIdentityProvider),
+            enrichment_cache: DashMap::new(),
         })
+    }
+
+    /// Replace the identity provider (e.g. a config- or IdP-backed one). The
+    /// default is a no-op provider returning empty enrichment.
+    pub fn with_identity_provider(mut self: Arc<Self>, identity: Arc<dyn IdentityProvider>) -> Arc<Self> {
+        // `Engine` is only shared after construction, so this unwrap holds at
+        // wiring time (before any clone of the Arc escapes).
+        let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
+        engine.identity = identity;
+        self
+    }
+
+    /// Resolve (and cache) the enrichment for `uid`, then apply it to
+    /// `principal`. Keyed by uid on the process-wide cache so concurrent
+    /// sessions of the same user share one provider call. Fail-closed: a
+    /// provider error propagates so the caller can fail the session.
+    pub async fn enrich(&self, principal: PrincipalIdentity) -> Result<PrincipalIdentity> {
+        let key = principal.uid.to_string();
+        if let Some(cached) = self.enrichment_cache.get(&key) {
+            return Ok(principal.enriched(cached.clone()));
+        }
+        let enrichment = self
+            .identity
+            .enrich(&principal.uid, &PrincipalClaims::default())
+            .await
+            .map_err(|e| {
+                datafusion::error::DataFusionError::External(Box::new(std::io::Error::other(
+                    e.to_string(),
+                )))
+            })?;
+        self.enrichment_cache.insert(key, enrichment.clone());
+        Ok(principal.enriched(enrichment))
     }
 
     /// Build a fresh, principal-scoped [`Session`].
@@ -114,6 +158,25 @@ impl Engine {
             created_at: Instant::now(),
             last_used_ms: AtomicU64::new(0),
         }))
+    }
+}
+
+/// The default identity provider: returns empty enrichment for every principal.
+///
+/// Keeps an unconfigured server (and the anonymous dev path) working — an empty
+/// enrichment is a *success*, leaving the principal with only its request-time
+/// attributes and no group membership.
+#[derive(Debug)]
+struct NoopIdentityProvider;
+
+#[async_trait::async_trait]
+impl IdentityProvider for NoopIdentityProvider {
+    async fn enrich(
+        &self,
+        _uid: &datafusion_cedar::EntityUid,
+        _claims: &PrincipalClaims,
+    ) -> std::result::Result<PrincipalEnrichment, datafusion_cedar::IdentityError> {
+        Ok(PrincipalEnrichment::default())
     }
 }
 
@@ -245,6 +308,14 @@ impl SessionStore {
             sessions: DashMap::new(),
             ttl,
         })
+    }
+
+    /// Enrich a principal via the engine's identity PIP (attributes + group
+    /// membership) before it is bound into a session. Fail-closed: propagates a
+    /// provider error so the caller fails the session rather than proceeding
+    /// un-enriched.
+    pub async fn enrich(&self, principal: PrincipalIdentity) -> Result<PrincipalIdentity> {
+        self.engine.enrich(principal).await
     }
 
     /// Mint a brand-new session for a connection, returning its id and handle.

@@ -32,7 +32,10 @@ mod translate;
 pub use cedar::CedarPolicy;
 pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
 pub use policy::{Policy, StaticPolicy};
-pub use principal::PrincipalIdentity;
+pub use principal::{
+    AgentClaims, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
+    PrincipalIdentity,
+};
 
 #[cfg(feature = "governance")]
 pub use fact_store::{FactStore, InMemoryFactStore};
@@ -45,8 +48,9 @@ pub use translate::{CedarResidualTranslator, ResidualTranslator};
 // have a single import surface (they originate in `cedar-oci`).
 pub use cedar_oci::{Decision, EntityId, EntityTypeName, EntityUid};
 
-// Cedar value type the host needs to build principal/resource attributes.
-pub use cedar_policy::RestrictedExpression;
+// Cedar value/entity types the host needs to build principal/resource
+// attributes and the group-entity closure for identity enrichment.
+pub use cedar_policy::{Entity, RestrictedExpression};
 
 // Cedar provider traits a `CedarPolicy` is generic over, re-exported for
 // consumers building an authorizer.
