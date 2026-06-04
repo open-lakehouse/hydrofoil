@@ -14,6 +14,8 @@ that it draws on or refines.
 | [0004](0004-per-session-credential-isolation.md) | Per-session `RuntimeEnv` for credential isolation | Accepted |
 | [0005](0005-per-query-agent-governance-context.md) | Per-query agent / governance context as a session extension | Accepted |
 | [0006](0006-policy-fact-locality-and-session-state.md) | Policy fact locality, the session fact store, and residual handling | Accepted |
+| [0007](0007-fact-gathering-pips.md) | Fact-gathering PIPs: resource/catalog facts, the fact store, trait-now/impl-later | Accepted |
+| [0008](0008-principal-identity-resolution.md) | Principal/identity resolution: dynamic group membership and enrichment freshness | Accepted |
 
 Related design docs: [`session-management.md`](../session-management.md),
 [`open-lineage-design.md`](../open-lineage-design.md),
