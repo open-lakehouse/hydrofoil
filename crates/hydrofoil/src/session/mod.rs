@@ -1,11 +1,6 @@
-use std::{
-    any::Any,
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use arrow::array::RecordBatch;
-use bytes::Bytes;
 use cedar_oci::Decision;
 use datafusion::{
     catalog::{
@@ -28,25 +23,18 @@ use datafusion_open_lineage::{OpenLineageClient, OpenLineageConfig, instrument_s
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
-use delta_kernel::{Engine, Version};
-use deltalake_core::{
-    DeltaResult, DeltaTableConfig,
-    delta_datafusion::DeltaScanNext,
-    kernel::Snapshot,
-    logstore::{ObjectStoreRef, commit_uri_from_version},
-};
+use delta_kernel::Version;
+use deltalake_core::{DeltaTableConfig, delta_datafusion::DeltaScanNext, kernel::Snapshot};
 use deltalake_core::{
     Path,
     delta_datafusion::engine::AsObjectStoreUrl as _,
     logstore::{LogStore, StorageConfig, logstore_with},
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
-use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
 use instrumented_object_store::instrument_object_store;
-use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
 use tokio::runtime::Handle;
-use tracing::{error, instrument, warn};
+use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -60,6 +48,10 @@ use crate::{
     lineage::LineageContextExt,
     policy::Policy,
 };
+
+mod log_store;
+
+use log_store::DataFusionLogStore;
 
 /// Inject fine-grained governance (row filters + column masks) into a plan
 /// before optimization.
@@ -445,6 +437,10 @@ impl LakehouseTaskContext {
         Ok(provider)
     }
 
+    /// Build a logical scan of a Delta table by object-store URL (optionally at a
+    /// specific version). Retained as a seam for direct-by-location scans; the
+    /// catalog path resolves tables by name instead, so this isn't wired in yet.
+    #[allow(dead_code)]
     #[instrument(skip(self), level = "info")]
     pub async fn scan_delta_table(
         &self,
@@ -541,7 +537,7 @@ pub fn create_session_for(
         .with_config(session_config)
         .with_table_factory(
             DeltaTableFactory::FILE_FORMAT.to_string(),
-            DeltaTableFactory::new(),
+            DeltaTableFactory::instance(),
         )
         .with_physical_optimizer_rule(instrument_rule)
         .build();
@@ -610,114 +606,6 @@ fn add_seaweedfs(session: &dyn Session, handle: Handle) -> Result<()> {
         .runtime_env()
         .register_object_store(&url, instrumented);
     Ok(())
-}
-
-fn put_options() -> &'static PutOptions {
-    static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
-    PUT_OPTS.get_or_init(|| PutOptions {
-        mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
-        tags: TagSet::default(),
-        attributes: Attributes::default(),
-        extensions: Default::default(),
-    })
-}
-
-/// Default [`LogStore`] implementation
-#[derive(Debug, Clone)]
-pub struct DataFusionLogStore {
-    prefixed_store: ObjectStoreRef,
-    root_store: ObjectStoreRef,
-    config: LogStoreConfig,
-    ctx: Arc<TaskContext>,
-}
-
-impl DataFusionLogStore {
-    /// Create a new instance of [`DefaultLogStore`]
-    fn new(
-        prefixed_store: ObjectStoreRef,
-        root_store: ObjectStoreRef,
-        config: LogStoreConfig,
-        ctx: Arc<TaskContext>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            prefixed_store,
-            root_store,
-            config,
-            ctx,
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl LogStore for DataFusionLogStore {
-    fn name(&self) -> String {
-        "DataFusionLogStore".into()
-    }
-
-    async fn read_commit_entry(&self, _version: u64) -> DeltaResult<Option<Bytes>> {
-        todo!("read_commit_entry")
-    }
-
-    #[instrument(skip_all, level = "info")]
-    async fn write_commit_entry(
-        &self,
-        version: u64,
-        commit_or_bytes: CommitOrBytes,
-        _: Uuid,
-    ) -> Result<(), TransactionError> {
-        error!("using legacy log store APIs.");
-
-        match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => self
-                .object_store(None)
-                .put_opts(
-                    &commit_uri_from_version(Some(version)),
-                    log_bytes.into(),
-                    put_options().clone(),
-                )
-                .await
-                .map_err(|err| -> TransactionError {
-                    match err {
-                        ObjectStoreError::AlreadyExists { .. } => {
-                            TransactionError::VersionAlreadyExists(version)
-                        }
-                        _ => TransactionError::from(err),
-                    }
-                })?,
-            // Default log store should never get a tmp_commit, since this is for conditional put stores
-            _ => unreachable!("unreachable in write_commit_entry"),
-        };
-        Ok(())
-    }
-
-    async fn abort_commit_entry(
-        &self,
-        _version: u64,
-        _commit_or_bytes: CommitOrBytes,
-        _: Uuid,
-    ) -> Result<(), TransactionError> {
-        todo!("abort_commit_entry")
-    }
-
-    async fn get_latest_version(&self, _current_version: u64) -> DeltaResult<u64> {
-        todo!("not get_latest_version")
-    }
-
-    fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        self.prefixed_store.clone()
-    }
-
-    fn root_object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
-        self.root_store.clone()
-    }
-
-    fn config(&self) -> &LogStoreConfig {
-        &self.config
-    }
-
-    fn engine(&self, _operation_id: Option<Uuid>) -> Arc<dyn Engine> {
-        DataFusionEngine::new_from_context(self.ctx.clone())
-    }
 }
 
 #[cfg(test)]

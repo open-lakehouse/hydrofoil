@@ -25,7 +25,6 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // telemetry::init_tracer_provider();
     let _guard = telemetry::init_tracing_subscriber();
 
     let addr = "0.0.0.0:50051".parse()?;

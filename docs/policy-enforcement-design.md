@@ -18,11 +18,14 @@ storage and Delta/Unity Catalog tables. A governed lakehouse has to answer two
    and which columns must be masked?* Row-level security and column masking,
    evaluated per-principal, applied to the data itself.
 
-Today hydrofoil answers only the first, and only partially: `Policy::is_allowed`
-walks the optimized plan, finds the tables, and returns `Decision::Allow` /
-`Decision::Deny` via a Cedar authorizer. The second question — the one that
-actually shapes the rows and columns a user sees — hydrofoil does not answer at
-all.
+Hydrofoil now answers both. **Layer 1** (`Policy::is_allowed`) walks the optimized
+plan, finds the tables and actions, and returns `Decision::Allow` /
+`Decision::Deny` via a Cedar authorizer. **Layer 2** (`Policy::table_policy` +
+`govern_plan`, behind the `governance` feature) injects per-table row filters and
+column masks derived from Cedar partial-evaluation residuals. This document
+records the design behind both; the sections below note what has shipped versus
+what remains (principally the authentication interceptor and edge-case
+hardening).
 
 A colleague's prior-art project, **Policast**
 (`github.com/open-lakehouse/policast`), is a working demonstration of the second
@@ -60,40 +63,51 @@ These mirror the OpenLineage design deliberately — one engine, one set of rule
 
 ## Where we are today, precisely
 
-The current integration is real but unfinished, and a few of the gaps are
-correctness bugs rather than missing features. Naming them up front scopes the
-hardening work.
+> **Status update (2026-06).** What this section originally enumerated as the
+> Layer-1 hardening backlog has **shipped**. The reusable policy machinery now
+> lives in the `datafusion-cedar` crate (the policy analog of
+> `datafusion-open-lineage`); `crates/hydrofoil/src/policy.rs` is a thin
+> re-export. Both Layer 1 (the gate) and Layer 2 (governance) are wired into
+> `LakehouseSession`. The bullets below record where each item landed; the one
+> genuinely-open item is the authentication interceptor (the trust boundary).
 
-- **The gate exists and runs in the right place.**
+- **The gate exists and runs in the right place.** *(done)*
   `LakehouseSession::create_physical_plan` (`crates/hydrofoil/src/session.rs`)
-  optimizes the logical plan, then calls `policy.is_allowed(&optimized_plan,
-  &principal)`, denying the whole query before physical planning. Optimizing
-  first is deliberate: projections and filters are pushed down, so the gate sees
-  the columns actually read. `self.policy` and `self.principal` are fields on the
-  session, and the method is `async` — this matters for Layer 2.
-- **The principal is hardcoded.** `server.rs`'s `get_ctx` ignores the request,
-  uses principal `"User:default"`, and memoizes one `LakehouseCtx` under the
-  literal key `"key"`. Every caller shares one context and one identity — so the
-  gate can't actually distinguish principals, and a per-request principal would
-  *leak across clients*.
-- **The Cedar request is under-populated.** `crates/hydrofoil/src/policy/cedar.rs`
-  builds each `Request` with `Context::empty()`, and the columns the
-  `AuthorizationVisitor` extracts from each `TableScan` are collected and then
-  **dropped**. Authorization runs against `Entities::empty()` rather than the
-  entities/schema the `OciPolicyProvider` already pulls — so any policy that
-  conditions on resource attributes or entity relationships can't be expressed.
-- **Writes and DDL panic.** `PlanAction::WriteTable` and
-  `PlanAction::CreateTable` are `todo!()`. A `todo!()` reached at runtime panics
-  the worker — so today any `INSERT` / `DELETE` / `CREATE` through a Cedar policy
-  aborts, rather than being authorized. The `Dml` arm of the visitor also
-  discards `dml.table_name`, so there's no resource to authorize against yet.
-- **No public constructor wires Cedar in.** `CedarPolicy::new` is private and
-  unused; the server defaults to `StaticPolicy(Allow)` (allow-all). There is no
-  `CedarPolicy::from_oci(...)` path that builds an authorizer from the
-  `OciPolicyProvider`.
-- **The provider drops the schema.** `crates/policy/src/oci/mod.rs` parses the
-  Cedar `Schema` to validate entities, then discards it. Fine-grained evaluation
-  (and schema-aware authorization) will want it retained.
+  injects governance, optimizes the logical plan, then calls
+  `policy.is_allowed(&optimized_plan, &principal)`, denying the whole query
+  before physical planning. Optimizing first is deliberate: projections and
+  filters are pushed down, so the gate sees the columns actually read. The
+  ingest / delta-connect path (`LakehouseCtx::execute_logical_plan`) enforces the
+  same govern → optimize → gate contract.
+- **The principal flows from request metadata.** *(done)* No more hardcoded
+  `"User:default"`: `crates/hydrofoil/src/identity.rs::principal_from_metadata`
+  parses the principal (and `role` / `region` attributes) from the
+  `x-hydrofoil-principal` / `-role` / `-region` gRPC metadata, defaulting to
+  `User::"anonymous"`. `with_principal` attaches it to the session at
+  `Engine::new_session` → `create_session_for`. **Open:** the principal is still
+  client-asserted — see the trust-boundary note below.
+- **The Cedar request is populated.** *(done)* `datafusion-cedar/src/visitor.rs`
+  builds each request's `Context` via `Context::from_pairs`
+  (`table_context` carries catalog/schema/table identity), and the columns the
+  visitor extracts from each `TableScan` flow through as `ReadTable(table,
+  fields)`. The principal is supplied as a request-time entity
+  (`principal.to_entity()`) so policies resolve `principal.<attr>`;
+  `Entities::empty()` appears only as the fail-closed fallback when building that
+  entity set fails.
+- **Writes and DDL are authorized, not panicking.** *(done)*
+  `PlanAction::WriteTable(TableReference)` and `CreateTable(TableReference)` are
+  real variants lowered to `WRITE_TABLE_ACTION` / `CREATE_EXTERNAL_TABLE_ACTION`
+  requests in `visitor.rs`; the `Dml` arm captures `dml.table_name`. No `todo!()`
+  remains on this path; unsupported DDL maps to `DenyUnsupported` (fail closed).
+- **A public constructor wires Cedar in.** *(done)*
+  `CedarPolicy::from_oci(reference)` builds the authorizer from the
+  `OciPolicyProvider`; `hydrofoil/src/main.rs` constructs it via `with_policy`
+  when `HYDROFOIL_POLICY_REF` is set, else defaults to `StaticPolicy` (allow-all).
+- **Still open — authentication (the trust boundary).** The metadata principal is
+  the *transport* seam, not the *trust* boundary. A tonic interceptor that
+  validates a Flight SQL bearer token / mTLS subject upstream of
+  `principal_from_metadata` is not yet implemented; until it lands a client may
+  assert any principal, so the gate is correct but unauthenticated.
 
 ## Evaluating Policast
 
@@ -398,20 +412,40 @@ boundary. The principal must be established by real authentication — a tonic
 interceptor validating a Flight SQL bearer token / mTLS subject — upstream of
 `principal_from_metadata`. A client-asserted header is never trusted on its own.
 
-## Hardening backlog for Layer 1 (correctness first)
+## Layer 1 hardening — shipped
 
-These are the gaps that make the *existing* gate unsound or incomplete. They land
-before any Layer 2 work, because a fine-grained layer on top of a gate that
-panics on writes and can't tell principals apart is built on sand.
+The backlog that originally appeared here (the gaps that made the gate unsound) is
+**done**; recorded below for traceability. The reusable bits live in
+`datafusion-cedar`, not under `hydrofoil/src/policy/`.
 
-| Gap | Where | Fix |
+| Gap (was) | Where it landed | Status |
 | --- | --- | --- |
-| Hardcoded principal; ctx shared under `"key"` | `server.rs` `get_ctx` | Parse authenticated principal, attach via `with_principal`; key ctx by session id (no `"key"` singleton) — else principals leak across clients |
-| Empty request `Context`; columns dropped | `cedar.rs` `authorize_plan` | Build `Context::from_pairs` with catalog/schema/table + the extracted columns as a set; fold principal attrs |
-| Authorizes against `Entities::empty()` | `cedar.rs` `is_allowed` | Use the `OciPolicyProvider`'s entities; retain the parsed `Schema` (`oci/mod.rs`) for schema-aware checks |
-| No public Cedar constructor | `cedar.rs` | Add `CedarPolicy::from_oci(reference)` building the `Authorizer` from the provider; server constructs it via `with_policy` |
-| `WriteTable` / `CreateTable` panic (`todo!()`) | `cedar.rs` | Capture `dml.table_name` (the `Dml` arm currently discards it); change `PlanAction::WriteTable → WriteTable(TableReference)`; build requests with the existing `WRITE_TABLE_ACTION` / `CREATE_EXTERNAL_TABLE_ACTION` |
-| Error semantics undefined | `policy/mod.rs`, `cedar.rs` | **Fail closed**: fetch/parse/partial-eval failure ⇒ deny; unrecognized *write/DDL* nodes ⇒ deny; log unrecognized read-only nodes (`trace`) per the OpenLineage "no silent truncation" principle |
+| Hardcoded principal; ctx shared under `"key"` | `identity.rs` `principal_from_metadata` + `with_principal`; session keyed per-connection in `engine.rs` | ✅ done |
+| Empty request `Context`; columns dropped | `datafusion-cedar/src/visitor.rs` `table_context` → `Context::from_pairs`; `ReadTable(table, fields)` carries columns | ✅ done |
+| Authorizes against `Entities::empty()` | `cedar.rs` supplies `principal.to_entity()`; `Entities::empty()` is only the fail-closed fallback | ✅ done |
+| No public Cedar constructor | `cedar.rs` `CedarPolicy::from_oci`; wired in `main.rs` via `with_policy` | ✅ done |
+| `WriteTable` / `CreateTable` panic (`todo!()`) | `visitor.rs` `PlanAction::{WriteTable,CreateTable}(TableReference)` → `WRITE_TABLE_ACTION` / `CREATE_EXTERNAL_TABLE_ACTION` | ✅ done |
+| Error semantics undefined | `cedar.rs` / `govern.rs` fail closed: authorizer/partial-eval error ⇒ deny / mask-all; unsupported DDL ⇒ `DenyUnsupported` | ✅ done |
+| **Authentication interceptor (trust boundary)** | not yet built — tonic interceptor validating bearer token / mTLS upstream of `principal_from_metadata` | ⛔ open |
+
+## Layer 2 — shipped, with one known limitation
+
+Layer 2 (`govern_plan` / `Policy::table_policy` in `datafusion-cedar`, behind the
+`governance` feature) injects row filters and column masks from partial-eval
+residuals, and is wired into both the statement and ingest paths. The demo
+(`config/policies/demo.cedar`, `notebooks/policy_demo.py`) exercises it.
+
+**Known limitation — column masking is per-table, not per-principal at the column
+level.** A residual only survives partial evaluation when its condition references
+the *unknown* `resource` (e.g. `resource.region == principal.region`). A mask
+condition over the *concrete* principal alone (e.g. `principal.region == "eu"`)
+resolves fully — to permit (no residual ⇒ no mask) or to inapplicable (no residual
+⇒ also no mask) — so it never masks. Consequently a column mask applies to *all*
+callers of a table, not a per-principal subset. Row filters do not share this
+limitation: principal attributes fold into the surviving residual as literals
+(`col("region") == "eu"`), so the row set genuinely varies per principal. Lifting
+this would need value-level conditional masking (a `CASE` keyed on the principal)
+rather than the present column-replacement projection — tracked as future work.
 
 ## Risks
 
@@ -458,22 +492,25 @@ for non-leaky per-principal contexts but tracked there).
 
 ## Phased implementation
 
-- **Phase 0 — de-risk, no behavior change.** Retain the parsed `Schema` in
-  `OciPolicyProvider`; add `partial-eval` to the `cedar-policy` /
-  `cedar-local-agent` features and a `governance` sub-feature on hydrofoil. No
-  wiring.
-- **Phase 1 — harden Layer 1 (correctness).** The whole backlog table above:
-  principal flow (`identity.rs` cloned from `lineage.rs`; `get_ctx` rework),
-  populated `Context`, provider entities/schema, `CedarPolicy::from_oci`,
-  implemented write/DDL arms, fail-closed semantics. Tests: deny/allow per action
-  with a populated context, extending the `oci::tests::test_fetch_policy` pattern.
-- **Phase 2 — add Layer 2 scaffolding (capability, gated).** `policy/enforce.rs`
-  (`TablePolicy`, `GovernRewriter`, `govern_plan`); `Policy::table_policy`;
-  residual→`Expr` translation behind `ResidualTranslator`; wire `govern_plan` into
-  `create_physical_plan` before `optimize()`.
-- **Phase 3 — edge-case hardening.** Pushdown/mask-interaction tests,
-  identity-projection survival test, `deny_override` semantics, unsupported-residual
-  fail-closed; leave the optional `CelTranslator` unimplemented behind its seam.
+- **Phase 0 — de-risk, no behavior change.** ✅ *done.* `partial-eval` is wired
+  through the `governance` feature on `datafusion-cedar` (and re-exported by
+  hydrofoil's `governance` feature).
+- **Phase 1 — harden Layer 1 (correctness).** ✅ *done.* Principal flow
+  (`identity.rs`), populated `Context`, request-time principal entity,
+  `CedarPolicy::from_oci`, write/DDL arms, fail-closed semantics — see the
+  "Layer 1 hardening — shipped" table. (Reusable code lives in `datafusion-cedar`,
+  not the originally-planned `hydrofoil/src/policy/`.)
+- **Phase 2 — Layer 2 scaffolding (capability, gated).** ✅ *done.* Lives in
+  `datafusion-cedar` (`govern.rs` `govern_plan`/`GovernRewriter`,
+  `Policy::table_policy`, `translate.rs` `CedarResidualTranslator`); wired into
+  `create_physical_plan` (and the ingest path) via the `governance` feature.
+- **Phase 3 — edge-case hardening.** 🚧 *in progress.* Plan-shape tests exist in
+  `govern.rs`; still to do: pushdown/mask-interaction tests, identity-projection
+  survival test, broader `deny_override` coverage, and the demo that exercises the
+  whole path (`notebooks/policy_demo.py`). The optional `CelTranslator` stays
+  unimplemented behind its seam.
+- **Phase 4 — authentication.** ⛔ *not started.* The tonic auth interceptor that
+  establishes a trusted principal upstream of `principal_from_metadata`.
 
 ## The bigger picture
 

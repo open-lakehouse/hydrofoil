@@ -10,6 +10,8 @@ use sqlparser::tokenizer::{Token, TokenWithSpan, Word};
 use url::Url;
 
 use crate::sql::commands::{Mode, VacuumStatement};
+// WIP / disabled module (see `sql/mod.rs`): these statement types live in
+// `sql/unity` and must be imported here once this parser is re-enabled.
 // use crate::sql::{CreateCatalogStatement, DropCatalogStatement, UnityCatalogStatement};
 
 /// Same as `sqlparser`

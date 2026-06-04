@@ -13,7 +13,7 @@ that it draws on or refines.
 | [0003](0003-per-statement-run-id-correlation.md) | Per-statement `run_id` for START/COMPLETE correlation | Accepted |
 | [0004](0004-per-session-credential-isolation.md) | Per-session `RuntimeEnv` for credential isolation | Accepted |
 | [0005](0005-per-query-agent-governance-context.md) | Per-query agent / governance context as a session extension | Accepted |
-| [0006](0006-policy-fact-locality-and-session-state.md) | Policy fact locality, the session fact store, and residual handling | Proposed |
+| [0006](0006-policy-fact-locality-and-session-state.md) | Policy fact locality, the session fact store, and residual handling | Accepted |
 
 Related design docs: [`session-management.md`](../session-management.md),
 [`open-lineage-design.md`](../open-lineage-design.md),

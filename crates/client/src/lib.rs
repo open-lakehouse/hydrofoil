@@ -99,24 +99,30 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::canonicalize, sync::Arc};
+    use std::sync::Arc;
 
     use arrow_array::{Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::arrow::util::pretty::print_batches;
     use futures::TryStreamExt as _;
 
-    use crate::tpcds::register_tpcds_tables;
-
     use super::*;
 
+    #[cfg(feature = "tpcds")]
+    #[ignore = "requires a running hydrofoil server on :50051 and local tpcds_parquet/ data"]
     #[tokio::test]
     async fn it_works_too() {
+        use crate::tpcds::register_tpcds_tables;
+        use std::fs::canonicalize;
         let client = Client::try_new("http://localhost:50051").await.unwrap();
         let path = canonicalize("/Users/robert.pack/code/open-lakehouse/tpcds_parquet/").unwrap();
         register_tpcds_tables(&path, client).await.unwrap();
     }
 
+    // Live integration test: requires a hydrofoil server on :50051. Ignored by
+    // default (run with `cargo test -- --ignored`) so the unit suite / CI stays
+    // green without standing up the stack.
+    #[ignore = "requires a running hydrofoil server on :50051"]
     #[tokio::test]
     async fn it_works() {
         let mut client = Client::try_new("http://localhost:50051").await.unwrap();
@@ -126,7 +132,7 @@ mod tests {
             Field::new("value", DataType::Utf8, false),
         ]);
 
-        let _result = client
+        client
             .create_delta_table()
             .with_location("s3://open-lakehouse/test_table/")
             .with_table_name("test_table")

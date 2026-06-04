@@ -1,3 +1,11 @@
+//! TPC-DS benchmark scaffolding: the query set and table-registration helpers.
+//!
+//! Opt-in via the `tpcds` feature and exercised only by the (ignored)
+//! benchmark/integration tests, so the items here are intentionally not called
+//! from library code — `allow(dead_code)` rather than prune a benchmark harness
+//! we expect to drive again.
+#![allow(dead_code)]
+
 use std::path::Path;
 use std::sync::LazyLock;
 

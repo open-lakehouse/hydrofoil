@@ -40,6 +40,9 @@ pub fn build_client_config() -> ClientConfig {
 }
 
 pub struct OciPolicyProvider {
+    /// OCI client retained for re-fetching the policy image (the `RwLock` fields
+    /// below are built for reload); not read after the initial pull yet.
+    #[allow(dead_code)]
     client: Client,
     reference: Reference,
     entities: RwLock<Arc<Entities>>,
@@ -170,6 +173,11 @@ mod tests {
 
     use super::*;
 
+    // Live integration test: pulls a policy image from a local OCI registry
+    // (zot) on :10100. Ignored by default (run with `cargo test -- --ignored`
+    // after `just push_policy`) so the unit suite / CI stays green without the
+    // registry. Doubles as the end-to-end check for the OCI policy load path.
+    #[ignore = "requires a local zot OCI registry on :10100 with a pushed policy image"]
     #[tokio::test]
     async fn test_fetch_policy() {
         let client_config = build_client_config();

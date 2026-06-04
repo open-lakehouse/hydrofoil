@@ -11,8 +11,6 @@ use bytes::Bytes;
 use futures::{Stream, TryStreamExt, future::BoxFuture};
 use tonic::transport::Channel;
 
-use super::batch_sizer::BatchSizer;
-
 pub struct IngestBuilder<S>
 where
     S: Stream<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
@@ -20,7 +18,6 @@ where
     client: FlightSqlServiceClient<Channel>,
     stream: S,
     message: CommandStatementIngest,
-    max_batch_size: Option<usize>,
 }
 
 impl<S> IngestBuilder<S>
@@ -32,7 +29,6 @@ where
             client,
             stream,
             message: CommandStatementIngest::default(),
-            max_batch_size: None,
         }
     }
 
@@ -79,18 +75,6 @@ where
         self.message.transaction_id = Some(transaction_id.into());
         self
     }
-
-    /// Set the maximum batch size in bytes for RecordBatches sent to the server.
-    ///
-    /// If not set, the default limit of 3.5MB will be used. This ensures that batches
-    /// stay under the 4MB gRPC message limit with encoding overhead.
-    ///
-    /// Large batches will be automatically split, and small batches will be buffered
-    /// and combined to optimize throughput.
-    pub fn with_max_batch_size(mut self, max_batch_size: usize) -> Self {
-        self.max_batch_size = Some(max_batch_size);
-        self
-    }
 }
 
 impl<S> IntoFuture for IngestBuilder<S>
@@ -104,18 +88,14 @@ where
         let mut client = self.client;
         let message = self.message;
         let stream = self.stream;
-        let max_batch_size = self.max_batch_size;
 
         Box::pin(async move {
-            // Wrap the stream with BatchSizer to ensure batches stay within size limits
-            let sized_stream = if let Some(size) = max_batch_size {
-                BatchSizer::with_max_size(stream, size)
-            } else {
-                BatchSizer::new(stream)
-            };
-
+            // arrow-flight's client encodes the batches via FlightDataEncoderBuilder,
+            // which splits large RecordBatches into multiple FlightData messages under
+            // its 2 MiB default target — safely below tonic's 4 MB decode limit. No
+            // client-side chunking is needed; pass the stream straight through.
             client
-                .execute_ingest(message, sized_stream.map_err(FlightError::from))
+                .execute_ingest(message, stream.map_err(FlightError::from))
                 .await
         })
     }

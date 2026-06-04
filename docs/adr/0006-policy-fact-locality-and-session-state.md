@@ -1,7 +1,12 @@
 # 0006 — Policy fact locality, the session fact store, and residual handling
 
-> Status: **Proposed** (2026-06). Validated by
-> `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs`. Refines
+> Status: **Accepted** (2026-06). The v1 decision (re-evaluate-fully, option A)
+> is validated end-to-end by
+> `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs`. The
+> session-fact-store and central session-state PDP it governs remain future work
+> (named seams in [`platform-policy-architecture.md`](../platform-policy-architecture.md));
+> this ADR fixes the *policy* (locality classification + option A) those will
+> implement. Refines
 > [`docs/policy-fact-gathering.md`](../policy-fact-gathering.md) and
 > [`docs/platform-policy-architecture.md`](../platform-policy-architecture.md).
 

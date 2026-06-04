@@ -1,46 +1,30 @@
 # Marquez — the OpenLineage reference backend (API + web UI).
 #
-# Runs with its OWN postgres:14 rather than the shared `db` (postgres:16):
-# Marquez tests/migrates against pg14, and isolating it keeps the lineage
-# sidecar's schema and lifecycle decoupled from the catalog's authoritative
-# store. See docs/adr — environment design.
+# Shares the `db` instance (postgres:16) with Unity Catalog and MLflow, using its
+# own `marquez` role + database (created by docker/db/init/01-create-databases.sql).
+# Logical isolation lives at the database level; a separate server process isn't
+# needed at demo scale. Marquez's CI baseline is pg14, but its Flyway migrations
+# run fine on pg16.
+#
+# The image's baked-in marquez.dev.yml hardcodes the db user/password/name to
+# `marquez` and only interpolates POSTGRES_HOST/POSTGRES_PORT — hence the matching
+# `marquez` role in the init script, and why only host/port are set below.
 #
 # No host ports are published; access is via the Envoy gateway
 # (API by path prefix `/api/v1/lineage`, web UI by its dedicated root listener).
 services:
-  marquez-db:
-    image: postgres:14
-    restart: unless-stopped
-    profiles: [svc, full]
-    environment:
-      POSTGRES_USER: ${MARQUEZ_DB_USER:-marquez}
-      POSTGRES_PASSWORD: ${MARQUEZ_DB_PASSWORD:-marquez}
-      POSTGRES_DB: ${MARQUEZ_DB:-marquez}
-    volumes:
-      - ./.data/marquez-db:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${MARQUEZ_DB_USER:-marquez} -d ${MARQUEZ_DB:-marquez}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
-
   marquez-api:
     image: marquezproject/marquez:0.50.0
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:
-      marquez-db:
+      db:
         condition: service_healthy
-    # The image entrypoint renders marquez.yml from these env vars.
     environment:
       MARQUEZ_PORT: 5000
       MARQUEZ_ADMIN_PORT: 5001
-      POSTGRES_HOST: marquez-db
+      POSTGRES_HOST: db
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${MARQUEZ_DB:-marquez}
-      POSTGRES_USER: ${MARQUEZ_DB_USER:-marquez}
-      POSTGRES_PASSWORD: ${MARQUEZ_DB_PASSWORD:-marquez}
       SEARCH_ENABLED: "false"
     expose:
       - "5000"

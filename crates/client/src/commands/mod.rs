@@ -1,4 +1,3 @@
-mod batch_sizer;
 mod create_delta;
 mod ingest;
 

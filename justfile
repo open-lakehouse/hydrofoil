@@ -28,6 +28,12 @@ uc-managed:
 uc-duckdb:
     uvx --directory notebooks/ marimo edit --sandbox uc_duckdb.py
 
+# run the Cedar policy-enforcement demo notebook (alice vs bob over hydrofoil :50051).
+# Prereqs: a pushed demo policy (just push-demo-policy) + hydrofoil running with
+# HYDROFOIL_POLICY_REF set and the `governance` feature (see the notebook header).
+policy-demo:
+    uvx --directory notebooks/ marimo edit --sandbox policy_demo.py
+
 # bring up the UC + Postgres + SeaweedFS stack
 env-up:
     docker compose -f environments/compose.yaml --profile svc up -d db seaweedfs seaweedfs-init unity-catalog
@@ -68,6 +74,14 @@ push_policy:
       config/policies/lakehouse.cedar:application/vnd.cedar.policyset.v1 \
       config/policies/lakehouse.cedarschema:application/vnd.cedar.schema.v1 \
       config/policies/lakhouse.entities.json:application/vnd.cedar.entities.v1
+
+# push the policy_demo.py policy set (gate + row filter + column mask) to the local
+# OCI registry. Point hydrofoil at it with HYDROFOIL_POLICY_REF=localhost:10100/hydrofoil/demo-policy:latest
+push-demo-policy:
+    oras push localhost:10100/hydrofoil/demo-policy:latest \
+      config/policies/demo.cedar:application/vnd.cedar.policyset.v1 \
+      config/policies/lakehouse.cedarschema:application/vnd.cedar.schema.v1 \
+      config/policies/demo.entities.json:application/vnd.cedar.entities.v1
 
 trust-me:
     ./scripts/generate-notation-certs.sh
