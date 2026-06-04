@@ -43,8 +43,12 @@ impl PrincipalIdentity {
     /// attributes) if attribute evaluation fails, so authorization stays
     /// fail-closed rather than erroring open.
     pub fn to_entity(&self) -> Entity {
-        Entity::new(self.uid.clone(), self.attributes.clone(), Default::default())
-            .unwrap_or_else(|_| Entity::new_no_attrs(self.uid.clone(), Default::default()))
+        Entity::new(
+            self.uid.clone(),
+            self.attributes.clone(),
+            Default::default(),
+        )
+        .unwrap_or_else(|_| Entity::new_no_attrs(self.uid.clone(), Default::default()))
     }
 }
 

@@ -10,10 +10,10 @@
 
 use std::collections::HashMap;
 
-use datafusion::common::{Column, Result};
 use datafusion::common::tree_node::{
     Transformed, TreeNode as _, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
+use datafusion::common::{Column, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
@@ -75,7 +75,9 @@ pub async fn govern_plan(
         if policies.contains_key(&table) {
             continue;
         }
-        let tp = policy.table_policy(&table, schema.as_ref(), principal).await?;
+        let tp = policy
+            .table_policy(&table, schema.as_ref(), principal)
+            .await?;
         if !tp.is_empty() {
             policies.insert(table, tp);
         }
@@ -185,7 +187,10 @@ mod tests {
             Field::new("region", DataType::Utf8, true),
             Field::new("ssn", DataType::Utf8, true),
         ]);
-        table_scan(Some("t"), &schema, None).unwrap().build().unwrap()
+        table_scan(Some("t"), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -204,7 +209,10 @@ mod tests {
         });
         let governed = govern_plan(&scan(), &policy, &principal()).await.unwrap();
         // Top of the governed subtree is a Filter.
-        assert!(matches!(governed, LogicalPlan::Filter(_)), "expected a Filter at the top, got: {governed:?}");
+        assert!(
+            matches!(governed, LogicalPlan::Filter(_)),
+            "expected a Filter at the top, got: {governed:?}"
+        );
     }
 
     #[tokio::test]
@@ -287,7 +295,7 @@ mod tests {
             _principal: &PrincipalIdentity,
         ) -> DFResult<TablePolicy> {
             if self.err {
-                return Err(datafusion::error::DataFusionError::Plan("policy boom".into()));
+                return Err(datafusion::common::plan_datafusion_err!("policy boom"));
             }
             Ok(self
                 .by_table
@@ -301,9 +309,9 @@ mod tests {
     /// policy — the rewriter keys by `scan.table_name`.
     #[tokio::test]
     async fn multi_table_join_governs_each_scan_independently() {
-        use std::sync::Arc;
         use datafusion::datasource::MemTable;
         use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
 
         let ctx = SessionContext::new();
         let s = Arc::new(Schema::new(vec![
@@ -311,8 +319,11 @@ mod tests {
             Field::new("region", DataType::Utf8, true),
         ]));
         for name in ["a", "b"] {
-            ctx.register_table(name, Arc::new(MemTable::try_new(s.clone(), vec![vec![]]).unwrap()))
-                .unwrap();
+            ctx.register_table(
+                name,
+                Arc::new(MemTable::try_new(s.clone(), vec![vec![]]).unwrap()),
+            )
+            .unwrap();
         }
         let plan = ctx
             .sql("SELECT a.id FROM a JOIN b ON a.id = b.id")
@@ -329,12 +340,19 @@ mod tests {
                 column_masks: Default::default(),
             },
         );
-        let policy = PerTablePolicy { by_table, err: false };
+        let policy = PerTablePolicy {
+            by_table,
+            err: false,
+        };
 
         let governed = govern_plan(&plan, &policy, &principal()).await.unwrap();
         let rendered = format!("{governed:?}");
         // Exactly one Filter was injected (for `a`), not two — `b` is ungoverned.
-        assert_eq!(rendered.matches("Filter(Filter").count(), 1, "plan: {rendered}");
+        assert_eq!(
+            rendered.matches("Filter(Filter").count(),
+            1,
+            "plan: {rendered}"
+        );
         // The injected predicate filters on `a.region`.
         assert!(rendered.contains(r#"name: "region""#));
     }

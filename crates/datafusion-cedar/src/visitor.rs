@@ -69,10 +69,7 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
             },
             LogicalPlan::Dml(dml) => match dml.op {
                 // INSERT/UPDATE/DELETE/TRUNCATE all mutate the target table.
-                WriteOp::Insert(_)
-                | WriteOp::Update
-                | WriteOp::Delete
-                | WriteOp::Truncate => {
+                WriteOp::Insert(_) | WriteOp::Update | WriteOp::Delete | WriteOp::Truncate => {
                     self.actions
                         .push(PlanAction::WriteTable(dml.table_name.clone()));
                 }
@@ -103,10 +100,7 @@ static WRITE_TABLE_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
 /// Action used for state-changing nodes we do not model. No policy is expected
 /// to permit it, so Cedar's default-deny rejects the query (fail-closed).
 static DENY_UNSUPPORTED_ACTION: LazyLock<EntityUid> = LazyLock::new(|| {
-    EntityUid::from_type_name_and_id(
-        "Action".parse().unwrap(),
-        EntityId::new("deny_unsupported"),
-    )
+    EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new("deny_unsupported"))
 });
 
 /// Build the `Table` resource uid for a table reference.
@@ -177,20 +171,18 @@ pub(crate) fn authorize_plan(
             // default-deny then rejects the query (fail-closed).
             PlanAction::DenyUnsupported(what) => {
                 tracing::warn!(node = %what, "unsupported state-changing plan node; denying (fail-closed)");
-                (DENY_UNSUPPORTED_ACTION.clone(), TableReference::bare(what), vec![])
+                (
+                    DENY_UNSUPPORTED_ACTION.clone(),
+                    TableReference::bare(what),
+                    vec![],
+                )
             }
         };
         let resource = table_resource(&table_ref);
         let context = table_context(&table_ref, &columns)?;
         requests.push(
-            Request::new(
-                principal.uid.clone(),
-                action_uid,
-                resource,
-                context,
-                None,
-            )
-            .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?,
+            Request::new(principal.uid.clone(), action_uid, resource, context, None)
+                .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?,
         );
     }
 
@@ -219,11 +211,17 @@ mod tests {
 
     #[test]
     fn read_scan_yields_one_request_with_columns() {
-        let plan = table_scan(Some("t"), &schema(), None).unwrap().build().unwrap();
+        let plan = table_scan(Some("t"), &schema(), None)
+            .unwrap()
+            .build()
+            .unwrap();
         let requests = authorize_plan(&plan, &principal()).unwrap();
         assert_eq!(requests.len(), 1);
         // The action is read_table; context carries the table identity.
-        assert_eq!(requests[0].action().unwrap().to_string(), "Action::\"read_table\"");
+        assert_eq!(
+            requests[0].action().unwrap().to_string(),
+            "Action::\"read_table\""
+        );
     }
 
     #[test]
@@ -253,9 +251,9 @@ mod tests {
     // Build real plans through a SessionContext with registered tables, so the
     // DML/DDL node shapes match what the engine actually produces.
     async fn ctx_with_tables() -> datafusion::prelude::SessionContext {
-        use std::sync::Arc;
         use datafusion::datasource::MemTable;
         use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
         let ctx = SessionContext::new();
         let s = Arc::new(schema());
         for name in ["a", "b", "dst"] {
@@ -274,8 +272,16 @@ mod tests {
             .unwrap()
             .into_unoptimized_plan();
         let requests = authorize_plan(&plan, &principal()).unwrap();
-        assert!(requests.iter().any(|r| action_of(r) == "Action::\"write_table\""));
-        assert!(requests.iter().any(|r| action_of(r) == "Action::\"read_table\""));
+        assert!(
+            requests
+                .iter()
+                .any(|r| action_of(r) == "Action::\"write_table\"")
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|r| action_of(r) == "Action::\"read_table\"")
+        );
     }
 
     #[tokio::test]
@@ -296,12 +302,13 @@ mod tests {
 
     #[test]
     fn unmodeled_ddl_yields_deny_unsupported() {
-        use datafusion::logical_expr::{
-            DdlStatement, DropTable, LogicalPlan,
-        };
+        use datafusion::logical_expr::{DdlStatement, DropTable, LogicalPlan};
         use std::sync::Arc;
         // DROP TABLE is state-changing and not modeled -> deny sentinel action.
-        let inner = table_scan(Some("t"), &schema(), None).unwrap().build().unwrap();
+        let inner = table_scan(Some("t"), &schema(), None)
+            .unwrap()
+            .build()
+            .unwrap();
         let plan = LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
             name: TableReference::bare("t"),
             if_exists: false,

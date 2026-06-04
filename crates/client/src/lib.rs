@@ -1,8 +1,8 @@
 use arrow_array::RecordBatch;
 use arrow_flight::Ticket;
 use arrow_flight::decode::FlightRecordBatchStream;
-use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::error::FlightError;
+use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::sql::client::{FlightSqlServiceClient, PreparedStatement};
 use arrow_schema::ArrowError;
 use bytes::Bytes;

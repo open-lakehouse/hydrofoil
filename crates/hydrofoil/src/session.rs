@@ -6,6 +6,7 @@ use std::{
 
 use arrow::array::RecordBatch;
 use bytes::Bytes;
+use cedar_oci::Decision;
 use datafusion::{
     catalog::{
         AsyncCatalogProviderList as _, CatalogProvider as _, MemoryCatalogProvider, Session,
@@ -22,9 +23,8 @@ use datafusion::{
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
-use datafusion_open_lineage::{
-    OpenLineageClient, OpenLineageConfig, instrument_session_state,
-};
+use datafusion_cedar::PrincipalIdentity;
+use datafusion_open_lineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -42,8 +42,6 @@ use deltalake_core::{
 };
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use deltalake_core::{kernel::transaction::TransactionError, logstore::CommitOrBytes};
-use cedar_oci::Decision;
-use datafusion_cedar::PrincipalIdentity;
 use instrumented_object_store::instrument_object_store;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
@@ -107,7 +105,11 @@ pub struct LakehouseCtx {
 }
 
 impl LakehouseCtx {
-    pub fn new(inner: SessionContext, policy: Arc<dyn Policy>, principal: PrincipalIdentity) -> Self {
+    pub fn new(
+        inner: SessionContext,
+        policy: Arc<dyn Policy>,
+        principal: PrincipalIdentity,
+    ) -> Self {
         Self {
             inner,
             policy,
@@ -169,7 +171,12 @@ impl LakehouseCtx {
         // statement path's contract (projections/filters pushed down first).
         let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal).await?;
         let optimized_plan = self.inner.state().optimize(&governed)?;
-        if self.policy.is_allowed(&optimized_plan, &self.principal).await? == Decision::Deny {
+        if self
+            .policy
+            .is_allowed(&optimized_plan, &self.principal)
+            .await?
+            == Decision::Deny
+        {
             return exec_err!(
                 "Principal '{}' is not authorized to execute this query",
                 self.principal.uid
@@ -231,12 +238,10 @@ impl LakehouseSession {
         // planning. UC catalogs are overlaid onto the live catalog list (which
         // keeps the local `hydrofoil.default` catalog); unknown references fall
         // through to existing catalogs.
-        let dialect = self.inner.config().options().sql_parser.dialect.clone();
+        let dialect = self.inner.config().options().sql_parser.dialect;
         let statement = self.inner.sql_to_statement(query, &dialect)?;
         let references = self.inner.resolve_table_references(&statement)?;
-        let resolved = unity
-            .resolve(&references, self.inner.config())
-            .await?;
+        let resolved = unity.resolve(&references, self.inner.config()).await?;
 
         let state = self.inner.clone();
         for name in resolved.catalog_names() {
@@ -732,9 +737,9 @@ mod integration_tests {
 
     use cedar_oci::{Decision, EntityUid};
     use datafusion_cedar::PrincipalIdentity;
+    use datafusion_open_lineage::OpenLineageClient;
     use datafusion_open_lineage::event::{RunEvent, RunEventType};
     use datafusion_open_lineage::transport::{Transport, TransportError};
-    use datafusion_open_lineage::OpenLineageClient;
 
     use super::*;
     use crate::policy::{Policy, StaticPolicy};
@@ -745,7 +750,10 @@ mod integration_tests {
             .with_attribute("region", "eu")
     }
 
-    async fn ctx_with_table(policy: Arc<dyn Policy>, lineage: Option<OpenLineageClient>) -> LakehouseCtx {
+    async fn ctx_with_table(
+        policy: Arc<dyn Policy>,
+        lineage: Option<OpenLineageClient>,
+    ) -> LakehouseCtx {
         let session = create_session(None, lineage).unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
@@ -772,7 +780,11 @@ mod integration_tests {
 
     #[async_trait]
     impl Policy for DenyAll {
-        async fn is_allowed(&self, _plan: &LogicalPlan, _p: &PrincipalIdentity) -> Result<Decision> {
+        async fn is_allowed(
+            &self,
+            _plan: &LogicalPlan,
+            _p: &PrincipalIdentity,
+        ) -> Result<Decision> {
             Ok(Decision::Deny)
         }
     }
@@ -796,7 +808,10 @@ mod integration_tests {
     async fn create_physical_plan_denies_on_policy() {
         let ctx = ctx_with_table(Arc::new(DenyAll), None).await;
         let session = ctx.session();
-        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
         let err = session.create_physical_plan(&plan).await.unwrap_err();
         assert!(
             err.to_string().contains("not authorized"),
@@ -809,7 +824,11 @@ mod integration_tests {
     #[tokio::test]
     async fn execute_logical_plan_denies_on_policy() {
         let ctx = ctx_with_table(Arc::new(DenyAll), None).await;
-        let plan = ctx.session().create_logical_plan("SELECT id FROM t").await.unwrap();
+        let plan = ctx
+            .session()
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
         let err = ctx.execute_logical_plan(plan).await.unwrap_err();
         assert!(err.to_string().contains("not authorized"), "got: {err}");
     }
@@ -819,7 +838,10 @@ mod integration_tests {
     async fn allow_all_returns_rows() {
         let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), None).await;
         let session = ctx.session();
-        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
         let physical = session.create_physical_plan(&plan).await.unwrap();
         let batches = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
             .await
@@ -843,7 +865,10 @@ mod integration_tests {
             sql: Some("SELECT id FROM t".to_string()),
             ..Default::default()
         });
-        let plan = session.create_logical_plan("SELECT id FROM t").await.unwrap();
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
         let physical = session.create_physical_plan(&plan).await.unwrap();
         let _ = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
             .await
@@ -851,11 +876,25 @@ mod integration_tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let events = transport.events.lock().unwrap();
-        let start = events.iter().find(|e| e.event_type == RunEventType::Start).expect("START");
-        let complete = events.iter().find(|e| e.event_type == RunEventType::Complete).expect("COMPLETE");
-        assert_eq!(start.run.run_id, complete.run.run_id, "START/COMPLETE share a run id");
+        let start = events
+            .iter()
+            .find(|e| e.event_type == RunEventType::Start)
+            .expect("START");
+        let complete = events
+            .iter()
+            .find(|e| e.event_type == RunEventType::Complete)
+            .expect("COMPLETE");
+        assert_eq!(
+            start.run.run_id, complete.run.run_id,
+            "START/COMPLETE share a run id"
+        );
         // The SQL facet flowed from the per-request context.
-        let sql = start.job.facets.sql.as_ref().expect("sql job facet present");
+        let sql = start
+            .job
+            .facets
+            .sql
+            .as_ref()
+            .expect("sql job facet present");
         assert_eq!(sql.query, "SELECT id FROM t");
     }
 
@@ -864,17 +903,21 @@ mod integration_tests {
     #[cfg(feature = "governance")]
     #[tokio::test]
     async fn governance_filters_and_masks_rows() {
-        use std::collections::HashMap;
+        use datafusion::common::DFSchema;
         use datafusion::logical_expr::{col, lit};
         use datafusion::sql::TableReference;
-        use datafusion::common::DFSchema;
         use datafusion_cedar::TablePolicy;
+        use std::collections::HashMap;
 
         #[derive(Debug)]
         struct GovPolicy;
         #[async_trait]
         impl Policy for GovPolicy {
-            async fn is_allowed(&self, _p: &LogicalPlan, _pr: &PrincipalIdentity) -> Result<Decision> {
+            async fn is_allowed(
+                &self,
+                _p: &LogicalPlan,
+                _pr: &PrincipalIdentity,
+            ) -> Result<Decision> {
                 Ok(Decision::Allow)
             }
             async fn table_policy(
@@ -894,7 +937,10 @@ mod integration_tests {
 
         let ctx = ctx_with_table(Arc::new(GovPolicy), None).await;
         let session = ctx.session();
-        let plan = session.create_logical_plan("SELECT id, region, ssn FROM t").await.unwrap();
+        let plan = session
+            .create_logical_plan("SELECT id, region, ssn FROM t")
+            .await
+            .unwrap();
         let physical = session.create_physical_plan(&plan).await.unwrap();
         let batches = datafusion::physical_plan::collect(physical, ctx.ctx().task_ctx())
             .await
@@ -907,6 +953,9 @@ mod integration_tests {
             .unwrap()
             .to_string();
         assert!(pretty.contains("***"), "ssn masked: {pretty}");
-        assert!(!pretty.contains(" a ") && !pretty.contains(" c "), "raw ssn must not leak: {pretty}");
+        assert!(
+            !pretty.contains(" a ") && !pretty.contains(" c "),
+            "raw ssn must not leak: {pretty}"
+        );
     }
 }

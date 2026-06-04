@@ -20,10 +20,10 @@ use arrow_flight::{
 };
 use bytes::Bytes;
 use cedar_oci::Decision;
-use datafusion_open_lineage::OpenLineageClient;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
+use datafusion_open_lineage::OpenLineageClient;
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;

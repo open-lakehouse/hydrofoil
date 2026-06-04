@@ -31,3 +31,9 @@ governance = [
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+# End-to-end fact-gathering & policy-evaluation walkthrough (docs/policy-fact-gathering.md).
+# Needs `governance` for the partial-eval (residual) decision point.
+[[example]]
+name = "fact_gathering_walkthrough"
+required-features = ["governance"]

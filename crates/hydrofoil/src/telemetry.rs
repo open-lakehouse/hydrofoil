@@ -69,8 +69,7 @@ pub(crate) fn init_tracing_subscriber() -> OtelGuard {
     // MLflow routes OTLP traces to an experiment via this header (mandatory).
     // Experiment "0" (Default) always exists.
     let mut headers = HashMap::new();
-    let experiment_id =
-        std::env::var("MLFLOW_EXPERIMENT_ID").unwrap_or_else(|_| "0".to_string());
+    let experiment_id = std::env::var("MLFLOW_EXPERIMENT_ID").unwrap_or_else(|_| "0".to_string());
     headers.insert("x-mlflow-experiment-id".to_string(), experiment_id);
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -126,10 +125,10 @@ impl Drop for OtelGuard {
         if let Err(err) = self.tracer_provider.shutdown() {
             eprintln!("{err:?}");
         }
-        if let Some(meter_provider) = &self.meter_provider {
-            if let Err(err) = meter_provider.shutdown() {
-                eprintln!("{err:?}");
-            }
+        if let Some(meter_provider) = &self.meter_provider
+            && let Err(err) = meter_provider.shutdown()
+        {
+            eprintln!("{err:?}");
         }
     }
 }

@@ -64,7 +64,11 @@ pub struct AgentContextExt(pub AgentContext);
 /// Returns `None` when no agent headers are present, so callers can cheaply skip
 /// attaching the extension for non-agent clients.
 pub fn agent_context_from_metadata(meta: &MetadataMap) -> Option<AgentContext> {
-    let get = |key: &str| meta.get(key).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let get = |key: &str| {
+        meta.get(key)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
 
     let ctx = AgentContext {
         agent_id: get(headers::AGENT_ID),

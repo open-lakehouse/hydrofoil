@@ -6,9 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::facets::{
-    DatasetFacets, InputDatasetFacets, JobFacets, OutputDatasetFacets, RunFacets,
-};
+use crate::facets::{DatasetFacets, InputDatasetFacets, JobFacets, OutputDatasetFacets, RunFacets};
 
 /// URL of the OpenLineage run-event schema this crate emits against.
 pub const RUN_EVENT_SCHEMA_URL: &str =

@@ -64,7 +64,7 @@ impl SchemaProvider for LakehouseSchemaProvider {
         self.tables
             .iter()
             .map(|entry| entry.key().clone())
-            .chain(self.fallback.table_names().into_iter())
+            .chain(self.fallback.table_names())
             .collect()
     }
 

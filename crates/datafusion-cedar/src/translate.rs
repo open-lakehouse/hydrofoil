@@ -252,9 +252,8 @@ fn translate_value(value: &Value) -> Result<Expr> {
         // corrupt the predicate, so fail closed (the caller denies the row).
         Value::Number(n) if n.is_u64() => {
             let u = n.as_u64().unwrap();
-            let i = i64::try_from(u).map_err(|_| {
-                plan_datafusion_err!("Cedar integer literal {u} exceeds i64 range")
-            })?;
+            let i = i64::try_from(u)
+                .map_err(|_| plan_datafusion_err!("Cedar integer literal {u} exceeds i64 range"))?;
             Ok(lit(i))
         }
         _ => Err(plan_datafusion_err!(
@@ -311,7 +310,8 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_operator() {
-        let node = json!({ "containsAll": { "left": { "Var": "resource" }, "right": { "Value": "x" } } });
+        let node =
+            json!({ "containsAll": { "left": { "Var": "resource" }, "right": { "Value": "x" } } });
         assert!(translate_expr(&node).is_err());
     }
 
@@ -378,7 +378,10 @@ mod tests {
             r#"permit(principal, action, resource) unless { resource.a == 1 };"#,
         )
         .unwrap();
-        let expr = CedarResidualTranslator.to_predicate(&policy).unwrap().unwrap();
+        let expr = CedarResidualTranslator
+            .to_predicate(&policy)
+            .unwrap()
+            .unwrap();
         assert_eq!(expr, !col("a").eq(lit(1i64)));
     }
 

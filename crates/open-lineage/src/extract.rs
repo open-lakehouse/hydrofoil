@@ -9,16 +9,14 @@ use std::collections::BTreeMap;
 
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::error::Result;
-use datafusion::logical_expr::{
-    DdlStatement, Expr, LogicalPlan, Projection, WriteOp,
-};
+use datafusion::logical_expr::{DdlStatement, Expr, LogicalPlan, Projection, WriteOp};
 use datafusion::sql::TableReference;
 use serde_json::{Map, Value};
 
 use crate::config::OpenLineageConfig;
 use crate::facets::{
-    BaseFacet, ColumnLineageDatasetFacet, DatasetFacets, FieldLineage, InputField, SchemaDatasetFacet,
-    SchemaField, Transformation, TransformationType,
+    BaseFacet, ColumnLineageDatasetFacet, DatasetFacets, FieldLineage, InputField,
+    SchemaDatasetFacet, SchemaField, Transformation, TransformationType,
 };
 use crate::naming::DatasetName;
 
@@ -171,7 +169,11 @@ impl LineageVisitor<'_> {
         for (field, expr) in proj.schema.fields().iter().zip(proj.expr.iter()) {
             let output_col = field.name().to_string();
             let is_identity = matches!(expr, Expr::Column(_));
-            let subtype = if is_identity { "IDENTITY" } else { "TRANSFORMATION" };
+            let subtype = if is_identity {
+                "IDENTITY"
+            } else {
+                "TRANSFORMATION"
+            };
 
             let mut input_fields: Vec<InputField> = Vec::new();
             for col in expr.column_refs() {

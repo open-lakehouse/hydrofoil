@@ -26,7 +26,7 @@ pub mod models {
 
 impl ProstMessageExt for DeltaCommand {
     fn type_url() -> &'static str {
-        static TYPE_URL: LazyLock<String> = LazyLock::new(|| <DeltaCommand as Name>::type_url());
+        static TYPE_URL: LazyLock<String> = LazyLock::new(<DeltaCommand as Name>::type_url);
         TYPE_URL.as_str()
     }
 

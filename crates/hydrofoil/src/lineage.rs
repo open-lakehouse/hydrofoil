@@ -13,7 +13,9 @@
 use datafusion::execution::context::SessionState;
 use datafusion_open_lineage::config::OpenLineageConfig;
 use datafusion_open_lineage::context::{LineageContext, LineageContextProvider};
-use datafusion_open_lineage::facets::{BaseFacet, ParentJob, ParentRun, ParentRunFacet, RootParent};
+use datafusion_open_lineage::facets::{
+    BaseFacet, ParentJob, ParentRun, ParentRunFacet, RootParent,
+};
 use tonic::metadata::MetadataMap;
 
 /// gRPC metadata keys for forwarding OpenLineage parent-run context.
@@ -43,7 +45,11 @@ pub struct LineageContextExt(pub LineageContext);
 /// A parent facet is only produced when all three parent fields
 /// (run id, job namespace, job name) are supplied together; likewise for root.
 pub fn context_from_metadata(meta: &MetadataMap, config: &OpenLineageConfig) -> LineageContext {
-    let get = |key: &str| meta.get(key).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let get = |key: &str| {
+        meta.get(key)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
 
     let parent_run = match (
         get(headers::PARENT_RUN_ID),
@@ -142,7 +148,10 @@ mod tests {
         meta.insert(headers::PARENT_JOB_NAMESPACE, "ns".parse().unwrap());
         meta.insert(headers::PARENT_JOB_NAME, "job".parse().unwrap());
         meta.insert(headers::ROOT_PARENT_RUN_ID, "root-1".parse().unwrap());
-        meta.insert(headers::ROOT_PARENT_JOB_NAMESPACE, "root-ns".parse().unwrap());
+        meta.insert(
+            headers::ROOT_PARENT_JOB_NAMESPACE,
+            "root-ns".parse().unwrap(),
+        );
         meta.insert(headers::ROOT_PARENT_JOB_NAME, "root-job".parse().unwrap());
 
         let cx = context_from_metadata(&meta, &config());
