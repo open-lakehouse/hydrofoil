@@ -47,7 +47,7 @@ pub use config::OpenLineageConfig;
 pub use context::{LineageContext, LineageContextProvider, StaticContextProvider};
 pub use event::{Dataset, Job, Run, RunEvent, RunEventType};
 pub use exec::OpenLineageExec;
-pub use extract::{extract, QueryLineage};
+pub use extract::{QueryLineage, extract};
 pub use naming::DatasetName;
 pub use planner::OpenLineageQueryPlanner;
 pub use session::{instrument_session_state, instrument_session_state_simple};

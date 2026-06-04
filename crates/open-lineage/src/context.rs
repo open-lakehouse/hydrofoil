@@ -52,20 +52,19 @@ impl LineageContext {
 }
 
 fn parent_from_env(config: &OpenLineageConfig) -> Option<ParentRunFacet> {
-    let (namespace, name, run_id) =
-        if let Ok(parent_id) = std::env::var("OPENLINEAGE_PARENT_ID") {
-            // Format: {namespace}/{name}/{runId}
-            let parts: Vec<&str> = parent_id.splitn(3, '/').collect();
-            match parts.as_slice() {
-                [ns, n, rid] => (ns.to_string(), n.to_string(), rid.to_string()),
-                _ => return None,
-            }
-        } else {
-            let ns = std::env::var("OPENLINEAGE_PARENT_JOB_NAMESPACE").ok()?;
-            let n = std::env::var("OPENLINEAGE_PARENT_JOB_NAME").ok()?;
-            let rid = std::env::var("OPENLINEAGE_PARENT_RUN_ID").ok()?;
-            (ns, n, rid)
-        };
+    let (namespace, name, run_id) = if let Ok(parent_id) = std::env::var("OPENLINEAGE_PARENT_ID") {
+        // Format: {namespace}/{name}/{runId}
+        let parts: Vec<&str> = parent_id.splitn(3, '/').collect();
+        match parts.as_slice() {
+            [ns, n, rid] => (ns.to_string(), n.to_string(), rid.to_string()),
+            _ => return None,
+        }
+    } else {
+        let ns = std::env::var("OPENLINEAGE_PARENT_JOB_NAMESPACE").ok()?;
+        let n = std::env::var("OPENLINEAGE_PARENT_JOB_NAME").ok()?;
+        let rid = std::env::var("OPENLINEAGE_PARENT_RUN_ID").ok()?;
+        (ns, n, rid)
+    };
 
     Some(ParentRunFacet {
         base: BaseFacet::new(&config.producer, "1-0-0/ParentRunFacet.json"),

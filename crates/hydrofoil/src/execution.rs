@@ -137,7 +137,7 @@ impl CpuRuntime {
             .await
             .map_err(|e| plan_datafusion_err!("{e}"))
             .flatten()?;
-        tracing::Span::current().record("hydrofoil.plan", &plan.display_indent().to_string());
+        tracing::Span::current().record("hydrofoil.plan", plan.display_indent().to_string());
         Ok(plan)
     }
 

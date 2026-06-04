@@ -163,7 +163,11 @@ impl Session {
     /// paths and the CPU-runtime planning call sites that take an
     /// `Arc<LakehouseCtx>`.
     pub fn ctx(&self) -> LakehouseCtx {
-        let mut ctx = LakehouseCtx::new(self.ctx.clone(), self.policy.clone(), self.principal.clone());
+        let mut ctx = LakehouseCtx::new(
+            self.ctx.clone(),
+            self.policy.clone(),
+            self.principal.clone(),
+        );
         if let Some(unity) = self.unity.clone() {
             ctx = ctx.with_unity(unity);
         }
@@ -272,11 +276,7 @@ impl SessionStore {
         let session = self.engine.new_session(principal)?;
         // `entry` guards against a concurrent insert racing between the `get`
         // above and here.
-        let session = self
-            .sessions
-            .entry(key)
-            .or_insert(session)
-            .clone();
+        let session = self.sessions.entry(key).or_insert(session).clone();
         session.touch();
         Ok(session)
     }
@@ -330,7 +330,10 @@ mod tests {
         let (id, session) = store.create(principal("alice")).unwrap();
 
         let resolved = store.get(&id).expect("session resolves by id");
-        assert!(Arc::ptr_eq(&session, &resolved), "same Arc<Session> handed back");
+        assert!(
+            Arc::ptr_eq(&session, &resolved),
+            "same Arc<Session> handed back"
+        );
         assert!(store.get("unknown").is_none());
     }
 
@@ -354,8 +357,14 @@ mod tests {
         let a2 = store.ephemeral_for(principal("alice")).unwrap();
         let b = store.ephemeral_for(principal("bob")).unwrap();
 
-        assert!(Arc::ptr_eq(&a, &a2), "same principal -> same ephemeral session");
-        assert!(!Arc::ptr_eq(&a, &b), "different principal -> different session");
+        assert!(
+            Arc::ptr_eq(&a, &a2),
+            "same principal -> same ephemeral session"
+        );
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "different principal -> different session"
+        );
     }
 
     /// Credential isolation: distinct sessions must own distinct RuntimeEnvs so
@@ -404,10 +413,10 @@ mod tests {
         use std::sync::Mutex;
 
         use async_trait::async_trait;
-        use datafusion::catalog::Session as _;
         use datafusion::arrow::array::Int64Array;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::catalog::Session as _;
         use datafusion::datasource::MemTable;
         use datafusion_open_lineage::OpenLineageClient;
         use datafusion_open_lineage::event::{RunEvent, RunEventType};
@@ -427,19 +436,28 @@ mod tests {
 
         let recorder = Recorder::default();
         let client = OpenLineageClient::new(Arc::new(recorder.clone()));
-        let eng = Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, Some(client));
+        let eng = Engine::new(
+            Arc::new(StaticPolicy::new(Decision::Allow)),
+            None,
+            Some(client),
+        );
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
             .create(principal("alice"))
             .unwrap();
 
         // A tiny table to scan.
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])
-                .unwrap();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
         session
             .ctx
-            .register_table("t", Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()))
+            .register_table(
+                "t",
+                Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+            )
             .unwrap();
 
         // Pin a run id in a stored statement (as get_flight_info_statement does).
@@ -463,7 +481,10 @@ mod tests {
         let events = recorder.events.lock().unwrap();
         assert!(!events.is_empty(), "lineage events emitted");
         for e in events.iter() {
-            assert_eq!(e.run.run_id, run_id, "every event carries the pinned run id");
+            assert_eq!(
+                e.run.run_id, run_id,
+                "every event carries the pinned run id"
+            );
         }
         assert!(
             events.iter().any(|e| e.event_type == RunEventType::Start),

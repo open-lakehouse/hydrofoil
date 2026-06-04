@@ -220,7 +220,8 @@ impl AsyncSchemaProvider for UnityCatalogSchemaProvider {
             })?;
         // Register the bucket-rooted store; the routing store forwards the full
         // request path unchanged, and the credential is scoped to `prefix()`.
-        self.ctx.register_table_store(uc_store.url(), uc_store.root());
+        self.ctx
+            .register_table_store(uc_store.url(), uc_store.root());
 
         // 4. Delegate provider construction to the host session.
         let provider = self.ctx.builder.build_delta(&location, &table).await?;

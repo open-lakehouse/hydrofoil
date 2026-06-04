@@ -75,12 +75,9 @@ impl OpenLineageClient {
     fn http_from_env(url: &str) -> Result<Self, ClientError> {
         use crate::cloud::CloudClientTransport;
 
-        let endpoint = std::env::var("OPENLINEAGE_ENDPOINT")
-            .unwrap_or_else(|_| "/api/v1/lineage".to_string());
-        let full = url
-            .trim_end_matches('/')
-            .to_string()
-            + &endpoint;
+        let endpoint =
+            std::env::var("OPENLINEAGE_ENDPOINT").unwrap_or_else(|_| "/api/v1/lineage".to_string());
+        let full = url.trim_end_matches('/').to_string() + &endpoint;
         let endpoint_url = url::Url::parse(&full)
             .map_err(|e| ClientError::Config(format!("invalid OPENLINEAGE_URL/ENDPOINT: {e}")))?;
 
@@ -132,9 +129,6 @@ impl OpenLineageClientBuilder {
 
     pub fn build(self) -> OpenLineageClient {
         let transport = self.transport.unwrap_or_else(|| Arc::new(NoopTransport));
-        OpenLineageClient::with_queue_size(
-            transport,
-            self.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE),
-        )
+        OpenLineageClient::with_queue_size(transport, self.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE))
     }
 }

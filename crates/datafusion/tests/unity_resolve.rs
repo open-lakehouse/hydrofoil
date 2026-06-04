@@ -45,7 +45,8 @@ struct TestProviderBuilder {
 
 impl std::fmt::Debug for TestProviderBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TestProviderBuilder").finish_non_exhaustive()
+        f.debug_struct("TestProviderBuilder")
+            .finish_non_exhaustive()
     }
 }
 
@@ -120,8 +121,7 @@ async fn resolve_and_scan_uc_table() {
     let factory = Arc::new(factory_fut.build().await);
     let ctx = SessionContext::new();
     let builder = Arc::new(TestProviderBuilder { ctx: ctx.clone() });
-    let resolver =
-        UnityCatalogProviderList::new(factory, ctx.runtime_env(), builder);
+    let resolver = UnityCatalogProviderList::new(factory, ctx.runtime_env(), builder);
 
     // Drive resolution exactly as the session does at plan time.
     let reference = TableReference::parse_str(&full_name);

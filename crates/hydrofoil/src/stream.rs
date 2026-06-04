@@ -404,13 +404,13 @@ impl PartitionStream for FlightDataStream {
                 stream.map_err(|e| exec_datafusion_err!("Failed to receive flight stream: {}", e)),
             ));
         };
-        return Box::pin(RecordBatchStreamAdapter::new(
+        Box::pin(RecordBatchStreamAdapter::new(
             self.schema().clone(),
             futures::stream::once(async {
                 exec_err!(
                     "FlightDataStream has already been executed once and cannot be executed again"
                 )
             }),
-        ));
+        ))
     }
 }

@@ -57,12 +57,16 @@ pub struct PrincipalExt(pub PrincipalIdentity);
 /// Errors only when a supplied principal uid fails to parse as a Cedar
 /// `EntityUid`.
 pub fn principal_from_metadata(meta: &MetadataMap) -> Result<PrincipalIdentity, tonic::Status> {
-    let get = |key: &str| meta.get(key).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let get = |key: &str| {
+        meta.get(key)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
 
     let uid_str = get(headers::PRINCIPAL).unwrap_or_else(|| DEFAULT_PRINCIPAL.to_string());
-    let uid: EntityUid = uid_str
-        .parse()
-        .map_err(|e| tonic::Status::invalid_argument(format!("invalid principal '{uid_str}': {e}")))?;
+    let uid: EntityUid = uid_str.parse().map_err(|e| {
+        tonic::Status::invalid_argument(format!("invalid principal '{uid_str}': {e}"))
+    })?;
 
     let mut identity = PrincipalIdentity::new(uid);
     if let Some(role) = get(headers::ROLE) {

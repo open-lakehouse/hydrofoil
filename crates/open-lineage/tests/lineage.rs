@@ -12,8 +12,8 @@ use datafusion_open_lineage::event::{RunEvent, RunEventType};
 use datafusion_open_lineage::extract::extract;
 use datafusion_open_lineage::transport::{Transport, TransportError};
 use datafusion_open_lineage::{
-    instrument_session_state, instrument_session_state_simple, LineageContextProvider,
-    OpenLineageClient,
+    LineageContextProvider, OpenLineageClient, instrument_session_state,
+    instrument_session_state_simple,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -68,7 +68,12 @@ async fn start_event_serializes_to_spec_shape() {
     let optimized = ctx.state().optimize(&plan).unwrap();
 
     let lineage = extract(&optimized, &config());
-    let event = start_event(Uuid::now_v7(), &lineage, &LineageContext::default(), &config());
+    let event = start_event(
+        Uuid::now_v7(),
+        &lineage,
+        &LineageContext::default(),
+        &config(),
+    );
 
     let json: Value = serde_json::to_value(&event).unwrap();
     // Envelope.
@@ -81,7 +86,10 @@ async fn start_event_serializes_to_spec_shape() {
     assert!(pe["_producer"].is_string());
     assert!(pe["_schemaURL"].is_string());
     // Job type facet.
-    assert_eq!(json["job"]["facets"]["jobType"]["integration"], "DATAFUSION");
+    assert_eq!(
+        json["job"]["facets"]["jobType"]["integration"],
+        "DATAFUSION"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +162,10 @@ async fn start_and_complete_share_run_id() {
     assert_eq!(fail.event_type, RunEventType::Fail);
     // Error facet present on FAIL only.
     let fail_json = serde_json::to_value(&fail).unwrap();
-    assert_eq!(fail_json["run"]["facets"]["errorMessage"]["message"], "kaboom");
+    assert_eq!(
+        fail_json["run"]["facets"]["errorMessage"]["message"],
+        "kaboom"
+    );
 }
 
 #[tokio::test]
@@ -373,7 +384,11 @@ async fn single_input_read_emits_input_statistics() {
     let state = instrument_session_state_simple(base.state(), client, config());
     let instrumented = SessionContext::new_with_state(state);
     instrumented
-        .register_parquet("t", parquet.to_str().unwrap(), ParquetReadOptions::default())
+        .register_parquet(
+            "t",
+            parquet.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
         .await
         .unwrap();
 
@@ -432,11 +447,19 @@ async fn multi_input_read_omits_input_statistics() {
     let state = instrument_session_state_simple(base.state(), client, config());
     let instrumented = SessionContext::new_with_state(state);
     instrumented
-        .register_parquet("ta", dir.join("a.parquet").to_str().unwrap(), ParquetReadOptions::default())
+        .register_parquet(
+            "ta",
+            dir.join("a.parquet").to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
         .await
         .unwrap();
     instrumented
-        .register_parquet("tb", dir.join("b.parquet").to_str().unwrap(), ParquetReadOptions::default())
+        .register_parquet(
+            "tb",
+            dir.join("b.parquet").to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
         .await
         .unwrap();
 
@@ -492,12 +515,7 @@ async fn context_run_id_flows_to_event() {
         ..Default::default()
     };
 
-    let event = start_event(
-        cx.run_id.unwrap(),
-        &Default::default(),
-        &cx,
-        &config(),
-    );
+    let event = start_event(cx.run_id.unwrap(), &Default::default(), &cx, &config());
     assert_eq!(event.run.run_id, fixed_run);
     assert_eq!(event.job.name, "airflow.my_dag.my_task");
     // Provider trait is object-safe and usable.
@@ -635,8 +653,7 @@ async fn parent_run_facet_flows_to_start_event() {
     let json = serde_json::to_value(start).unwrap();
     // Parent facet populated from the context.
     assert_eq!(
-        json["run"]["facets"]["parent"]["run"]["runId"],
-        "parent-run-1",
+        json["run"]["facets"]["parent"]["run"]["runId"], "parent-run-1",
         "parent run facet present: {json}"
     );
     // SQL job facet populated from the context.

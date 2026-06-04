@@ -92,7 +92,10 @@ impl fmt::Debug for RoutingObjectStore {
         f.debug_struct("RoutingObjectStore")
             .field(
                 "prefixes",
-                &routes.iter().map(|(p, _)| p.to_string()).collect::<Vec<_>>(),
+                &routes
+                    .iter()
+                    .map(|(p, _)| p.to_string())
+                    .collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -130,7 +133,9 @@ impl ObjectStore for RoutingObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        self.route(location)?.put_opts(location, payload, opts).await
+        self.route(location)?
+            .put_opts(location, payload, opts)
+            .await
     }
 
     async fn put_multipart_opts(
@@ -208,12 +213,18 @@ mod tests {
     fn is_path_prefix_matches_on_segment_boundaries() {
         let prefix = Path::from("db/t1");
         assert!(is_path_prefix(&prefix, &Path::from("db/t1")));
-        assert!(is_path_prefix(&prefix, &Path::from("db/t1/_delta_log/0.json")));
+        assert!(is_path_prefix(
+            &prefix,
+            &Path::from("db/t1/_delta_log/0.json")
+        ));
         // must NOT match a sibling whose name shares a textual prefix
         assert!(!is_path_prefix(&prefix, &Path::from("db/t10/part.parquet")));
         assert!(!is_path_prefix(&prefix, &Path::from("db/t2/part.parquet")));
         // empty prefix matches everything
-        assert!(is_path_prefix(&Path::from(""), &Path::from("anything/here")));
+        assert!(is_path_prefix(
+            &Path::from(""),
+            &Path::from("anything/here")
+        ));
     }
 
     #[tokio::test]

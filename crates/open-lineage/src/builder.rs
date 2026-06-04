@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 use crate::config::OpenLineageConfig;
 use crate::context::LineageContext;
-use crate::event::{Dataset, Job, Run, RunEvent, RunEventType, RUN_EVENT_SCHEMA_URL};
-use crate::extract::{input_dataset_facets, QueryLineage};
+use crate::event::{Dataset, Job, RUN_EVENT_SCHEMA_URL, Run, RunEvent, RunEventType};
+use crate::extract::{QueryLineage, input_dataset_facets};
 use crate::facets::{
-    BaseFacet, ErrorMessageRunFacet, JobFacets, JobTypeJobFacet, ProcessingEngineRunFacet, RunFacets,
-    SqlJobFacet,
+    BaseFacet, ErrorMessageRunFacet, JobFacets, JobTypeJobFacet, ProcessingEngineRunFacet,
+    RunFacets, SqlJobFacet,
 };
 
 const PROCESSING_ENGINE_FACET: &str = "1-1-1/ProcessingEngineRunFacet.json";
@@ -135,7 +135,10 @@ fn base_event(
                 .job_namespace
                 .clone()
                 .unwrap_or_else(|| config.job_namespace.clone()),
-            name: cx.job_name.clone().unwrap_or_else(|| "datafusion_query".to_string()),
+            name: cx
+                .job_name
+                .clone()
+                .unwrap_or_else(|| "datafusion_query".to_string()),
             facets: job_facets,
         },
         inputs,

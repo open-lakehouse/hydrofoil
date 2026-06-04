@@ -39,9 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if std::env::var("OPENLINEAGE_URL").is_ok() {
                 tracing::info!("OpenLineage integration enabled");
             } else {
-                tracing::info!(
-                    "OpenLineage integration disabled (set OPENLINEAGE_URL to enable)"
-                );
+                tracing::info!("OpenLineage integration disabled (set OPENLINEAGE_URL to enable)");
             }
             service = service.with_lineage(client);
         }
@@ -58,9 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("Cedar policy enforcement enabled (ref: {reference})");
             service = service.with_policy(Arc::new(policy));
         }
-        _ => tracing::info!(
-            "Cedar policy enforcement disabled (set HYDROFOIL_POLICY_REF to enable)"
-        ),
+        _ => {
+            tracing::info!("Cedar policy enforcement disabled (set HYDROFOIL_POLICY_REF to enable)")
+        }
     }
 
     // Wire Unity Catalog when an endpoint is configured. `UC_ENDPOINT` is the

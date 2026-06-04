@@ -53,15 +53,13 @@ impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
     ///
     /// The same provider backs both the policy-set and entity providers.
     pub async fn from_oci(reference: &str) -> Result<Self> {
-        let provider = Arc::new(
-            OciPolicyProvider::from_reference(reference)
-                .await
-                .map_err(|e| {
-                    datafusion::error::DataFusionError::Plan(format!(
-                        "Failed to load Cedar policy from OCI reference '{reference}': {e}"
-                    ))
-                })?,
-        );
+        let provider = Arc::new(OciPolicyProvider::from_reference(reference).await.map_err(
+            |e| {
+                datafusion::error::DataFusionError::Plan(format!(
+                    "Failed to load Cedar policy from OCI reference '{reference}': {e}"
+                ))
+            },
+        )?);
         let config = AuthorizerConfigBuilder::default()
             .policy_set_provider(provider.clone())
             .entity_provider(provider)
@@ -325,7 +323,9 @@ mod tests {
     #[tokio::test]
     async fn is_allowed_permits_matching_principal() {
         let pol = policy(
-            InMemory::new(r#"permit(principal == User::"alice", action == Action::"read_table", resource);"#),
+            InMemory::new(
+                r#"permit(principal == User::"alice", action == Action::"read_table", resource);"#,
+            ),
             InMemory::new(""),
         );
         let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
@@ -336,7 +336,9 @@ mod tests {
     async fn is_allowed_denies_non_matching_principal() {
         // Policy only permits bob; alice is denied by default-deny.
         let pol = policy(
-            InMemory::new(r#"permit(principal == User::"bob", action == Action::"read_table", resource);"#),
+            InMemory::new(
+                r#"permit(principal == User::"bob", action == Action::"read_table", resource);"#,
+            ),
             InMemory::new(""),
         );
         let decision = pol.is_allowed(&scan_plan(), &alice()).await.unwrap();
@@ -378,7 +380,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
             assert!(tp.column_masks.is_empty());
         }
@@ -394,7 +399,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
         }
 
@@ -410,7 +418,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("REDACTED")));
         }
 
@@ -426,7 +437,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
             assert!(tp.column_masks.is_empty());
         }
@@ -441,7 +455,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
         }
 
@@ -455,7 +472,10 @@ mod tests {
                 ),
                 InMemory::new(""),
             );
-            let tp = pol.table_policy(&table(), &empty_schema(), &alice()).await.unwrap();
+            let tp = pol
+                .table_policy(&table(), &empty_schema(), &alice())
+                .await
+                .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
         }
     }

@@ -213,10 +213,10 @@ where
                     // Normal buffering for batches that weren't split
                     self.add_to_buffer(batch);
 
-                    if self.should_flush_buffer() {
-                        if let Some(result) = self.try_flush_buffer() {
-                            return Poll::Ready(Some(result));
-                        }
+                    if self.should_flush_buffer()
+                        && let Some(result) = self.try_flush_buffer()
+                    {
+                        return Poll::Ready(Some(result));
                     }
                     continue;
                 }
@@ -262,10 +262,10 @@ where
                     // If we have buffered data and the stream is pending,
                     // we could flush the buffer now, but let's wait for more data
                     // unless we're at the size limit
-                    if self.should_flush_buffer() {
-                        if let Some(result) = self.try_flush_buffer() {
-                            return Poll::Ready(Some(result));
-                        }
+                    if self.should_flush_buffer()
+                        && let Some(result) = self.try_flush_buffer()
+                    {
+                        return Poll::Ready(Some(result));
                     }
                     return Poll::Pending;
                 }
