@@ -80,8 +80,8 @@ slot** it lands in — so this table doubles as a wiring map.
 | `in_trusted_environment` | request / network (Envoy) | local-ephemeral | `context` | network PIP (future) |
 | table identity (`catalog.schema.table`) | catalog resolution / `TableScan` | local-ephemeral | `resource` uid + `context` | `visitor::table_context` (✓ free today) |
 | accessed columns | `DFSchema` / scan projection | local-ephemeral | `context.columns` | `visitor::authorize_plan` (✓ free today) |
-| table `readers`/`writers` | catalog metadata (UC `Table`) | local-ephemeral | resource entity attrs | `build_delta(_, table: &Table)` seam (available, unextracted) |
-| column tags / classification | catalog metadata | local-ephemeral | `Field.tags` entity attrs | `build_delta` seam + entities bundle (unextracted) |
+| table `owner`/`readers`/`writers` | catalog metadata (UC `Table`) | local-ephemeral | `resource` entity attrs | `build_delta` → `table_acl_facts` → `CatalogFactSink` (✓ built) |
+| column tags / classification | catalog metadata (convention) | local-ephemeral | `resource.column_tags` | `build_delta` → `ConventionTagProvider` → `CatalogFactSink` (✓ built) |
 | **observed taints** | accrued as engine reads tagged cols | **shared-session-scoped** | `context.observed_taints` | **(new) session fact store** |
 | prior decisions / consent / step-up | accrued across the session | **shared-session-scoped** | `context` | **(new) session fact store** |
 | carried residual (option B) | produced by a prior PEP's partial eval | **shared-session-scoped** | n/a (a cached partial decision) | **(deferred)** — see ADR |
@@ -104,18 +104,27 @@ network/request edge (Envoy PIP). **Trust boundary:** the header is *transport*,
 not *trust* — the principal/agent identity must be established by authentication
 upstream (mTLS / bearer token), never trusted as a bare client-asserted header.
 
-### Catalog & providers (local-ephemeral)
-UC resolution runs once before planning
-(`UnityCatalogProviderList::resolve` via `resolve_table_references`), and the full
-UC `Table` flows into `TableProviderBuilder::build_delta(location, table: &Table)`
-— the natural seam. *Free today:* fully-qualified table name and column
-names/types (`TableScan.table_name` / `projected_schema`). *Available but
-unextracted:* table `readers`/`writers`, tags/properties, owner, and column tags.
-The gather step here builds (or enriches) the Cedar `Entities` snapshot — table →
-`{readers, writers, tags}`, column → `Field { tags }` — then discards it after the
-decision. The static-bundle vs. live-lookup vs. cache-TTL tradeoff
-(`platform-policy-architecture.md`, decision 4) applies to *how fresh* these
-catalog facts are.
+### Catalog & providers (local-ephemeral) — **built**
+UC resolution runs **per query** before planning (`UnityCatalogProviderList::resolve`
+via `resolve_table_references`; `create_logical_plan` re-resolves every query, so
+upstream metadata is always fresh), and the full UC `Table` flows into
+`TableProviderBuilder::build_delta(location, table: &Table)` — the gather seam.
+There, `LakehouseTableProviderBuilder::record_facts` derives the neutral
+`TableFacts` and records them into the per-session `CatalogFactSink` (read from the
+`CatalogFactSinkExt` config extension, keyed by `TableReference`, overwritten on
+re-resolution for per-query freshness):
+
+- **owner / readers / writers** via `table_acl_facts` (`Table.owner` +
+  `properties["readers"|"writers"]`);
+- **tags / column tags** via the `TagProvider` trait. Because the UC fork has *no
+  tags API*, the v1 `ConventionTagProvider` derives them by convention from
+  `properties["tags"|"classification"]`, `properties["tag.<col>"]`, and `[tags: …]`
+  markers in column comments. A future backend (external classification service) is
+  the same trait.
+
+The policy layer (`CedarPolicy::is_allowed`) folds these into a request-time `Table`
+resource entity (`resource.owner/readers/writers/tags/column_tags`) and discards them
+after the decision. See `docs/adr/0007-fact-gathering-pips.md`.
 
 ### Session fact store (shared-session-scoped)
 The one piece that needs persistence. Interface (a trait): record a fact and query

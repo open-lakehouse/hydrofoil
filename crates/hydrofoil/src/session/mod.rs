@@ -622,6 +622,14 @@ pub fn create_session_for(
         session_config = crate::identity::with_principal(session_config, principal);
     }
 
+    // Attach a per-session catalog fact sink BEFORE the resolver captures the
+    // task context, so `build_delta` writes gathered facts into the same sink
+    // the policy layer reads. Keyed by TableReference and overwritten on
+    // re-resolution, so per-query freshness holds even though the sink is
+    // session-scoped (see docs/adr/0007-fact-gathering-pips.md).
+    session_config
+        .set_extension(Arc::new(crate::catalog::CatalogFactSinkExt::default()));
+
     // When Unity Catalog is wired, make its client available to the physical
     // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
     if let Some(factory) = unity_factory.as_ref() {
@@ -765,6 +773,34 @@ mod integration_tests {
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
         session.register_table("t", Arc::new(table)).unwrap();
         LakehouseCtx::new(session, policy, principal("alice"))
+    }
+
+    #[tokio::test]
+    async fn session_attaches_a_readable_catalog_fact_sink() {
+        // `create_session_for` attaches a `CatalogFactSinkExt` so `build_delta`
+        // (during resolution) and the policy layer share one sink. Assert it is
+        // present on the session state and round-trips facts.
+        let session = create_session(None, None).unwrap();
+        let ext = session
+            .state()
+            .config()
+            .get_extension::<crate::catalog::CatalogFactSinkExt>()
+            .expect("catalog fact sink attached to the session config");
+
+        use datafusion_cedar::TableFacts;
+        let facts = TableFacts {
+            tags: ["pii".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        ext.0
+            .record(datafusion::sql::TableReference::full("c", "s", "t"), facts);
+        assert_eq!(
+            ext.0
+                .get(&datafusion::sql::TableReference::full("c", "s", "t"))
+                .unwrap()
+                .tags,
+            ["pii".to_string()].into_iter().collect()
+        );
     }
 
     /// A policy that denies everything — the coarse gate must reject the query.
