@@ -2,13 +2,17 @@
 
 > Status: **Accepted** (2026-06). The v1 decision (re-evaluate-fully, option A)
 > is validated end-to-end by
-> `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs`. The
-> session-fact-store and central session-state PDP it governs remain future work
-> (named seams in [`platform-policy-architecture.md`](../platform-policy-architecture.md));
-> this ADR fixes the *policy* (locality classification + option A) those will
-> implement. Refines
+> `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs`. Refines
 > [`docs/policy-fact-gathering.md`](../policy-fact-gathering.md) and
 > [`docs/platform-policy-architecture.md`](../platform-policy-architecture.md).
+>
+> **Implemented by** [ADR-0007](0007-fact-gathering-pips.md): the session fact
+> store is now real — the `FactStore` trait + in-memory `InMemoryFactStore`
+> (`datafusion-cedar`), owned process-wide by the `Engine`. The governance PEP
+> (`govern_plan`) records the monotonic taint ledger keyed by the session
+> correlation id as classified columns are read; a later PEP reads it back. The
+> *central* session-state PDP (a shared-KV/remote backend behind the same trait)
+> remains future work.
 
 ## Context
 
