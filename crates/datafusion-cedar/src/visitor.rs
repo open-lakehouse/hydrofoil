@@ -233,33 +233,53 @@ pub(crate) fn table_context(table_ref: &TableReference, columns: &[String]) -> R
         .map_err(|e| plan_datafusion_err!("Failed to build request context: {}", e))
 }
 
+/// A Cedar request paired with the table it concerns (when any), so the caller
+/// can fold that table's catalog facts into the request-time `resource` entity.
+/// `table` is `None` for requests not over a `Table` resource (e.g. Unity DDL on
+/// a Catalog/Schema, or the deny sentinel).
+pub(crate) struct PlanRequest {
+    pub(crate) request: Request,
+    pub(crate) table: Option<TableReference>,
+}
+
+/// Build the `Table` resource uid for a table reference. Shared so the Cedar
+/// layer folds catalog facts onto the *same* uid the request resolves against.
+pub(crate) fn table_resource_uid(table_ref: &TableReference) -> EntityUid {
+    table_resource(table_ref)
+}
+
 /// Lower a logical plan to the set of Cedar requests that must all be permitted
 /// for the plan to run. Each request carries the principal, the action, the
-/// `Table` resource, and a context describing the table and accessed columns.
+/// `Table` resource, and a context describing the table and accessed columns;
+/// the paired [`PlanRequest::table`] lets the caller fold that table's catalog
+/// facts into the request-time entities.
 pub(crate) fn authorize_plan(
     plan: &LogicalPlan,
     principal: &PrincipalIdentity,
-) -> Result<Vec<Request>> {
+) -> Result<Vec<PlanRequest>> {
     let mut visitor = AuthorizationVisitor { actions: vec![] };
     plan.visit(&mut visitor)?;
 
     let mut requests = vec![];
     for action in visitor.actions {
-        let (action_uid, resource, context) = match action {
+        let (action_uid, resource, context, table) = match action {
             PlanAction::ReadTable(table_ref, columns) => (
                 READ_TABLE_ACTION.clone(),
                 table_resource(&table_ref),
                 table_context(&table_ref, &columns)?,
+                Some(table_ref),
             ),
             PlanAction::WriteTable(table_ref) => (
                 WRITE_TABLE_ACTION.clone(),
                 table_resource(&table_ref),
                 table_context(&table_ref, &[])?,
+                Some(table_ref),
             ),
             PlanAction::CreateTable(table_ref) => (
                 CREATE_EXTERNAL_TABLE_ACTION.clone(),
                 table_resource(&table_ref),
                 table_context(&table_ref, &[])?,
+                Some(table_ref),
             ),
             PlanAction::UnityDdl {
                 action,
@@ -269,6 +289,7 @@ pub(crate) fn authorize_plan(
                 EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new(action)),
                 named_resource(resource_type, &name),
                 unity_ddl_context(&name)?,
+                None,
             ),
             // Lower an unsupported node to a request no policy permits; Cedar's
             // default-deny then rejects the query (fail-closed).
@@ -278,13 +299,13 @@ pub(crate) fn authorize_plan(
                     DENY_UNSUPPORTED_ACTION.clone(),
                     table_resource(&TableReference::bare(what)),
                     table_context(&TableReference::bare("unsupported"), &[])?,
+                    None,
                 )
             }
         };
-        requests.push(
-            Request::new(principal.uid.clone(), action_uid, resource, context, None)
-                .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?,
-        );
+        let request = Request::new(principal.uid.clone(), action_uid, resource, context, None)
+            .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?;
+        requests.push(PlanRequest { request, table });
     }
 
     Ok(requests)
@@ -318,11 +339,13 @@ mod tests {
             .unwrap();
         let requests = authorize_plan(&plan, &principal()).unwrap();
         assert_eq!(requests.len(), 1);
-        // The action is read_table; context carries the table identity.
+        // The action is read_table; context carries the table identity, and the
+        // request is paired with the table it concerns.
         assert_eq!(
-            requests[0].action().unwrap().to_string(),
+            requests[0].request.action().unwrap().to_string(),
             "Action::\"read_table\""
         );
+        assert_eq!(requests[0].table.as_ref().map(|t| t.table()), Some("t"));
     }
 
     #[test]
@@ -345,8 +368,8 @@ mod tests {
         assert!(requests.is_empty());
     }
 
-    fn action_of(req: &Request) -> String {
-        req.action().unwrap().to_string()
+    fn action_of(req: &PlanRequest) -> String {
+        req.request.action().unwrap().to_string()
     }
 
     // Build real plans through a SessionContext with registered tables, so the
