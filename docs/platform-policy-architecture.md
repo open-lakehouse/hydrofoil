@@ -290,10 +290,20 @@ whatever consumes OpenLineage events — Marquez/DataHub or our own taint store.
 `masking` flag is the declassification signal flowing back in.
 
 **Principal/identity PIP.** `principal.*` attributes — role, region, group membership,
-agent-vs-human. Today: `principal_from_metadata` headers (`hydrofoil/src/identity.rs`),
-which are transport, not trust. The real source is the authenticator
-(`unitycatalog-rs/rest/auth.rs`) or an IdP. Options: header-asserted (demo) vs.
-token-claims vs. IdP/directory lookup.
+agent-vs-human. **Implemented (v1):** the `IdentityProvider` trait
+(`datafusion-cedar`) enriches the authenticated principal with attributes **and group
+membership**, folded into Cedar as the principal entity's parents + a transitive
+group-entity closure (`PrincipalIdentity::to_entities`). This makes membership a
+*dynamic* request-time fact rather than a static OCI-bundle entity — the
+**static-bundle→dynamic-membership shift**. The v1 `ConfigIdentityProvider`
+(`hydrofoil/src/identity.rs`) sources facts from a config map (moving what the bundle
+hardcoded behind the seam); a real IdP/directory backend (OIDC userinfo / SCIM / LDAP) is
+the same trait. Enrichment is resolved once per session, cached on the `Engine`, and is
+fail-closed; the cache placement lets it move to a per-query TTL lookup later. Header
+`role`/`region` remain transport (advisory), not trust; group membership comes only from the
+provider. See `docs/adr/0008-principal-identity-resolution.md`. The `principal_from_metadata`
+headers are still the pre-auth transport seam; a real authenticator / interceptor upstream
+remains future work.
 
 **Network / request-context PIP (Envoy / proxy-injected).** Facts injected at the network
 edge — client IP, mTLS subject, geo, request headers, rate/quota signals — surfaced via an

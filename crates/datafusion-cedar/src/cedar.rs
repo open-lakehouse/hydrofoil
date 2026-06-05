@@ -125,12 +125,13 @@ where
         let requests = authorize_plan(logical_plan, principal)?;
 
         for PlanRequest { request, table } in requests {
-            // Supply the principal as a request-time entity so policies can
-            // resolve `principal.<attr>` references, plus — when this request is
-            // over a table with gathered catalog facts — the `Table` resource
-            // entity carrying `resource.owner/readers/writers/tags/column_tags`.
+            // Supply the principal (and its resolved group-entity closure) as
+            // request-time entities so policies can resolve `principal.<attr>`
+            // and `principal in <group>`, plus — when this request is over a
+            // table with gathered catalog facts — the `Table` resource entity
+            // carrying `resource.owner/readers/writers/tags/column_tags`.
             // cedar-local-agent merges these with the entities the provider vends.
-            let mut entities = vec![principal.to_entity()];
+            let mut entities = principal.to_entities();
             if let Some(table_ref) = &table {
                 if let Some(facts) = eval.catalog_facts.get(table_ref) {
                     if let Some(entity) = table_entity(table_ref, &facts) {
@@ -198,7 +199,7 @@ where
             .context(context)
             .build();
 
-        let principal_entities = Entities::from_entities([principal.to_entity()], None)
+        let principal_entities = Entities::from_entities(principal.to_entities(), None)
             .unwrap_or_else(|_| Entities::empty());
 
         let response = match self
@@ -473,6 +474,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(allow, Decision::Allow);
+    }
+
+    // --- Principal/identity PIP (PR4): group membership resolved dynamically
+    // and folded via `to_entities()`, so a membership-gated permit fires with an
+    // EMPTY static entity bundle — proving the bundle is no longer load-bearing
+    // for membership. ---
+
+    #[tokio::test]
+    async fn is_allowed_resolves_group_membership_with_empty_bundle() {
+        use cedar_policy::Entity;
+        // The entity provider vends NO entities; alice's `readers` membership
+        // exists only in the enrichment closure (alice ∈ privileged_readers ⊂
+        // readers), supplied request-time via `to_entities()`.
+        let pol = policy(
+            InMemory::new(
+                r#"permit(principal in UserGroup::"readers", action == Action::"read_table", resource);"#,
+            ),
+            InMemory::new(""),
+        );
+
+        let readers = Entity::new_no_attrs(
+            EntityUid::from_str("UserGroup::\"readers\"").unwrap(),
+            Default::default(),
+        );
+        let privileged = Entity::new(
+            EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap(),
+            std::collections::HashMap::new(),
+            [EntityUid::from_str("UserGroup::\"readers\"").unwrap()]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        let enriched = alice().enriched(crate::PrincipalEnrichment {
+            groups: vec![EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap()],
+            group_entities: vec![privileged, readers],
+            ..Default::default()
+        });
+
+        let allow = pol
+            .is_allowed(&scan_plan(), &enriched, &EvalContext::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            allow,
+            Decision::Allow,
+            "membership resolves from the enrichment closure, not the bundle"
+        );
+
+        // Without enrichment the same principal is not in `readers`, so
+        // default-deny applies — the membership came from the closure, nothing else.
+        let deny = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+            .await
+            .unwrap();
+        assert_eq!(deny, Decision::Deny, "no membership without enrichment");
     }
 
     // The shipped demo policy's Layer-1 gate (`notebooks/policy_demo.py`):

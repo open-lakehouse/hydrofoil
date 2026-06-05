@@ -11,6 +11,16 @@
 //! never trusted on its own. Until that interceptor lands, this parses the
 //! principal directly from metadata for local/dev use.
 //!
+//! **Identity enrichment.** The header-derived `role`/`region` are *advisory*
+//! once an [`IdentityProvider`] is configured: the provider keys off the
+//! authenticated uid, and its facts are authoritative (they override
+//! self-asserted attributes). **Group membership comes only from the provider,
+//! never from a client header** — a client-claimed group would directly
+//! over-authorize. The v1 [`ConfigIdentityProvider`] sources facts from a static
+//! config map (moving what was hardcoded in the OCI entity bundle behind the
+//! seam); a real IdP/directory backend is the same trait. See
+//! `docs/adr/0008-principal-identity-resolution.md`.
+//!
 //! [`principal_from_metadata`] is wired into the server, and [`with_principal`]
 //! is now called when a session is built (`Engine::new_session` →
 //! `create_session_for`), so the principal reaches planning-time policy
@@ -21,11 +31,15 @@
 //! for that use even though the policy gate currently reads the principal from a
 //! struct field.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionConfig;
-use datafusion_cedar::{EntityUid, PrincipalIdentity};
+use datafusion_cedar::{
+    Entity, EntityUid, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
+    PrincipalIdentity, RestrictedExpression,
+};
 use tonic::metadata::MetadataMap;
 
 /// gRPC metadata keys carrying the principal and its attributes.
@@ -112,9 +126,202 @@ impl PrincipalProvider for SessionConfigPrincipalProvider {
     }
 }
 
+/// A user's facts in the static identity config: string attributes and the
+/// uids of the groups it directly belongs to.
+#[derive(Debug, Clone, Default)]
+pub struct UserFacts {
+    pub attributes: Vec<(String, String)>,
+    pub groups: Vec<EntityUid>,
+}
+
+/// A group's facts: the uids of its parent groups (for the transitive closure).
+#[derive(Debug, Clone, Default)]
+pub struct GroupFacts {
+    pub parents: Vec<EntityUid>,
+}
+
+/// A v1 [`IdentityProvider`] that resolves enrichment from a static config map.
+///
+/// This moves what was hardcoded in the OCI entity bundle
+/// (`config/policies/lakhouse.entities.json`) behind the identity-PIP seam, so
+/// the enrichment path is exercised end to end. A real `OidcIdentityProvider` /
+/// `DirectoryIdentityProvider` (OIDC userinfo / SCIM / LDAP) is the same trait
+/// with the same closure-walking shape; this is the local/dev backend.
+///
+/// `enrich` walks *up* from the principal — its direct groups, then those
+/// groups' parents — collecting only that principal's closure (never the whole
+/// directory). An unknown uid yields empty enrichment (a success), so the
+/// anonymous path still works.
+#[derive(Debug, Default)]
+pub struct ConfigIdentityProvider {
+    users: HashMap<String, UserFacts>,
+    groups: HashMap<String, GroupFacts>,
+}
+
+impl ConfigIdentityProvider {
+    pub fn new(
+        users: HashMap<String, UserFacts>,
+        groups: HashMap<String, GroupFacts>,
+    ) -> Self {
+        Self { users, groups }
+    }
+
+    /// Build the entity for a group uid, carrying its parent groups as Cedar
+    /// parents so the hierarchy resolves.
+    fn group_entity(&self, uid: &EntityUid) -> Entity {
+        let parents: std::collections::HashSet<EntityUid> = self
+            .groups
+            .get(&uid.to_string())
+            .map(|g| g.parents.iter().cloned().collect())
+            .unwrap_or_default();
+        Entity::new(uid.clone(), HashMap::new(), parents)
+            .unwrap_or_else(|_| Entity::new_no_attrs(uid.clone(), Default::default()))
+    }
+}
+
+#[async_trait::async_trait]
+impl IdentityProvider for ConfigIdentityProvider {
+    async fn enrich(
+        &self,
+        uid: &EntityUid,
+        _claims: &PrincipalClaims,
+    ) -> Result<PrincipalEnrichment, IdentityError> {
+        let Some(user) = self.users.get(&uid.to_string()) else {
+            // Unknown principal: no extra facts (a success, not an error).
+            return Ok(PrincipalEnrichment::default());
+        };
+
+        let attributes = user
+            .attributes
+            .iter()
+            .map(|(k, v)| (k.clone(), RestrictedExpression::new_string(v.clone())))
+            .collect();
+
+        // Walk up the group hierarchy from the principal's direct groups,
+        // collecting the transitive closure of group entities (deduped).
+        let mut group_entities = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut frontier: Vec<EntityUid> = user.groups.clone();
+        while let Some(g) = frontier.pop() {
+            if !seen.insert(g.to_string()) {
+                continue;
+            }
+            if let Some(facts) = self.groups.get(&g.to_string()) {
+                frontier.extend(facts.parents.iter().cloned());
+            }
+            group_entities.push(self.group_entity(&g));
+        }
+
+        Ok(PrincipalEnrichment {
+            attributes,
+            groups: user.groups.clone(),
+            group_entities,
+        })
+    }
+}
+
+/// The default identity provider: a [`ConfigIdentityProvider`] seeded with the
+/// demo principal/group facts that the OCI entity bundle
+/// (`config/policies/lakhouse.entities.json`) hardcodes — `alice ∈
+/// privileged_readers ⊂ readers`, `bob ∈ readers`, `Agent::"r2d2" ∈ readers`.
+///
+/// This makes dynamic, provider-sourced membership the live default (the
+/// static-bundle facts now flow through the identity PIP). A deployment swaps in
+/// a real IdP/directory provider via
+/// [`FlightSqlServiceImpl::with_identity_provider`](crate::FlightSqlServiceImpl::with_identity_provider).
+pub fn default_identity_provider() -> Arc<dyn IdentityProvider> {
+    use std::str::FromStr as _;
+    let g = |s: &str| EntityUid::from_str(s).unwrap();
+
+    let users = HashMap::from([
+        (
+            "User::\"alice\"".to_string(),
+            UserFacts {
+                attributes: vec![("region".to_string(), "eu".to_string())],
+                groups: vec![g("UserGroup::\"privileged_readers\"")],
+            },
+        ),
+        (
+            "User::\"bob\"".to_string(),
+            UserFacts {
+                attributes: vec![("region".to_string(), "us".to_string())],
+                groups: vec![g("UserGroup::\"readers\"")],
+            },
+        ),
+        (
+            "Agent::\"r2d2\"".to_string(),
+            UserFacts {
+                attributes: vec![],
+                groups: vec![g("UserGroup::\"readers\"")],
+            },
+        ),
+    ]);
+    let groups = HashMap::from([
+        (
+            "UserGroup::\"privileged_readers\"".to_string(),
+            GroupFacts {
+                parents: vec![g("UserGroup::\"readers\"")],
+            },
+        ),
+        ("UserGroup::\"readers\"".to_string(), GroupFacts::default()),
+    ]);
+    Arc::new(ConfigIdentityProvider::new(users, groups))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn uid(s: &str) -> EntityUid {
+        use std::str::FromStr as _;
+        EntityUid::from_str(s).unwrap()
+    }
+
+    #[tokio::test]
+    async fn config_provider_resolves_group_closure() {
+        // alice ∈ privileged_readers ⊂ readers.
+        let users = HashMap::from([(
+            "User::\"alice\"".to_string(),
+            UserFacts {
+                attributes: vec![("region".to_string(), "eu".to_string())],
+                groups: vec![uid("UserGroup::\"privileged_readers\"")],
+            },
+        )]);
+        let groups = HashMap::from([
+            (
+                "UserGroup::\"privileged_readers\"".to_string(),
+                GroupFacts {
+                    parents: vec![uid("UserGroup::\"readers\"")],
+                },
+            ),
+            (
+                "UserGroup::\"readers\"".to_string(),
+                GroupFacts::default(),
+            ),
+        ]);
+        let provider = ConfigIdentityProvider::new(users, groups);
+
+        let e = provider
+            .enrich(&uid("User::\"alice\""), &PrincipalClaims::default())
+            .await
+            .unwrap();
+        assert_eq!(e.groups, vec![uid("UserGroup::\"privileged_readers\"")]);
+        // Closure includes both privileged_readers and readers.
+        assert_eq!(e.group_entities.len(), 2);
+        assert!(e.attributes.contains_key("region"));
+    }
+
+    #[tokio::test]
+    async fn config_provider_unknown_uid_is_empty_success() {
+        let provider = ConfigIdentityProvider::default();
+        let e = provider
+            .enrich(&uid("User::\"nobody\""), &PrincipalClaims::default())
+            .await
+            .unwrap();
+        assert!(e.groups.is_empty());
+        assert!(e.group_entities.is_empty());
+        assert!(e.attributes.is_empty());
+    }
 
     #[test]
     fn defaults_to_anonymous_when_absent() {

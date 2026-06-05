@@ -92,6 +92,7 @@ pub struct FlightSqlServiceImpl {
     policy: Arc<dyn Policy>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
     lineage: Option<OpenLineageClient>,
+    identity: Option<Arc<dyn datafusion_cedar::IdentityProvider>>,
 }
 
 impl FlightSqlServiceImpl {
@@ -107,6 +108,7 @@ impl FlightSqlServiceImpl {
             policy,
             unity_factory: None,
             lineage: None,
+            identity: Some(crate::identity::default_identity_provider()),
         })
     }
 
@@ -130,6 +132,21 @@ impl FlightSqlServiceImpl {
         self
     }
 
+    /// Set the identity provider (the principal/identity PIP) used to enrich
+    /// principals with attributes + group membership at session creation,
+    /// overriding the [`default_identity_provider`](crate::identity::default_identity_provider).
+    /// A deployment uses this to swap in a real IdP/directory backend.
+    // The default provider is wired in `try_new`; this is the public override
+    // hook, not yet exercised by the env-driven `main.rs` wiring.
+    #[allow(dead_code)]
+    pub fn with_identity_provider(
+        mut self,
+        identity: Arc<dyn datafusion_cedar::IdentityProvider>,
+    ) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
     /// Finalize the configured components into an [`Engine`] + [`SessionStore`]
     /// and start the background session sweeper. Call once before serving.
     pub fn build(mut self) -> Self {
@@ -138,11 +155,14 @@ impl FlightSqlServiceImpl {
             .and_then(|v| v.parse().ok())
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(DEFAULT_SESSION_TTL_SECS));
-        let engine = Engine::new(
+        let mut engine = Engine::new(
             self.policy.clone(),
             self.unity_factory.clone(),
             self.lineage.clone(),
         );
+        if let Some(identity) = self.identity.clone() {
+            engine = engine.with_identity_provider(identity);
+        }
         let sessions = SessionStore::new(engine, ttl);
         sessions.spawn_sweeper();
         self.sessions = sessions;
@@ -154,15 +174,22 @@ impl FlightSqlServiceImpl {
     /// (so no-handshake clients keep working — the two RPCs of one query still
     /// share a statement store). See `docs/adr/0002-flight-sql-session-identity.md`.
     #[allow(clippy::result_large_err)]
-    fn resolve_session<T>(&self, req: &Request<T>) -> Result<Arc<Session>, Status> {
+    async fn resolve_session<T>(&self, req: &Request<T>) -> Result<Arc<Session>, Status> {
         if let Some(session) =
             session_id_from_metadata(req.metadata()).and_then(|id| self.sessions.get(&id))
         {
             return Ok(session);
         }
         // No session id, or a known-shaped but unknown/expired one: fall through
-        // to the principal's ephemeral session rather than hard-failing.
+        // to the principal's ephemeral session rather than hard-failing. Enrich
+        // the principal (attributes + group membership) before binding it; the
+        // engine cache makes this cheap on the reused ephemeral session.
         let principal = crate::identity::principal_from_metadata(req.metadata())?;
+        let principal = self
+            .sessions
+            .enrich(principal)
+            .await
+            .map_err(|e| status!("Failed to resolve identity", e))?;
         self.sessions
             .ephemeral_for(principal)
             .map_err(|e| status!("Failed to resolve session", e))
@@ -228,7 +255,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
+        // Enrich the authenticated principal (attributes + group membership)
+        // from the identity PIP before binding it into the session. Fail-closed:
+        // a provider error fails the handshake rather than proceeding with an
+        // un-enriched (under/over-authorized) principal.
         let principal = crate::identity::principal_from_metadata(request.metadata())?;
+        let principal = self
+            .sessions
+            .enrich(principal)
+            .await
+            .map_err(|e| status!("Failed to resolve identity", e))?;
         let (session_id, _session) = self
             .sessions
             .create(principal)
@@ -373,7 +409,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
 
         // Mint the lineage run id now and snapshot the lineage context from this
         // (planning) RPC. Planning runs through a session decorated with that
@@ -439,7 +475,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let handle = Uuid::from_slice(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
         let plan = session
             .statements()
             .get(&handle)
@@ -507,7 +543,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle =
             Uuid::from_slice(&ticket.statement_handle).map_err(|e| status!("Invalid handle", e))?;
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
         let stored = session
             .statements()
             .get(&handle)
@@ -531,7 +567,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let handle = Uuid::from_slice(&query.prepared_statement_handle)
             .map_err(|e| status!("Invalid handle", e))?;
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
         let stored = session
             .statements()
             .get(&handle)
@@ -593,7 +629,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ticket: CommandStatementIngest,
         request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
         let ctx = Arc::new(session.ctx());
         let planner = FlightPlanner::new();
 
@@ -641,7 +677,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| Status::internal(format!("{e:?}")))?
             .ok_or_else(|| Status::internal("Expected DeltaCommand but got None!"))?;
 
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
         let ctx = Arc::new(session.ctx());
         let planner = DeltaPlanner::new();
         let plan = planner
@@ -668,7 +704,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: ActionCreatePreparedStatementRequest,
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        let session = self.resolve_session(&request)?;
+        let session = self.resolve_session(&request).await?;
 
         let plan_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
@@ -709,7 +745,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Action>,
     ) -> Result<(), Status> {
         if let Ok(handle) = Uuid::from_slice(&handle.prepared_statement_handle)
-            && let Ok(session) = self.resolve_session(&request)
+            && let Ok(session) = self.resolve_session(&request).await
         {
             session.statements().remove(&handle);
         }
