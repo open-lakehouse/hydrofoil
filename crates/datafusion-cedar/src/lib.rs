@@ -17,6 +17,7 @@
 //!   and column masks derived from Cedar partial-evaluation residuals.
 
 mod cedar;
+mod facts;
 mod policy;
 mod principal;
 mod visitor;
@@ -27,6 +28,7 @@ pub mod govern;
 mod translate;
 
 pub use cedar::CedarPolicy;
+pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
 pub use policy::{Policy, StaticPolicy};
 pub use principal::PrincipalIdentity;
 

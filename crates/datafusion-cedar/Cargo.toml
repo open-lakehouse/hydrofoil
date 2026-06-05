@@ -11,6 +11,7 @@ cedar-oci = { path = "../cedar-oci" }
 async-trait = { workspace = true }
 cedar-local-agent = { workspace = true }
 cedar-policy = { workspace = true }
+dashmap = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
