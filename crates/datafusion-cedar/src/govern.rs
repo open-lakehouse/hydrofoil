@@ -74,6 +74,14 @@ pub async fn govern_plan(
 
     let mut policies: HashMap<TableReference, TablePolicy> = HashMap::new();
     for (table, schema) in collector.tables {
+        // Record the taints of any tagged column this scan reads into the
+        // session fact store, keyed by correlation id. Independent of whether a
+        // governance policy applies — taints accrue whenever a classified column
+        // is read. Monotonic + idempotent, so repeated scans / re-planning are
+        // safe. See docs/adr/0006 (shared-session-scoped facts).
+        #[cfg(feature = "governance")]
+        record_taints(&table, schema.as_ref(), eval);
+
         if policies.contains_key(&table) {
             continue;
         }
@@ -92,6 +100,24 @@ pub async fn govern_plan(
     // Phase 2: sync rewrite.
     let mut rewriter = GovernRewriter { policies };
     Ok(plan.clone().rewrite(&mut rewriter)?.data)
+}
+
+/// Record the taints of the columns `schema` projects from `table` into the
+/// session fact store. No-ops unless a correlation id and fact store are both
+/// present on `eval`, and only records the classification tags carried by the
+/// columns actually projected (the catalog facts gathered at resolution).
+fn record_taints(table: &TableReference, schema: &datafusion::common::DFSchema, eval: &EvalContext) {
+    let (Some(cid), Some(store)) = (&eval.correlation_id, &eval.fact_store) else {
+        return;
+    };
+    let Some(facts) = eval.catalog_facts.get(table) else {
+        return;
+    };
+    let accessed: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    let taints = facts.taints_for_columns(&accessed);
+    if !taints.is_empty() {
+        store.record_taints(cid, &taints);
+    }
 }
 
 /// The sync rewriter that wraps each governed `TableScan` in a mask projection
@@ -203,6 +229,69 @@ mod tests {
         let plan = scan();
         let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
         assert_eq!(format!("{plan:?}"), format!("{governed:?}"));
+    }
+
+    fn schema_3() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("region", DataType::Utf8, true),
+            Field::new("ssn", DataType::Utf8, true),
+        ])
+    }
+
+    /// An `EvalContext` carrying a fact store + a sink that tags `t.ssn` as `pii`.
+    fn eval_with_pii_ssn() -> (EvalContext, std::sync::Arc<crate::InMemoryFactStore>) {
+        let sink = crate::CatalogFactSink::new();
+        sink.record(
+            TableReference::bare("t"),
+            crate::TableFacts {
+                column_tags: std::collections::HashMap::from([(
+                    "ssn".to_string(),
+                    ["pii".to_string()].into_iter().collect(),
+                )]),
+                ..Default::default()
+            },
+        );
+        let store = std::sync::Arc::new(crate::InMemoryFactStore::new());
+        let eval = EvalContext {
+            catalog_facts: sink,
+            correlation_id: Some("session-1".to_string()),
+            fact_store: Some(store.clone()),
+        };
+        (eval, store)
+    }
+
+    #[tokio::test]
+    async fn records_taint_when_tagged_column_is_projected() {
+        use crate::FactStore as _;
+        let (eval, store) = eval_with_pii_ssn();
+        // Project id + ssn: ssn is pii-tagged, so the session ledger gains "pii".
+        let plan = table_scan(Some("t"), &schema_3(), Some(vec![0, 2]))
+            .unwrap()
+            .build()
+            .unwrap();
+        govern_plan(&plan, &FixedPolicy(TablePolicy::default()), &principal(), &eval)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.observed_taints("session-1"),
+            ["pii".to_string()].into_iter().collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn no_taint_when_tagged_column_not_projected() {
+        use crate::FactStore as _;
+        let (eval, store) = eval_with_pii_ssn();
+        // Project only id: ssn is not read, so nothing accrues.
+        let plan = table_scan(Some("t"), &schema_3(), Some(vec![0]))
+            .unwrap()
+            .build()
+            .unwrap();
+        govern_plan(&plan, &FixedPolicy(TablePolicy::default()), &principal(), &eval)
+            .await
+            .unwrap();
+        assert!(store.observed_taints("session-1").is_empty());
     }
 
     #[tokio::test]

@@ -80,6 +80,43 @@ async fn govern_plan(
     Ok(plan.clone())
 }
 
+/// A `SessionConfig` extension carrying the session's taint ledger, attached to
+/// the per-query state so the policy layer can build the [`EvalContext`].
+#[cfg(feature = "governance")]
+#[derive(Clone)]
+pub(crate) struct FactStoreExt(pub Arc<dyn datafusion_cedar::FactStore>);
+
+/// Assemble the per-query [`EvalContext`] from a session state: the catalog
+/// fact sink and (under `governance`) the correlation id + taint ledger, all
+/// read back from `SessionConfig` extensions the session layer attached. The
+/// correlation id is the session id, stable per connection.
+fn eval_context(state: &SessionState) -> EvalContext {
+    let catalog_facts = state
+        .config()
+        .get_extension::<crate::catalog::CatalogFactSinkExt>()
+        .map(|ext| ext.0.clone())
+        .unwrap_or_default();
+
+    #[cfg(feature = "governance")]
+    {
+        EvalContext {
+            catalog_facts,
+            correlation_id: Some(state.session_id().to_string()),
+            fact_store: state
+                .config()
+                .get_extension::<FactStoreExt>()
+                .map(|ext| ext.0.clone()),
+        }
+    }
+    #[cfg(not(feature = "governance"))]
+    {
+        EvalContext {
+            catalog_facts,
+            correlation_id: Some(state.session_id().to_string()),
+        }
+    }
+}
+
 /// Context for executing queries in a Lakehouse.
 ///
 /// This context is used to execute queries in a Lakehouse. It contains the
@@ -164,9 +201,10 @@ impl LakehouseCtx {
         // itself. Inject fine-grained governance (row filters + column masks)
         // before optimization, then gate on the optimized plan to match the
         // statement path's contract (projections/filters pushed down first).
-        // No catalog facts are gathered on this path yet; PR6 populates the
-        // EvalContext (catalog facts + correlation id + fact store).
-        let eval = EvalContext::default();
+        // Catalog facts (resource folding) come from the session's fact sink;
+        // the taint ledger is absent on this ingest/delta-connect path (it is a
+        // write path, and taint recording tracks reads at the statement path).
+        let eval = eval_context(&self.inner.state());
         let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal, &eval).await?;
         let optimized_plan = self.inner.state().optimize(&governed)?;
         if self
@@ -333,9 +371,11 @@ impl Session for LakehouseSession {
         // masked-away columns are pruned. Then optimize, so the coarse gate
         // sees projections/filters pushed down to the table scan level and can
         // authorize based on the actual data being accessed.
-        // No catalog facts are gathered yet; PR6 populates the EvalContext
-        // (catalog facts + correlation id + fact store).
-        let eval = EvalContext::default();
+        // Per-query facts: the catalog fact sink (resource folding) and, under
+        // governance, the correlation id + taint ledger (so reading a tagged
+        // column accrues taints). Assembled from the session-attached config
+        // extensions.
+        let eval = eval_context(&self.inner);
         let governed =
             govern_plan(logical_plan, self.policy.as_ref(), &self.principal, &eval).await?;
         let optimized_plan = self.inner.optimize(&governed)?;
@@ -988,6 +1028,72 @@ mod integration_tests {
         assert!(
             !pretty.contains(" a ") && !pretty.contains(" c "),
             "raw ssn must not leak: {pretty}"
+        );
+    }
+
+    /// End-to-end taint recording through the real session path: a query that
+    /// reads a pii-tagged column accrues "pii" in the engine's session fact
+    /// store, keyed by the session's correlation id. Stands up the engine and a
+    /// registered table, and seeds the catalog fact sink directly (rather than
+    /// resolving through Unity Catalog).
+    #[cfg(feature = "governance")]
+    #[tokio::test]
+    async fn governance_records_observed_taints() {
+        use datafusion::sql::TableReference;
+        use datafusion_cedar::{FactStore as _, TableFacts};
+        use std::collections::HashMap;
+
+        use crate::engine::Engine;
+        use crate::policy::StaticPolicy;
+
+        let engine = Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, None);
+        let session = engine
+            .new_session(principal("alice"))
+            .expect("session");
+
+        // Register table `t` on the session context.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("ssn", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+            ],
+        )
+        .unwrap();
+        let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+        session
+            .session_context()
+            .register_table("t", Arc::new(table))
+            .unwrap();
+
+        // Seed the catalog fact sink: `t.ssn` is classified `pii` (what
+        // `build_delta` would record after Unity Catalog resolution).
+        session.catalog_fact_sink().record(
+            TableReference::bare("t"),
+            TableFacts {
+                column_tags: HashMap::from([(
+                    "ssn".to_string(),
+                    ["pii".to_string()].into_iter().collect(),
+                )]),
+                ..Default::default()
+            },
+        );
+
+        // Run a query that reads the tagged column through the real gate path.
+        let lh = session.lakehouse_for_query(LineageContext::default(), None);
+        let plan = lh.create_logical_plan("SELECT id, ssn FROM t").await.unwrap();
+        lh.create_physical_plan(&plan).await.unwrap();
+
+        // The session ledger gained "pii", keyed by this session's correlation id.
+        assert_eq!(
+            engine
+                .fact_store()
+                .observed_taints(&session.correlation_id()),
+            ["pii".to_string()].into_iter().collect()
         );
     }
 }
