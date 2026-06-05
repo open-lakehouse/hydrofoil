@@ -106,7 +106,11 @@ pub async fn govern_plan(
 /// session fact store. No-ops unless a correlation id and fact store are both
 /// present on `eval`, and only records the classification tags carried by the
 /// columns actually projected (the catalog facts gathered at resolution).
-fn record_taints(table: &TableReference, schema: &datafusion::common::DFSchema, eval: &EvalContext) {
+fn record_taints(
+    table: &TableReference,
+    schema: &datafusion::common::DFSchema,
+    eval: &EvalContext,
+) {
     let (Some(cid), Some(store)) = (&eval.correlation_id, &eval.fact_store) else {
         return;
     };
@@ -227,7 +231,9 @@ mod tests {
     async fn no_policy_leaves_plan_unchanged() {
         let policy = FixedPolicy(TablePolicy::default());
         let plan = scan();
-        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
+        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
         assert_eq!(format!("{plan:?}"), format!("{governed:?}"));
     }
 
@@ -270,9 +276,14 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        govern_plan(&plan, &FixedPolicy(TablePolicy::default()), &principal(), &eval)
-            .await
-            .unwrap();
+        govern_plan(
+            &plan,
+            &FixedPolicy(TablePolicy::default()),
+            &principal(),
+            &eval,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             store.observed_taints("session-1"),
             ["pii".to_string()].into_iter().collect()
@@ -288,9 +299,14 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        govern_plan(&plan, &FixedPolicy(TablePolicy::default()), &principal(), &eval)
-            .await
-            .unwrap();
+        govern_plan(
+            &plan,
+            &FixedPolicy(TablePolicy::default()),
+            &principal(),
+            &eval,
+        )
+        .await
+        .unwrap();
         assert!(store.observed_taints("session-1").is_empty());
     }
 
@@ -300,7 +316,9 @@ mod tests {
             row_filters: vec![col("region").eq(lit("eu"))],
             column_masks: Default::default(),
         });
-        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
         // Top of the governed subtree is a Filter.
         assert!(
             matches!(governed, LogicalPlan::Filter(_)),
@@ -316,7 +334,9 @@ mod tests {
             row_filters: vec![],
             column_masks: masks,
         });
-        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
         // A Projection wraps the scan; the masked column is a literal, not a
         // bare column reference (so the optimizer cannot absorb it).
         let LogicalPlan::Projection(proj) = &governed else {
@@ -353,7 +373,9 @@ mod tests {
             row_filters: vec![!col("region").eq(lit("blocked"))],
             column_masks: Default::default(),
         });
-        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default()).await.unwrap();
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
         let LogicalPlan::Filter(f) = &governed else {
             panic!("expected Filter, got: {governed:?}");
         };
@@ -440,7 +462,9 @@ mod tests {
             err: false,
         };
 
-        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
+        let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
         let rendered = format!("{governed:?}");
         // Exactly one Filter was injected (for `a`), not two — `b` is ungoverned.
         assert_eq!(
@@ -519,7 +543,9 @@ mod tests {
                 .unwrap()
                 .into_unoptimized_plan();
 
-            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default()).await.unwrap();
+            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default())
+                .await
+                .unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // The literal mask must appear in the optimized plan, and the raw
@@ -545,7 +571,9 @@ mod tests {
                 .unwrap()
                 .into_unoptimized_plan();
 
-            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default()).await.unwrap();
+            let governed = govern_plan(&plan, &mask_ssn(), &principal(), &EvalContext::default())
+                .await
+                .unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // Execute and confirm the predicate matched the MASKED value, not
@@ -576,7 +604,9 @@ mod tests {
                 row_filters: vec![col("region").eq(lit("eu"))],
                 column_masks: Default::default(),
             });
-            let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default()).await.unwrap();
+            let governed = govern_plan(&plan, &policy, &principal(), &EvalContext::default())
+                .await
+                .unwrap();
             let optimized = ctx.state().optimize(&governed).unwrap();
 
             // Only the 'eu' row survives -> 1 row.

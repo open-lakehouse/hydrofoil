@@ -7,7 +7,9 @@
 > (facts) for a Cedar decision are gathered, and how evaluation proceeds**, across
 > the catalog → engine → agent-tool chain. It is validated by a runnable
 > walkthrough — `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs` —
-> that mocks facts at each decision point and runs real Cedar evaluations. The
+> that supplies facts at each decision point and runs real Cedar evaluations over
+> the **real** `InMemoryFactStore` and the `PrincipalEnrichment`/`to_entities()`
+> membership shape (not mocks). The
 > locality/lifetime classification and the residual-caching decision are recorded
 > in `docs/adr/0006-policy-fact-locality-and-session-state.md`.
 
@@ -126,14 +128,15 @@ The policy layer (`CedarPolicy::is_allowed`) folds these into a request-time `Ta
 resource entity (`resource.owner/readers/writers/tags/column_tags`) and discards them
 after the decision. See `docs/adr/0007-fact-gathering-pips.md`.
 
-### Session fact store (shared-session-scoped)
-The one piece that needs persistence. Interface (a trait): record a fact and query
-facts by correlation id; taint accrual is **monotonic** per session. Written at
-②/③ as the engine reads tagged columns; read at ④ to populate
-`context.observed_taints`. Backing: an in-memory map suffices for the walkthrough;
-production uses a shared KV owned by the central session-state PDP (the hybrid
-model's central half). The walkthrough's `FactStore` /
-`SessionFacts { observed_taints }` is the minimal shape.
+### Session fact store (shared-session-scoped) — **built**
+The one piece that needs persistence. The `FactStore` trait (`datafusion-cedar`):
+record a taint and query observed taints by correlation id; accrual is
+**monotonic** per session. Written at ②/③ by the governance PEP (`govern_plan`)
+as the engine reads tagged columns; read at ④ (`Policy::tool_policy` /
+`Session::authorize_tool_call`) to populate `context.observed_taints`. v1 backing
+is `InMemoryFactStore`, owned process-wide by the `Engine`; a shared KV / central
+session-state PDP slots behind the same trait. See
+`docs/adr/0007-fact-gathering-pips.md`.
 
 ## Carry-residual vs. re-evaluate-fully
 
@@ -169,12 +172,14 @@ noting it is exactly the artifact a B-mode design would cache.
 `cargo run -p datafusion-cedar --example fact_gathering_walkthrough --features
 governance` exercises **real** `is_authorized` / `is_authorized_partial` calls
 over the committed `config/policies/` model (plus two minimal inline policies),
-mocking facts at each point:
+with facts supplied at each point:
 
 1. **① Catalog** — `alice` ∈ `privileged_readers` ⊂ `readers` = `protected_table.readers`
-   → **Allow**. Deny path: `r2d2` ∈ `readers` cannot *write* (writers =
-   `lakhouse_admins`) → **Deny** (default-deny, fail-closed). Proves entity-hierarchy
-   resolution from catalog facts.
+   → **Allow**, where alice's membership is folded in via `PrincipalEnrichment` /
+   `to_entities()` (the bundle no longer carries user→group edges — the
+   static-bundle→dynamic-membership shift). Deny path: `r2d2` cannot *write*
+   (writers = `lakhouse_admins`) → **Deny** (default-deny, fail-closed). Proves
+   dynamic entity-hierarchy resolution.
 2. **② Engine coarse gate** — same, with `columns=[id, region, ssn]` in the
    context → **Allow**.
 3. **③ Engine governance** — partial request with **unknown resource**; the
@@ -188,7 +193,7 @@ mocking facts at each point:
    **Allow**. Proves the decision is driven by the *accrued, shared* fact, not
    hardcoded.
 
-Every decision flips when a mocked fact flips — that is the point: the harness
+Every decision flips when a supplied fact flips — that is the point: the harness
 demonstrates fact-gathering *and* evaluation, not a scripted output.
 
 ## Risks

@@ -195,6 +195,26 @@ fn unity_ddl_context(name: &str) -> Result<Context> {
     .map_err(|e| plan_datafusion_err!("Failed to build request context: {}", e))
 }
 
+/// Build the agent tool-call context carrying the session's observed taints, so
+/// guardrail policies can gate on `context.observed_taints` (e.g. `forbid
+/// send_external when context.observed_taints.contains("pii")`). This is the
+/// data-flow control that survives prompt injection — it blocks the *action*,
+/// not the prompt.
+#[cfg(feature = "governance")]
+pub(crate) fn tool_context(
+    observed_taints: &std::collections::BTreeSet<String>,
+) -> Result<Context> {
+    Context::from_pairs([(
+        "observed_taints".to_string(),
+        RestrictedExpression::new_set(
+            observed_taints
+                .iter()
+                .map(|t| RestrictedExpression::new_string(t.clone())),
+        ),
+    )])
+    .map_err(|e| plan_datafusion_err!("Failed to build tool context: {}", e))
+}
+
 /// Build the request context carrying the table identity and accessed columns,
 /// so policies can condition on `context.catalog/schema/table/columns`.
 ///

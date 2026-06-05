@@ -39,57 +39,6 @@
   {
     "uid": {
       "__entity": {
-        "type": "User",
-        "id": "alice"
-      }
-    },
-    "attrs": {},
-    "parents": [
-      {
-        "__entity": {
-          "type": "UserGroup",
-          "id": "privileged_readers"
-        }
-      }
-    ]
-  },
-  {
-    "uid": {
-      "__entity": {
-        "type": "User",
-        "id": "bob"
-      }
-    },
-    "attrs": {},
-    "parents": [
-      {
-        "__entity": {
-          "type": "UserGroup",
-          "id": "readers"
-        }
-      }
-    ]
-  },
-  {
-    "uid": {
-      "__entity": {
-        "type": "Agent",
-        "id": "r2d2"
-      }
-    },
-    "attrs": {},
-    "parents": [
-      {
-        "__entity": {
-          "type": "UserGroup",
-          "id": "readers"
-        }
-      }
-    ]
-  },
-  {
-    "uid": {
-      "__entity": {
         "type": "Table",
         "id": "protected_table"
       }

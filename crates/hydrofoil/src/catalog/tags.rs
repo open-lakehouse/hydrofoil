@@ -169,7 +169,10 @@ mod tests {
         // Table tags are lower-cased and split.
         assert_eq!(c.table_tags, tags(&["internal", "regulated"]));
         // ssn merges the property tags and the comment tag.
-        assert_eq!(c.column_tags.get("ssn").unwrap(), &tags(&["pii", "sensitive"]));
+        assert_eq!(
+            c.column_tags.get("ssn").unwrap(),
+            &tags(&["pii", "sensitive"])
+        );
         // email comes only from the comment marker.
         assert_eq!(
             c.column_tags.get("email").unwrap(),
@@ -184,7 +187,10 @@ mod tests {
         let table = Table {
             owner: Some("User::\"alice\"".to_string()),
             properties: std::collections::HashMap::from([
-                ("readers".to_string(), "readers,privileged_readers".to_string()),
+                (
+                    "readers".to_string(),
+                    "readers,privileged_readers".to_string(),
+                ),
                 ("writers".to_string(), "lakehouse_admins".to_string()),
             ]),
             ..Default::default()
