@@ -59,20 +59,3 @@ unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unityca
 unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
 unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
 deltalake-core = { version = "0.32.3", features = ["datafusion", "cloud"] }
-
-[workspace.metadata.typos]
-default.extend-ignore-re = [
-    # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
-    "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
-    # Line block with # spellchecker:<on|off>
-    "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
-    "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
-]
-files.extend-exclude = [
-    "crates/common/src/models/gen/**/*",
-    "openapi/**/*",
-]
-
-[workspace.metadata.typos.default.extend-words]
-# to avoid having to name fields r#type
-typ = "typ"
