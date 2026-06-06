@@ -43,6 +43,15 @@ The thesis of this document: **one policy source of truth, many enforcement poin
 correlated by a propagated session/trace context, fed by many information points, with
 dynamic taint state that flows back into decisions.**
 
+## Diagram
+
+The PEP / PIP / PDP topology is drawn in [`policy-architecture.d2`](policy-architecture.d2)
+(rendered: [`policy-architecture.svg`](policy-architecture.svg)) — the PAP/OCI bundle, the
+embedded Cedar PDP, the four PEPs along the catalog → engine → agent-tool chain (correlated
+by session id), the PIPs that feed facts, and the taint-ledger feedback loop. Regenerate with
+`d2 --layout elk docs/policy-architecture.d2 docs/policy-architecture.svg`. Solid = built;
+dashed = designed/future.
+
 ## Design principles
 
 These continue the principles the sibling docs established — one platform, one set of

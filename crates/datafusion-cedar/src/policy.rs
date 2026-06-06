@@ -52,6 +52,25 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
     ) -> Result<crate::govern::TablePolicy> {
         Ok(crate::govern::TablePolicy::default())
     }
+
+    /// Decide whether `principal` may invoke the agent tool named `action`,
+    /// given the classifications the session has already observed.
+    ///
+    /// This is the agent-tool PEP: the data-flow control that gates an *action*
+    /// (export, send-email, call-external-API) on the session's accrued taints,
+    /// so consuming sensitive data forecloses exfiltrating it — surviving prompt
+    /// injection because it constrains the action, not the prompt. `observed_taints`
+    /// is read from the session fact store by correlation id (the host wires this
+    /// at the tool-call boundary). Default: `Allow` (no guardrail).
+    #[cfg(feature = "governance")]
+    async fn tool_policy(
+        &self,
+        _action: &str,
+        _principal: &PrincipalIdentity,
+        _observed_taints: &std::collections::BTreeSet<String>,
+    ) -> Result<Decision> {
+        Ok(Decision::Allow)
+    }
 }
 
 /// A [`Policy`] that returns the same decision for every query.

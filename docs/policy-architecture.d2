@@ -1,0 +1,124 @@
+# Platform policy architecture — services, with PEP / PIP / PDP roles.
+#
+# Companion diagram to docs/platform-policy-architecture.md. Outer containers are
+# our actual services/processes; the shapes inside are color-coded by their
+# policy role:
+#
+#   PEP (blue)  — Policy Enforcement Point: consults a decision, enforces it
+#   PDP (green) — Policy Decision Point: evaluates Cedar -> Allow/Deny/residual
+#   PIP (amber) — Policy Information Point: sources the facts a decision reads
+#   PAP (indigo)— Policy Administration Point: authors + distributes the rules
+#   dynamic state (red) — shared, session-scoped facts (the taint ledger)
+#
+# Render:  d2 --layout elk docs/policy-architecture.d2 docs/policy-architecture.svg
+#
+# Solid border = built (this repo).  Dashed border = designed / future.
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+direction: right
+
+classes: {
+  pep:  { style: { fill: "#dbeafe"; stroke: "#3b82f6" } }      # blue
+  pdp:  { style: { fill: "#d1fae5"; stroke: "#10b981" } }      # green
+  pip:  { style: { fill: "#ffedd5"; stroke: "#f59e0b" } }      # amber
+  pap:  { style: { fill: "#e0e7ff"; stroke: "#6366f1" } }      # indigo
+  dyn:  { style: { fill: "#fee2e2"; stroke: "#ef4444" } }      # red
+  future: { style.stroke-dash: 4 }
+  svc:  { style: { fill: "#f8fafc"; stroke: "#64748b"; font-size: 16; bold: true } }
+}
+
+legend: Legend {
+  near: top-right
+  grid-columns: 1
+  style.fill: transparent
+  pep: "PEP — enforcement point" { class: pep }
+  pdp: "PDP — decision point" { class: pdp }
+  pip: "PIP — information point" { class: pip }
+  pap: "PAP — administration point" { class: pap }
+  dyn: "dynamic session state" { class: dyn }
+  fut: "dashed = future" { class: future }
+}
+
+# ───────────────────────── Control plane (PAP) ─────────────────────────────
+control_plane: Control plane {
+  class: svc
+  pap: "Author Cedar policy set + schema\nbuild + push OCI bundle" { class: pap }
+  bundle: OCI bundle {
+    class: pap
+    shape: package
+    label: "OCI bundle\npolicy set · schema · static entities"
+  }
+  pap -> bundle: build + push
+}
+
+# ─────────────────────── Catalog service (Unity) ───────────────────────────
+catalog: Catalog service (Unity Catalog) {
+  class: svc
+  pep: "① Catalog PEP\nauthorize(table, Read | Vend)\n+ credential vending (PA)" { class: pep }
+  pdp: "embedded PDP\n(Cedar)" { class: [pdp; future] }
+  meta_pip: "Catalog/Tag PIP\nTagProvider + table_acl_facts\nowner · readers/writers · column tags" { class: pip }
+  dir_pip: "Identity/directory PIP\nuser -> group membership" { class: pip }
+
+  pep -> pdp: consult { class: future }
+}
+
+# ───────────────────── Query engine (hydrofoil) ────────────────────────────
+engine: Query engine (hydrofoil / DataFusion) {
+  class: svc
+
+  pdp: "embedded PDP\ncedar-local-agent Authorizer (CedarPolicy)\nis_authorized · is_authorized_partial" { class: pdp }
+
+  gate: "② Coarse gate PEP\nis_allowed(plan) -> Allow / Deny" { class: pep }
+  gov: "③ Governance PEP\ntable_policy -> residual\nrow filter + column mask" { class: pep }
+
+  id_pip: "Identity PIP\nIdentityProvider (enrich at session start)\nprincipal attrs + group closure" { class: pip }
+  fact_sink: "Catalog fact sink\nfilled at build_delta\n(local-ephemeral facts)" { class: pip }
+
+  gate -> pdp: consult
+  gov -> pdp: "consult (partial)"
+}
+
+# ─────────────────────── Agent runtime / tool API ──────────────────────────
+agent: Agent runtime / tool API {
+  class: svc
+  pep: "④ Agent-tool PEP\ntool_policy(action, observed_taints)\nSession::authorize_tool_call (SEAM)" { class: [pep; future] }
+  pdp: "embedded PDP\n(Cedar)" { class: [pdp; future] }
+  pep -> pdp: consult { class: future }
+}
+
+# ──────────────── Session fact store (shared dynamic state) ─────────────────
+store: Session fact store {
+  class: svc
+  ledger: "FactStore — taint ledger\nInMemoryFactStore (v1, in engine)\nkeyed by correlation id (session id)\nmonotonic observed_taints" { class: dyn }
+  central: "Central session-state PDP\n(shared KV / audit)" { class: [dyn; future] }
+  ledger -> central: "same trait, future backend" { class: future }
+}
+
+# ───────────────────────────── Cross-service edges ─────────────────────────
+
+# PAP distributes the one policy source of truth to every embedded PDP.
+control_plane.bundle -> engine.pdp: "policy set + schema\n+ static entities" { class: pap }
+control_plane.bundle -> catalog.pdp: bundle { class: [pap; future] }
+control_plane.bundle -> agent.pdp: bundle { class: [pap; future] }
+
+# Catalog supplies facts to the engine's gathering points (per-query resolution).
+catalog.meta_pip -> engine.fact_sink: "resource facts\n(at table resolution)" { class: pip }
+catalog.dir_pip -> engine.id_pip: "group membership" { class: pip }
+
+# PIP facts fold into the engine's Cedar requests (principal + resource entities).
+engine.id_pip -> engine.gate: "principal.* + groups" { class: pip }
+engine.fact_sink -> engine.gate: "resource.* attrs" { class: pip }
+engine.fact_sink -> engine.gov: "tags -> column mask" { class: pip }
+
+# The operation chain, correlated across services by the session id.
+catalog.pep -> engine.gate: "session id (correlation)" { class: pep }
+engine.gov -> agent.pep: "session id (correlation)" { class: [pep; future] }
+
+# Dynamic taint state: governance writes the ledger; the agent PEP reads it back.
+engine.gov -> store.ledger: "record observed_taints\n(tagged column read)" { class: dyn }
+store.ledger -> agent.pep: "context.observed_taints" { class: [dyn; future] }

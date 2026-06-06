@@ -113,10 +113,12 @@ impl Engine {
         self.fact_store.clone()
     }
 
-
     /// Replace the identity provider (e.g. a config- or IdP-backed one). The
     /// default is a no-op provider returning empty enrichment.
-    pub fn with_identity_provider(mut self: Arc<Self>, identity: Arc<dyn IdentityProvider>) -> Arc<Self> {
+    pub fn with_identity_provider(
+        mut self: Arc<Self>,
+        identity: Arc<dyn IdentityProvider>,
+    ) -> Arc<Self> {
         // `Engine` is only shared after construction, so this unwrap holds at
         // wiring time (before any clone of the Arc escapes).
         let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
@@ -314,11 +316,35 @@ impl Session {
     fn attach_fact_store(&self, state: &mut datafusion::execution::context::SessionState) {
         state
             .config_mut()
-            .set_extension(Arc::new(crate::session::FactStoreExt(self.fact_store.clone())));
+            .set_extension(Arc::new(crate::session::FactStoreExt(
+                self.fact_store.clone(),
+            )));
     }
 
     #[cfg(not(feature = "governance"))]
     fn attach_fact_store(&self, _state: &mut datafusion::execution::context::SessionState) {}
+
+    /// The agent-tool PEP: decide whether this session's principal may invoke
+    /// the tool named `action`, given the taints the session has observed so far
+    /// (read back from the fact store by this session's correlation id).
+    ///
+    /// This is the read-back counterpart to the governance PEP's taint recording
+    /// — a query that read a `pii` column accrues `pii`, and a later
+    /// `send_external` tool call can be forbidden on that basis (the data-flow
+    /// control that survives prompt injection).
+    ///
+    // SEAM: not yet invoked. A future agent-tool RPC in `server.rs` (a
+    // `do_action`-style handler) would resolve the session, read the
+    // `x-hydrofoil-agent-*` metadata, and call this before dispatching the tool.
+    #[cfg(feature = "governance")]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn authorize_tool_call(&self, action: &str) -> Result<datafusion_cedar::Decision> {
+        let correlation_id = self.ctx.state().session_id().to_string();
+        let taints = self.fact_store.observed_taints(&correlation_id);
+        self.policy
+            .tool_policy(action, &self.principal, &taints)
+            .await
+    }
 
     /// Drop statements idle longer than `ttl` (backstops `get_flight_info` calls
     /// that mint a handle but are never fetched).

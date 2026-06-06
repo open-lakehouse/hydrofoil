@@ -3,14 +3,21 @@
 //! Companion to `docs/policy-fact-gathering.md` and
 //! `docs/adr/0006-policy-fact-locality-and-session-state.md`. Running this example
 //! *is* the walkthrough: it steps through the four (partial) decision points along
-//! the catalog → engine → agent chain, mocks the facts available at each point
+//! the catalog → engine → agent chain, supplies the facts available at each point
 //! (labelling each fact's *locality + lifetime*), and runs **real** Cedar
 //! evaluations — `is_authorized` for the coarse gates and `is_authorized_partial`
 //! for the engine's row-filter / column-mask governance.
 //!
+//! The shared-session-scoped facts use the **real** `datafusion_cedar::InMemoryFactStore`
+//! (not a mock), and the principal's group membership is supplied via the real
+//! `PrincipalEnrichment` / `to_entities()` shape the identity PIP produces — the
+//! static entity bundle no longer carries user→group edges. Only the
+//! local-ephemeral facts (catalog identity, columns) are still constructed inline
+//! to keep the example self-contained.
+//!
 //! Nothing here is hardcoded: each decision is the output of the Cedar authorizer
-//! over the policy set + entities + the mocked facts. Flip a mocked fact (drop the
-//! taint, downgrade the principal's group) and the printed decision changes.
+//! over the policy set + entities + the supplied facts. Flip a fact (drop the
+//! taint, drop alice's group from the enrichment) and the printed decision changes.
 //!
 //! Run with:
 //! ```text
@@ -44,7 +51,10 @@ use cedar_policy::{
 };
 use std::sync::Arc;
 
-use datafusion_cedar::{CedarResidualTranslator, PrincipalIdentity, ResidualTranslator};
+use cedar_policy::Entity;
+use datafusion_cedar::{
+    CedarResidualTranslator, PrincipalEnrichment, PrincipalIdentity, ResidualTranslator,
+};
 
 // ----------------------------------------------------------------------------
 // Policy model
@@ -100,39 +110,12 @@ permit (
 // Local-ephemeral facts (principal attrs, catalog entity attrs, accessed
 // columns) are resolved at the point of use and never persisted. Only
 // *shared-session-scoped* facts live here, keyed by correlation id, so a later
-// PEP (the agent tool-call) can read what earlier PEPs accrued. For the
-// walkthrough this is a trivial in-memory map; production would back it with a
-// shared KV (see the ADR).
+// PEP (the agent tool-call) can read what earlier PEPs accrued. This is the
+// **real** `datafusion_cedar::InMemoryFactStore` (not a mock); production would
+// swap a shared-KV backend behind the same `FactStore` trait (see the ADR).
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Default)]
-struct SessionFacts {
-    /// Monotonic set of classifications the session has observed (the taint
-    /// ledger). Accrued as the engine reads tagged columns at ②/③.
-    observed_taints: BTreeSet<String>,
-}
-
-#[derive(Debug, Default)]
-struct FactStore {
-    by_session: std::collections::HashMap<String, SessionFacts>,
-}
-
-impl FactStore {
-    fn record_taint(&mut self, correlation_id: &str, taint: &str) {
-        self.by_session
-            .entry(correlation_id.to_string())
-            .or_default()
-            .observed_taints
-            .insert(taint.to_string());
-    }
-
-    fn observed_taints(&self, correlation_id: &str) -> BTreeSet<String> {
-        self.by_session
-            .get(correlation_id)
-            .map(|f| f.observed_taints.clone())
-            .unwrap_or_default()
-    }
-}
+use datafusion_cedar::{FactStore as _, InMemoryFactStore};
 
 // ----------------------------------------------------------------------------
 // In-memory Cedar provider (mirrors the test harness in `cedar.rs`).
@@ -231,6 +214,39 @@ fn tool_context(observed_taints: &BTreeSet<String>) -> Context {
     Context::from_pairs(pairs).expect("tool context")
 }
 
+/// alice's group closure as the identity PIP would resolve it: alice ∈
+/// privileged_readers ⊂ readers. This is the `PrincipalEnrichment` the hydrofoil
+/// `IdentityProvider` returns; here it replaces the user→group edges that used
+/// to live in the static entity bundle.
+fn alice_enrichment() -> PrincipalEnrichment {
+    let group = |id: &str| {
+        EntityUid::from_type_name_and_id(
+            EntityTypeName::from_str("UserGroup").unwrap(),
+            EntityId::new(id),
+        )
+    };
+    let readers = Entity::new_no_attrs(group("readers"), Default::default());
+    let privileged = Entity::new(
+        group("privileged_readers"),
+        std::collections::HashMap::new(),
+        [group("readers")].into_iter().collect(),
+    )
+    .expect("group entity");
+    PrincipalEnrichment {
+        groups: vec![group("privileged_readers")],
+        group_entities: vec![privileged, readers],
+        ..Default::default()
+    }
+}
+
+/// Merge extra request-time entities (the principal + its group closure) into a
+/// copy of the static bundle, so one `Entities` carries both.
+fn merge_entities(base: &Entities, extra: Vec<Entity>) -> Entities {
+    base.clone()
+        .add_entities(extra, None)
+        .expect("merge entities")
+}
+
 fn divider(title: &str) {
     println!("\n{}", "─".repeat(78));
     println!("  {title}");
@@ -264,7 +280,7 @@ async fn main() {
 
     // The session fact store — the shared, session-scoped state (the rest of the
     // facts in this walkthrough are local-ephemeral and built at each point).
-    let mut facts = FactStore::default();
+    let facts = InMemoryFactStore::new();
 
     // ── Decision point ① — Catalog PEP. ─────────────────────────────────────
     //
@@ -274,11 +290,19 @@ async fn main() {
     //   * action    `read_table`              [the operation]
     // Decision is full (no unknowns): is_authorized.
     divider("① Catalog PEP — may alice read protected_table?");
+    // alice's group membership is NOT in the static bundle (it was shrunk):
+    // the identity PIP resolves her closure (alice ∈ privileged_readers ⊂
+    // readers) and we fold it in via `to_entities()`. This is the real
+    // `PrincipalEnrichment` shape the hydrofoil `IdentityProvider` returns.
     let alice = PrincipalIdentity::new(EntityUid::from_str(r#"User::"alice""#).unwrap())
-        .with_attribute("region", "eu");
+        .with_attribute("region", "eu")
+        .enriched(alice_enrichment());
+    // The request-time entity set = the static bundle (groups + resource) PLUS
+    // alice's dynamically-resolved principal + group closure.
+    let with_principal = merge_entities(&entities, alice.to_entities());
     let baseline = authorizer(
         PolicySet::from_str(&baseline_src).expect("baseline policy set"),
-        entities.clone(),
+        with_principal.clone(),
     );
     let req = Request::new(
         alice.uid.clone(),
@@ -288,14 +312,15 @@ async fn main() {
         None,
     )
     .expect("request");
-    // `alice` resolves through the entity hierarchy: alice ∈ privileged_readers ⊂
-    // readers = protected_table.readers, so the coarse `read_table` permit fires.
+    // `alice` resolves through the dynamically-folded hierarchy: alice ∈
+    // privileged_readers ⊂ readers = protected_table.readers, so the coarse
+    // `read_table` permit fires — with an empty user→group bundle.
     let decision = baseline
-        .is_authorized(&req, &entities)
+        .is_authorized(&req, &with_principal)
         .await
         .expect("authz")
         .decision();
-    println!("  facts: principal=alice (local-ephemeral, from request ctx),");
+    println!("  facts: principal=alice + groups (SHARED via identity PIP, not the bundle),");
     println!("         resource=protected_table.readers=readers (local-ephemeral, from catalog)");
     println!("  → Cedar is_authorized = {decision:?}   (expect Allow)");
 
@@ -334,7 +359,7 @@ async fn main() {
     )
     .expect("request");
     let decision = baseline
-        .is_authorized(&req, &entities)
+        .is_authorized(&req, &with_principal)
         .await
         .expect("authz")
         .decision();

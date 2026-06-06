@@ -400,8 +400,7 @@ impl<'a> HFParser<'a> {
                         // so match it as a plain identifier.
                         let next = self.parser.parser.next_token();
                         match &next.token {
-                            Token::Word(w)
-                                if w.value.eq_ignore_ascii_case("DBPROPERTIES") => {}
+                            Token::Word(w) if w.value.eq_ignore_ascii_case("DBPROPERTIES") => {}
                             _ => return self.expected("DBPROPERTIES", next),
                         }
                         ensure_not_set(&builder.properties, "WITH DBPROPERTIES")?;
@@ -667,8 +666,7 @@ mod tests {
         let sql = "CREATE SCHEMA my_catalog.sales COMMENT 'sales data'";
         let statements = HFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
-        let expected_name: ObjectName =
-            vec![Ident::new("my_catalog"), Ident::new("sales")].into();
+        let expected_name: ObjectName = vec![Ident::new("my_catalog"), Ident::new("sales")].into();
         assert!(matches!(
             &statements[0],
             Statement::UnityCatalog(UnityCatalogStatement::CreateSchema(CreateSchemaStatement {
@@ -709,8 +707,7 @@ mod tests {
         let sql = "DROP SCHEMA my_catalog.sales";
         let statements = HFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
-        let expected_name: ObjectName =
-            vec![Ident::new("my_catalog"), Ident::new("sales")].into();
+        let expected_name: ObjectName = vec![Ident::new("my_catalog"), Ident::new("sales")].into();
         assert!(matches!(
             &statements[0],
             Statement::UnityCatalog(UnityCatalogStatement::DropSchema(DropSchemaStatement {

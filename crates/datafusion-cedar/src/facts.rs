@@ -209,7 +209,10 @@ mod tests {
         // A bare/partial/full ref naming the same qualified table normalize to
         // one key only when their qualified names actually match.
         let full = TableReference::full("c", "s", "t");
-        assert_eq!(normalize(&full), normalize(&TableReference::full("c", "s", "t")));
+        assert_eq!(
+            normalize(&full),
+            normalize(&TableReference::full("c", "s", "t"))
+        );
 
         // A bare ref has empty catalog/schema, so it is a *distinct* normalized
         // key from a fully-qualified one — they are not the same table.
@@ -242,9 +245,21 @@ mod tests {
     fn sink_record_overwrites_for_per_query_freshness() {
         let sink = CatalogFactSink::new();
         let t = TableReference::full("c", "s", "t");
-        sink.record(t.clone(), TableFacts { tags: tags(&["pii"]), ..Default::default() });
+        sink.record(
+            t.clone(),
+            TableFacts {
+                tags: tags(&["pii"]),
+                ..Default::default()
+            },
+        );
         // A later resolution of the same table replaces the prior facts.
-        sink.record(t.clone(), TableFacts { tags: tags(&["public"]), ..Default::default() });
+        sink.record(
+            t.clone(),
+            TableFacts {
+                tags: tags(&["public"]),
+                ..Default::default()
+            },
+        );
         assert_eq!(sink.len(), 1);
         assert_eq!(sink.get(&t).unwrap().tags, tags(&["public"]));
     }

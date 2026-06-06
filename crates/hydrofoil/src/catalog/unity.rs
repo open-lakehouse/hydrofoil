@@ -9,7 +9,9 @@ use deltalake_datafusion::catalog::unity::{TableProviderBuilder, TableProviderEr
 use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
 
-use crate::catalog::tags::{CatalogFactSinkExt, ConventionTagProvider, TagProvider, table_acl_facts};
+use crate::catalog::tags::{
+    CatalogFactSinkExt, ConventionTagProvider, TagProvider, table_acl_facts,
+};
 use crate::session::TaskExt;
 
 /// Builds Delta [`TableProvider`]s for Unity Catalog tables, backed by the

@@ -1,37 +1,57 @@
 name: CI
 
 on:
+  merge_group:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 # Cancel superseded runs on the same ref.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
+
+# Least privilege by default; jobs opt into more if they ever need it.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   ci:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      # edition 2024 / rust-version 1.91 (see the workspace Cargo.toml). `stable`
-      # tracks the latest release, which satisfies that floor.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+
+      # edition 2024 / rust-version 1.91 (see the workspace Cargo.toml). The pin
+      # tracks that floor so CI fails the same way a local 1.91 build would.
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.91"
           components: rustfmt, clippy
+
+      # cedar-policy's build script compiles .proto schemas via prost-build,
+      # which shells out to `protoc`. Pin both the action (by commit SHA) and
+      # the protoc version so the toolchain is reproducible; repo-token avoids
+      # the unauthenticated GitHub API rate limit when resolving the release.
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "31.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Caches ~/.cargo and ./target keyed on the lockfile; first run warms it,
       # later runs skip recompiling the (large) git dependency tree.
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
 
       - name: Format
         run: cargo fmt --all --check

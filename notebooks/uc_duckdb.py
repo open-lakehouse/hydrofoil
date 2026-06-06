@@ -172,7 +172,7 @@ def _(CATALOG, SCHEMA, TABLE, con):
 @app.cell
 def _(CATALOG, SCHEMA, TABLE, con):
     # INSERT more rows through DuckDB. UC append-only: this stages a Delta commit and registers it
-    # through UC's Catalog Commits. Wrapping multiple INSERTs in a transaction collapses them into
+    # through UC's Catalog Commits. Wrapping multiple INSERT statements in a transaction collapses them into
     # a single Delta version.
     con.execute("BEGIN")
     con.execute(

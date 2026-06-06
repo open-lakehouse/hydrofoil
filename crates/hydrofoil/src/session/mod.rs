@@ -14,7 +14,9 @@ use datafusion::{
         SessionState, SessionStateBuilder, TaskContext, context::ExecutionProps,
         runtime_env::RuntimeEnv,
     },
-    logical_expr::{AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF},
+    logical_expr::{
+        AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF,
+    },
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
@@ -667,8 +669,7 @@ pub fn create_session_for(
     // the policy layer reads. Keyed by TableReference and overwritten on
     // re-resolution, so per-query freshness holds even though the sink is
     // session-scoped (see docs/adr/0007-fact-gathering-pips.md).
-    session_config
-        .set_extension(Arc::new(crate::catalog::CatalogFactSinkExt::default()));
+    session_config.set_extension(Arc::new(crate::catalog::CatalogFactSinkExt::default()));
 
     // When Unity Catalog is wired, make its client available to the physical
     // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
@@ -1047,9 +1048,7 @@ mod integration_tests {
         use crate::policy::StaticPolicy;
 
         let engine = Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, None);
-        let session = engine
-            .new_session(principal("alice"))
-            .expect("session");
+        let session = engine.new_session(principal("alice")).expect("session");
 
         // Register table `t` on the session context.
         let schema = Arc::new(Schema::new(vec![
@@ -1085,7 +1084,10 @@ mod integration_tests {
 
         // Run a query that reads the tagged column through the real gate path.
         let lh = session.lakehouse_for_query(LineageContext::default(), None);
-        let plan = lh.create_logical_plan("SELECT id, ssn FROM t").await.unwrap();
+        let plan = lh
+            .create_logical_plan("SELECT id, ssn FROM t")
+            .await
+            .unwrap();
         lh.create_physical_plan(&plan).await.unwrap();
 
         // The session ledger gained "pii", keyed by this session's correlation id.
@@ -1094,6 +1096,67 @@ mod integration_tests {
                 .fact_store()
                 .observed_taints(&session.correlation_id()),
             ["pii".to_string()].into_iter().collect()
+        );
+    }
+
+    /// The agent-tool PEP seam: `Session::authorize_tool_call` reads the
+    /// session's observed taints back and runs the tool policy. Here a guardrail
+    /// policy forbids `send_external` once `pii` has been observed.
+    #[cfg(feature = "governance")]
+    #[tokio::test]
+    async fn authorize_tool_call_forbids_on_observed_pii() {
+        use std::collections::BTreeSet;
+
+        use cedar_oci::Decision;
+        use datafusion_cedar::FactStore as _;
+
+        use crate::engine::Engine;
+        use crate::policy::Policy;
+
+        // A policy whose tool guardrail forbids send_external when pii is seen.
+        #[derive(Debug)]
+        struct Guardrail;
+        #[async_trait]
+        impl Policy for Guardrail {
+            async fn is_allowed(
+                &self,
+                _p: &LogicalPlan,
+                _pr: &PrincipalIdentity,
+                _e: &EvalContext,
+            ) -> Result<Decision> {
+                Ok(Decision::Allow)
+            }
+            async fn tool_policy(
+                &self,
+                action: &str,
+                _principal: &PrincipalIdentity,
+                observed_taints: &BTreeSet<String>,
+            ) -> Result<Decision> {
+                if action == "send_external" && observed_taints.contains("pii") {
+                    Ok(Decision::Deny)
+                } else {
+                    Ok(Decision::Allow)
+                }
+            }
+        }
+
+        let engine = Engine::new(Arc::new(Guardrail), None, None);
+        let session = engine.new_session(principal("alice")).expect("session");
+
+        // Clean session: the tool call is permitted.
+        assert_eq!(
+            session.authorize_tool_call("send_external").await.unwrap(),
+            Decision::Allow
+        );
+
+        // After the ledger accrues pii (as the governance PEP would), the same
+        // tool call is forbidden.
+        engine
+            .fact_store()
+            .record_taint(&session.correlation_id(), "pii");
+        assert_eq!(
+            session.authorize_tool_call("send_external").await.unwrap(),
+            Decision::Deny
         );
     }
 }

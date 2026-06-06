@@ -159,10 +159,7 @@ pub struct ConfigIdentityProvider {
 }
 
 impl ConfigIdentityProvider {
-    pub fn new(
-        users: HashMap<String, UserFacts>,
-        groups: HashMap<String, GroupFacts>,
-    ) -> Self {
+    pub fn new(users: HashMap<String, UserFacts>, groups: HashMap<String, GroupFacts>) -> Self {
         Self { users, groups }
     }
 
@@ -294,10 +291,7 @@ mod tests {
                     parents: vec![uid("UserGroup::\"readers\"")],
                 },
             ),
-            (
-                "UserGroup::\"readers\"".to_string(),
-                GroupFacts::default(),
-            ),
+            ("UserGroup::\"readers\"".to_string(), GroupFacts::default()),
         ]);
         let provider = ConfigIdentityProvider::new(users, groups);
 

@@ -29,12 +29,19 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
         return None;
     }
     let set = |items: &std::collections::BTreeSet<String>| {
-        RestrictedExpression::new_set(items.iter().map(|s| RestrictedExpression::new_string(s.clone())))
+        RestrictedExpression::new_set(
+            items
+                .iter()
+                .map(|s| RestrictedExpression::new_string(s.clone())),
+        )
     };
 
     let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
     if let Some(owner) = &facts.owner {
-        attrs.insert("owner".into(), RestrictedExpression::new_string(owner.clone()));
+        attrs.insert(
+            "owner".into(),
+            RestrictedExpression::new_string(owner.clone()),
+        );
     }
     attrs.insert("readers".into(), set(&facts.readers));
     attrs.insert("writers".into(), set(&facts.writers));
@@ -58,7 +65,7 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
 use {
     crate::govern::TablePolicy,
     crate::translate::{CedarResidualTranslator, ResidualTranslator},
-    cedar_policy::{EntityTypeName, RequestBuilder},
+    cedar_policy::{EntityTypeName, Request, RequestBuilder},
     datafusion::common::DFSchema,
     datafusion::logical_expr::lit,
     std::str::FromStr as _,
@@ -132,12 +139,11 @@ where
             // carrying `resource.owner/readers/writers/tags/column_tags`.
             // cedar-local-agent merges these with the entities the provider vends.
             let mut entities = principal.to_entities();
-            if let Some(table_ref) = &table {
-                if let Some(facts) = eval.catalog_facts.get(table_ref) {
-                    if let Some(entity) = table_entity(table_ref, &facts) {
-                        entities.push(entity);
-                    }
-                }
+            if let Some(table_ref) = &table
+                && let Some(facts) = eval.catalog_facts.get(table_ref)
+                && let Some(entity) = table_entity(table_ref, &facts)
+            {
+                entities.push(entity);
             }
             let request_entities =
                 Entities::from_entities(entities, None).unwrap_or_else(|_| Entities::empty());
@@ -271,6 +277,45 @@ where
 
         Ok(tp)
     }
+
+    #[cfg(feature = "governance")]
+    async fn tool_policy(
+        &self,
+        action: &str,
+        principal: &PrincipalIdentity,
+        observed_taints: &std::collections::BTreeSet<String>,
+    ) -> Result<Decision> {
+        use cedar_oci::{EntityId, EntityUid};
+
+        // A full request: principal + the tool `action` + a tool resource named
+        // after the action, with the session's observed taints in the context.
+        let action_uid =
+            EntityUid::from_type_name_and_id("Action".parse().unwrap(), EntityId::new(action));
+        let resource = EntityUid::from_type_name_and_id(
+            EntityTypeName::from_str("Tool")
+                .map_err(|e| plan_datafusion_err!("invalid entity type name 'Tool': {e}"))?,
+            EntityId::new(action),
+        );
+        let context = crate::visitor::tool_context(observed_taints)?;
+        let request = Request::new(principal.uid.clone(), action_uid, resource, context, None)
+            .map_err(|e| plan_datafusion_err!("Failed to create tool request: {e}"))?;
+
+        let principal_entities = Entities::from_entities(principal.to_entities(), None)
+            .unwrap_or_else(|_| Entities::empty());
+
+        // Fail closed: an authorizer error denies the tool call.
+        match self
+            .authorizer
+            .is_authorized(&request, &principal_entities)
+            .await
+        {
+            Ok(response) => Ok(response.decision()),
+            Err(e) => {
+                tracing::warn!(error = %e, action, "tool authorization failed; denying (fail-closed)");
+                Ok(Decision::Deny)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -378,7 +423,8 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+        let decision = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
             .await
             .unwrap();
         assert_eq!(decision, Decision::Allow);
@@ -393,7 +439,8 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+        let decision = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
             .await
             .unwrap();
         assert_eq!(decision, Decision::Deny);
@@ -402,7 +449,8 @@ mod tests {
     #[tokio::test]
     async fn is_allowed_fails_closed_on_provider_error() {
         let pol = policy(ErrProvider, ErrProvider);
-        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+        let decision = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
             .await
             .unwrap();
         assert_eq!(decision, Decision::Deny);
@@ -540,7 +588,8 @@ mod tests {
     async fn demo_policy_gate_allows_principal_with_region() {
         let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
         // alice() carries region=eu.
-        let decision = pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+        let decision = pol
+            .is_allowed(&scan_plan(), &alice(), &EvalContext::default())
             .await
             .unwrap();
         assert_eq!(decision, Decision::Allow);
@@ -601,9 +650,7 @@ mod tests {
     async fn uc_ddl_denied_without_permit() {
         // No policy grants create_catalog -> Cedar default-deny (fail-closed).
         let pol = policy(
-            InMemory::new(
-                r#"permit(principal, action == Action::"read_table", resource);"#,
-            ),
+            InMemory::new(r#"permit(principal, action == Action::"read_table", resource);"#),
             InMemory::new(""),
         );
         let decision = pol
@@ -641,6 +688,37 @@ mod tests {
 
         fn empty_schema() -> DFSchema {
             DFSchema::empty()
+        }
+
+        const GUARDRAIL: &str = r#"
+            @id("no_external_send_with_pii")
+            forbid (principal, action == Action::"send_external", resource)
+            when { context.observed_taints.contains("pii") };
+            permit (principal, action == Action::"send_external", resource);
+        "#;
+
+        #[tokio::test]
+        async fn tool_policy_forbids_send_external_on_pii() {
+            use std::collections::BTreeSet;
+            let pol = policy(InMemory::new(GUARDRAIL), InMemory::new(""));
+
+            // With "pii" observed, the forbid overrides the permit → Deny.
+            let tainted: BTreeSet<String> = ["pii".to_string()].into_iter().collect();
+            assert_eq!(
+                pol.tool_policy("send_external", &alice(), &tainted)
+                    .await
+                    .unwrap(),
+                Decision::Deny
+            );
+
+            // A clean session is permitted — the decision tracks the accrued
+            // fact, not a hardcoded outcome.
+            assert_eq!(
+                pol.tool_policy("send_external", &alice(), &BTreeSet::new())
+                    .await
+                    .unwrap(),
+                Decision::Allow
+            );
         }
 
         #[tokio::test]
