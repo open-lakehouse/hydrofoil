@@ -5,7 +5,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::sql::TableReference;
 use datafusion_cedar::TableFacts;
-use deltalake_datafusion::catalog::unity::{TableProviderBuilder, TableProviderError};
+use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};
 use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
 

@@ -40,7 +40,7 @@ use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
+use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension};
 use unitycatalog_object_store::UnityObjectStoreFactory;
 

@@ -8,6 +8,7 @@ rust-version = { workspace = true }
 datafusion-open-lineage = { path = "../open-lineage" }
 datafusion-cedar = { path = "../datafusion-cedar" }
 deltalake-datafusion = { path = "../datafusion" }
+datafusion-unitycatalog = { workspace = true }
 hydrofoil-common = { path = "../common" }
 cedar-oci = { path = "../cedar-oci" }
 
