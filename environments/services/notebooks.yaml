@@ -1,0 +1,48 @@
+# Marimo notebook editor. Built from environments/docker/marimo/ (multi-stage uv image).
+# The repo notebooks/ dir is bind-mounted RW so edits persist to the host. No host port is
+# published; the UI is reached through Envoy's dedicated root listener (MARIMO_UI_PORT, 10130),
+# like the Marquez (:10110) and MLflow (:10120) UIs.
+#
+# In-container, notebooks must reach peers by DNS name (unity-catalog:8081, seaweedfs:8333),
+# NOT localhost — the env vars below carry those; migrate notebooks to read them (follow-up).
+services:
+  marimo:
+    build:
+      context: ./docker/marimo
+      dockerfile: Dockerfile
+      args:
+        # uv package index for the build. Defaults to the internal Databricks
+        # pypi proxy; override via UV_INDEX_URL in environments/.env when building
+        # outside the Databricks network.
+        UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi-proxy.cloud.databricks.com/simple}
+    restart: unless-stopped
+    profiles: [svc, full]
+    depends_on:
+      unity-catalog:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
+    environment:
+      UC_URI: http://unity-catalog:8081
+      UC_ENDPOINT: http://unity-catalog:8081/api/2.1/unity-catalog/
+      S3_ENDPOINT: http://seaweedfs:8333
+      AWS_ENDPOINT_URL_S3: http://seaweedfs:8333
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      # Bind-mount the repo-root notebooks/ dir RW so edits land on the host.
+      - ../notebooks:/notebooks
+    # On native Linux you may need to match host ownership so the non-root user
+    # can write the bind mount; uncomment and export UID/GID:
+    # user: "${UID:-1000}:${GID:-1000}"
+    expose:
+      - "2718"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:2718/health'')"'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
