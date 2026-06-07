@@ -13,5 +13,15 @@ include:
     project_directory: .
   - path: ./services/marquez.yaml
     project_directory: .
-  # - path: ./services/notebooks.yaml
-  #   project_directory: .
+  - path: ./services/notebooks.yaml
+    project_directory: .
+
+configs:
+  # Unity Catalog server/hibernate properties, referenced by the unity-catalog service.
+  uc_server_properties:
+    file: ./docker/unity-catalog/${UC_SERVER_PROPERTIES:-server.properties}
+  uc_hibernate_properties:
+    file: ./docker/unity-catalog/${UC_HIBERNATE_PROPERTIES:-hibernate.properties}
+  # marimo user config (AI assistant), mounted into the marimo service.
+  marimo_config:
+    file: ./docker/marimo/marimo.toml

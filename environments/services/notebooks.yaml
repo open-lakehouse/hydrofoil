@@ -16,26 +16,26 @@ services:
         # outside the Databricks network.
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi-proxy.cloud.databricks.com/simple}
     restart: unless-stopped
-    profiles: [svc, full]
     depends_on:
       unity-catalog:
         condition: service_healthy
-      seaweedfs-init:
-        condition: service_completed_successfully
     environment:
       UC_URI: http://unity-catalog:8081
       UC_ENDPOINT: http://unity-catalog:8081/api/2.1/unity-catalog/
-      S3_ENDPOINT: http://seaweedfs:8333
-      AWS_ENDPOINT_URL_S3: http://seaweedfs:8333
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       # Bind-mount the repo-root notebooks/ dir RW so edits land on the host.
       - ../notebooks:/notebooks
+    # marimo user config (AI assistant wiring) injected at the XDG config path,
+    # outside the notebooks bind mount. Declared as a top-level `config` in the
+    # parent compose files (same pattern unity-catalog uses).
+    configs:
+      - source: marimo_config
+        target: /home/appuser/.config/marimo/marimo.toml
     # On native Linux you may need to match host ownership so the non-root user
     # can write the bind mount; uncomment and export UID/GID:
     # user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - 2718:2718
     expose:
       - "2718"
     healthcheck:

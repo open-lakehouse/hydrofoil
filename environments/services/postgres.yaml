@@ -6,7 +6,6 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
-    profiles: [svc, full]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -17,7 +16,11 @@ services:
       - ./docker/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # `-d unitycatalog` makes "healthy" imply the init script already created the DBs.
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d unitycatalog"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d unitycatalog",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10

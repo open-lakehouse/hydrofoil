@@ -1,0 +1,17 @@
+name: open-lakehouse-live
+
+configs:
+  uc_server_properties:
+    file: ./docker/unity-catalog/server-live.properties
+  uc_hibernate_properties:
+    file: ./docker/unity-catalog/hibernate.properties
+  marimo_config:
+    file: ./docker/marimo/marimo.toml
+
+include:
+  - path: ./services/postgres.yaml
+    project_directory: .
+  - path: ./services/unity-catalog.yaml
+    project_directory: .
+  - path: ./services/notebooks.yaml
+    project_directory: .

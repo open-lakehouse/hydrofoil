@@ -10,6 +10,7 @@
 #     endpoints, each serving "/" so app asset/redirect paths don't break:
 #       :10110 -> marquez-web (Marquez lineage UI)
 #       :10120 -> mlflow      (MLflow UI *and* OTLP/HTTP trace ingestion at /v1/traces)
+#       :10130 -> marimo      (marimo notebook editor UI; WebSocket-upgraded)
 #
 # No Jaeger. Self-tracing of the gateway is omitted for now: MLflow only accepts
 # OTLP over HTTP (Envoy's OTel tracer prefers gRPC), and the server emits its own
@@ -133,6 +134,45 @@ static_resources:
                           decorator:
                             operation: mlflow
 
+    # ---- Marimo notebook editor UI (root listener) -------------------------
+    - name: marimo_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10130
+      traffic_direction: INBOUND
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                generate_request_id: true
+                codec_type: AUTO
+                upgrade_configs:
+                  upgrade_type: "websocket"
+                stat_prefix: ingress_http
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: marimo_routes
+                  virtual_hosts:
+                    - name: marimo
+                      domains:
+                        - "*"
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: marimo
+                            # marimo holds a long-lived WebSocket; disable the
+                            # per-route timeout so the editor connection isn't
+                            # dropped after the default 15s.
+                            timeout: 0s
+                          decorator:
+                            operation: marimo
+
   clusters:
     - name: marquez_api
       type: STRICT_DNS
@@ -185,3 +225,16 @@ static_resources:
                     socket_address:
                       address: unity-catalog
                       port_value: 8081
+
+    - name: marimo
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: marimo
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: marimo
+                      port_value: 2718
