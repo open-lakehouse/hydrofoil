@@ -1,7 +1,7 @@
 # Marimo notebook editor. Built from environments/docker/marimo/ (multi-stage uv image).
 # The repo notebooks/ dir is bind-mounted RW so edits persist to the host. No host port is
-# published; the UI is reached through Envoy's dedicated root listener (MARIMO_UI_PORT, 10130),
-# like the Marquez (:10110) and MLflow (:10120) UIs.
+# published; the UI is reached through Envoy under the `/marimo` prefix (served via
+# `--base-url`) — on the main gateway and the dedicated listener (MARIMO_UI_PORT, 10130).
 #
 # In-container, notebooks must reach peers by DNS name (unity-catalog:8081, seaweedfs:8333),
 # NOT localhost — the env vars below carry those; migrate notebooks to read them (follow-up).
@@ -16,6 +16,20 @@ services:
         # outside the Databricks network.
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi-proxy.cloud.databricks.com/simple}
     restart: unless-stopped
+    # Override the image CMD to serve under a configurable path prefix
+    # (`--base-url`, default `/marimo`) so the prefix-unfriendly editor UI stays
+    # self-referential when reached through Envoy's dedicated `/marimo` route.
+    command:
+      - "marimo"
+      - "edit"
+      - "--headless"
+      - "--host"
+      - "0.0.0.0"
+      - "-p"
+      - "2718"
+      - "--no-token"
+      - "--base-url"
+      - "${MARIMO_BASE_URL:-/marimo}"
     depends_on:
       unity-catalog:
         condition: service_healthy
@@ -25,6 +39,16 @@ services:
     volumes:
       # Bind-mount the repo-root notebooks/ dir RW so edits land on the host.
       - ../notebooks:/notebooks
+      # Spark jar (Ivy) cache. The notebooks build their SparkSession with
+      # `spark.jars.packages` (delta-spark, unitycatalog-spark, hadoop-aws), which
+      # makes spark-submit resolve those coordinates from Maven Central at startup.
+      # This container has NO outbound network (egress is routed through Envoy), so
+      # without a pre-populated cache Ivy resolution fails and pyspark dies with
+      # "[JAVA_GATEWAY_EXITED] Java gateway process exited before sending its port
+      # number". Mounting the host Ivy cache (populated by the host `uvx --sandbox`
+      # runs) lets Ivy resolve fully offline. RW because spark-submit writes its
+      # per-run resolution cache here. Spark 4.x uses ~/.ivy2.5.2.
+      - ${HOME}/.ivy2.5.2:/home/appuser/.ivy2.5.2
     # marimo user config (AI assistant wiring) injected at the XDG config path,
     # outside the notebooks bind mount. Declared as a top-level `config` in the
     # parent compose files (same pattern unity-catalog uses).
@@ -41,7 +65,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:2718/health'')"'
+        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:2718${MARIMO_BASE_URL:-/marimo}/health'')"'
       interval: 10s
       timeout: 5s
       retries: 10

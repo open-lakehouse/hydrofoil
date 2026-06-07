@@ -25,13 +25,13 @@
 
 import marimo
 
-__generated_with = "0.18.4"
-app = marimo.App()
+__generated_with = "0.23.8"
+app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
-    UC_URI = "http://localhost:8081"
+    UC_URI = "http://unity-catalog:8081"
     CATALOG = "demo"
     SCHEMA = "managed_demo"
     TABLE = "events"

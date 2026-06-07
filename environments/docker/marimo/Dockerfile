@@ -41,8 +41,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:3.13-slim-bookworm AS runtime
 
 # default-jre-headless for pyspark/delta-spark; tini for clean signal handling.
+# nodejs (bookworm ships v18) is required by marimo's language servers: the `ty`
+# type-checker LSP (and copilot/basedpyright/pyrefly) are launched via marimo's
+# bundled Node multiplexer (_lsp/index.cjs), not as native binaries. Without node
+# marimo aborts the ty LSP and shows a misleading "Install ty" error even though
+# ty itself is present in the venv.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends default-jre-headless tini \
+    && apt-get install -y --no-install-recommends default-jre-headless tini nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 1000). On macOS/Docker Desktop the file-share layer maps

@@ -2,16 +2,12 @@
 # `docker compose --profile svc up` brings up everything on the `svc` profile.
 services:
   envoy:
-    image: envoyproxy/envoy:v1.34-latest
+    image: envoyproxy/envoy:v1.38-latest
     restart: unless-stopped
-    profiles: [svc, full]
-    volumes:
-      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    configs:
+      - source: envoy_config
+        target: /etc/envoy/envoy.yaml
     ports:
       - "${ENVOY_PORT:-9080}:10000"
       - "9901:9901"
-      # Dedicated root listeners for prefix-unfriendly UIs.
-      - "${MARQUEZ_UI_PORT:-10110}:10110"   # Marquez lineage UI
-      - "${MLFLOW_UI_PORT:-10120}:10120"    # MLflow UI + OTLP /v1/traces ingestion
-      - "${MARIMO_UI_PORT:-10130}:10130"    # marimo notebook editor UI

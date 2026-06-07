@@ -1,0 +1,3 @@
+# server properties containing AWS credentials
+server.properties
+mlflow.env

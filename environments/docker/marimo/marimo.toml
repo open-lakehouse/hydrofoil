@@ -12,6 +12,9 @@
 theme = "dark"
 width = "medium"
 
+[language_servers.ty]
+enabled = true
+
 [ai.models]
 chat_model = "openlakehouse/chat"
 

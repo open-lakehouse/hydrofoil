@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Baked dependency set for the open-lakehouse marimo notebook server."
 requires-python = ">=3.13"
 dependencies = [
-    "marimo>=0.18.4",
+    "marimo[sql]>=0.23.8",
     # DuckDB UC path (uc_duckdb.py)
     "duckdb>=1.5.0",
     # Spark + Delta path (uc_crud.py, uc_managed.py, uc_duckdb.py) — needs a JRE
@@ -19,6 +19,9 @@ dependencies = [
     "requests",
     # language server python
     "ty>=0.0.40",
+    "openai>=2.38.0",
+    "ruff>=0.15.15",
+    "polars>=1.41.2",
 ]
 
 [tool.uv]
