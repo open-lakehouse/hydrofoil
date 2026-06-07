@@ -1,0 +1,17 @@
+{
+  "name": "@open-lakehouse/node",
+  "private": true,
+  "workspaces": [
+    "ui",
+    "uc-client"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "lint:ci": "biome ci .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.8"
+  }
+}

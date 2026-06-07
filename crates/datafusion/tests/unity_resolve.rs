@@ -22,14 +22,14 @@ use datafusion::catalog::{AsyncCatalogProviderList, TableProvider};
 use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::prelude::SessionContext;
+use datafusion_unitycatalog::catalog::{
+    TableProviderBuilder, TableProviderError, UnityCatalogProviderList,
+};
 use deltalake_core::DeltaTableConfig;
 use deltalake_core::delta_datafusion::DeltaScanNext;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
 use deltalake_core::logstore::{StorageConfig, logstore_with};
-use datafusion_unitycatalog::catalog::{
-    TableProviderBuilder, TableProviderError, UnityCatalogProviderList,
-};
 use object_store::path::Path;
 use unitycatalog_common::models::tables::v1::Table;
 use unitycatalog_object_store::UnityObjectStoreFactory;
