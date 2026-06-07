@@ -19,6 +19,27 @@ export type TableInfo = Schemas["TableInfo"];
 /** A single column of a table. */
 export type ColumnInfo = Schemas["ColumnInfo"];
 
+/** A Unity Catalog volume (schema-level), managed or external storage. */
+export type VolumeInfo = Schemas["VolumeInfo"];
+
+/** Managed vs external volume discriminator. */
+export type VolumeType = Schemas["VolumeType"];
+
+/** A Unity Catalog function (schema-level). */
+export type FunctionInfo = Schemas["FunctionInfo"];
+
+/** A Unity Catalog registered model (schema-level). */
+export type RegisteredModelInfo = Schemas["RegisteredModelInfo"];
+
 export type ListCatalogsResponse = Schemas["ListCatalogsResponse"];
 export type ListSchemasResponse = Schemas["ListSchemasResponse"];
 export type ListTablesResponse = Schemas["ListTablesResponse"];
+export type ListVolumesResponse = Schemas["ListVolumesResponseContent"];
+export type ListFunctionsResponse = Schemas["ListFunctionsResponse"];
+export type ListRegisteredModelsResponse = Schemas["ListRegisteredModelsResponse"];
+
+/** Request bodies for the create endpoints surfaced in the UI. */
+export type CreateCatalog = Schemas["CreateCatalog"];
+export type CreateSchema = Schemas["CreateSchema"];
+export type CreateVolumeRequestContent = Schemas["CreateVolumeRequestContent"];
+export type CreateRegisteredModel = Schemas["CreateRegisteredModel"];

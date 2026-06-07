@@ -18,7 +18,11 @@
 // (catalog_name, schema_name, max_results, page_token) and response fields
 // (next_page_token, full_name, ...). These names are taken straight from the
 // generated client; keep them in sync with the spec.
-import type { TableInfo } from "@open-lakehouse/uc-client";
+import type {
+  FunctionInfo,
+  RegisteredModelInfo,
+  VolumeInfo,
+} from "@open-lakehouse/uc-client";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { $api, fetchClient } from "@/lib/api";
@@ -26,15 +30,23 @@ import { $api, fetchClient } from "@/lib/api";
 const PAGE_SIZE = 100;
 
 /**
- * Three-level fully-qualified table name. The OSS `TableInfo` schema omits the
- * `full_name` field (the server populates it at runtime, but it isn't typed), so
- * we derive it deterministically from the namespace parts.
+ * Three-level fully-qualified name (`catalog.schema.object`). Several OSS list
+ * payloads omit `full_name` from the typed schema (the server populates it at
+ * runtime), so we derive it deterministically from the namespace parts. This is
+ * the single source of truth for both detail-cache keys and display.
  */
-export function tableFullName(table: TableInfo): string {
-  return [table.catalog_name, table.schema_name, table.name]
+export function objectFullName(parts: {
+  catalog_name?: string;
+  schema_name?: string;
+  name?: string;
+}): string {
+  return [parts.catalog_name, parts.schema_name, parts.name]
     .filter(Boolean)
     .join(".");
 }
+
+/** Back-compat alias; prefer `objectFullName`. */
+export const tableFullName = objectFullName;
 
 // ── Shared init builders (single source of truth for query keys) ────────────
 
@@ -60,6 +72,42 @@ function tablesInit(catalogName: string, schemaName: string) {
   } as const;
 }
 
+function volumesInit(catalogName: string, schemaName: string) {
+  return {
+    params: {
+      query: {
+        catalog_name: catalogName,
+        schema_name: schemaName,
+        max_results: PAGE_SIZE,
+      },
+    },
+  } as const;
+}
+
+function functionsInit(catalogName: string, schemaName: string) {
+  return {
+    params: {
+      query: {
+        catalog_name: catalogName,
+        schema_name: schemaName,
+        max_results: PAGE_SIZE,
+      },
+    },
+  } as const;
+}
+
+function modelsInit(catalogName: string, schemaName: string) {
+  return {
+    params: {
+      query: {
+        catalog_name: catalogName,
+        schema_name: schemaName,
+        max_results: PAGE_SIZE,
+      },
+    },
+  } as const;
+}
+
 // ── Detail queries (shared queryOptions: used by reads, prefetch, seeding) ──
 
 export function catalogDetailQuery(name: string) {
@@ -70,6 +118,24 @@ export function catalogDetailQuery(name: string) {
 
 export function tableDetailQuery(fullName: string) {
   return $api.queryOptions("get", "/tables/{full_name}", {
+    params: { path: { full_name: fullName } },
+  });
+}
+
+export function volumeDetailQuery(fullName: string) {
+  return $api.queryOptions("get", "/volumes/{name}", {
+    params: { path: { name: fullName } },
+  });
+}
+
+export function functionDetailQuery(fullName: string) {
+  return $api.queryOptions("get", "/functions/{name}", {
+    params: { path: { name: fullName } },
+  });
+}
+
+export function modelDetailQuery(fullName: string) {
+  return $api.queryOptions("get", "/models/{full_name}", {
     params: { path: { full_name: fullName } },
   });
 }
@@ -134,9 +200,101 @@ export function useTables(
 
   useEffect(() => {
     for (const table of query.data ?? []) {
-      const fullName = tableFullName(table);
+      const fullName = objectFullName(table);
       if (fullName) {
         queryClient.setQueryData(tableDetailQuery(fullName).queryKey, table);
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
+}
+
+export function useVolumes(
+  catalogName: string | undefined,
+  schemaName: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery(
+    "get",
+    "/volumes",
+    volumesInit(catalogName ?? "", schemaName ?? ""),
+    {
+      enabled: !!catalogName && !!schemaName,
+      pageParamName: "page_token",
+      initialPageParam: "",
+      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      select: (data) => data.pages.flatMap((page) => page.volumes ?? []),
+    },
+  );
+
+  useEffect(() => {
+    for (const volume of (query.data as VolumeInfo[] | undefined) ?? []) {
+      const fullName = volume.full_name || objectFullName(volume);
+      if (fullName) {
+        queryClient.setQueryData(volumeDetailQuery(fullName).queryKey, volume);
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
+}
+
+export function useFunctions(
+  catalogName: string | undefined,
+  schemaName: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery(
+    "get",
+    "/functions",
+    functionsInit(catalogName ?? "", schemaName ?? ""),
+    {
+      enabled: !!catalogName && !!schemaName,
+      pageParamName: "page_token",
+      initialPageParam: "",
+      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      select: (data) => data.pages.flatMap((page) => page.functions ?? []),
+    },
+  );
+
+  useEffect(() => {
+    for (const fn of (query.data as FunctionInfo[] | undefined) ?? []) {
+      const fullName = fn.full_name || objectFullName(fn);
+      if (fullName) {
+        queryClient.setQueryData(functionDetailQuery(fullName).queryKey, fn);
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
+}
+
+export function useModels(
+  catalogName: string | undefined,
+  schemaName: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery(
+    "get",
+    "/models",
+    modelsInit(catalogName ?? "", schemaName ?? ""),
+    {
+      enabled: !!catalogName && !!schemaName,
+      pageParamName: "page_token",
+      initialPageParam: "",
+      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      select: (data) =>
+        data.pages.flatMap((page) => page.registered_models ?? []),
+    },
+  );
+
+  useEffect(() => {
+    for (const model of (query.data as RegisteredModelInfo[] | undefined) ??
+      []) {
+      const fullName = model.full_name || objectFullName(model);
+      if (fullName) {
+        queryClient.setQueryData(modelDetailQuery(fullName).queryKey, model);
       }
     }
   }, [query.data, queryClient]);
@@ -193,4 +351,10 @@ export const ucListKeys = {
     ["get", "/schemas", schemasInit(catalogName)] as const,
   tables: (catalogName: string, schemaName: string) =>
     ["get", "/tables", tablesInit(catalogName, schemaName)] as const,
+  volumes: (catalogName: string, schemaName: string) =>
+    ["get", "/volumes", volumesInit(catalogName, schemaName)] as const,
+  functions: (catalogName: string, schemaName: string) =>
+    ["get", "/functions", functionsInit(catalogName, schemaName)] as const,
+  models: (catalogName: string, schemaName: string) =>
+    ["get", "/models", modelsInit(catalogName, schemaName)] as const,
 };

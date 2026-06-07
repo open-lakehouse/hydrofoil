@@ -1,7 +1,7 @@
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { type ProxyOptions, defineConfig } from "vite";
+import { defineConfig, type ProxyOptions } from "vite";
 
 // The Envoy gateway from environments/ fronts every backend service. In dev we
 // proxy the same path prefixes Envoy serves so the browser talks to a single
