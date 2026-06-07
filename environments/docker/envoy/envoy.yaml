@@ -1,20 +1,29 @@
 # Envoy gateway for the `environments/` dev stack.
 #
+# MLflow runs with `--static-prefix /mlflow` and marimo with `--base-url /marimo`
+# (see services/mlflow.yaml + services/notebooks.yaml), so every path those apps
+# serve lives under that prefix. Envoy re-exposes the MLflow REST API and OTLP
+# ingestion at Databricks-parallel root paths via `prefix_rewrite`.
+#
 # Topology:
-#   - Main listener (:10000): path-prefix routes for HTTP APIs that the
-#     host-run hydrofoil server and notebooks call —
-#       /api/v1/lineage  -> marquez-api   (OpenLineage event ingestion)
-#       /api/v1          -> marquez-api   (rest of the Marquez REST API)
+#   - Main listener (:10000): Databricks-style path-prefix routes for the HTTP
+#     APIs that the host-run hydrofoil server and notebooks call —
+#       /api/v1/lineage       -> marquez-api  (OpenLineage event ingestion)
+#       /api/v1               -> marquez-api  (rest of the Marquez REST API)
 #       /api/2.1/unity-catalog -> unity-catalog
-#   - Dedicated ROOT listeners for prefix-unfriendly browser UIs / ingestion
-#     endpoints, each serving "/" so app asset/redirect paths don't break:
-#       :10110 -> marquez-web (Marquez lineage UI)
-#       :10120 -> mlflow      (MLflow UI *and* OTLP/HTTP trace ingestion at /v1/traces)
+#       /api/2.0/mlflow        -> mlflow      (rewritten to /mlflow/api/2.0/mlflow)
+#       /v1/traces             -> mlflow      (rewritten to /mlflow/v1/traces)
+#       /mlflow                -> mlflow      (web UI)
+#       /marimo                -> marimo      (notebook editor UI; WebSocket-upgraded)
+#   - Dedicated listeners for the browser UIs, each serving the app's own prefix:
+#       :10110 /          -> marquez-web (Marquez lineage UI)
+#       :10120 /mlflow    -> mlflow      (MLflow UI *and* OTLP ingestion at /mlflow/v1/traces)
+#       :10130 /marimo    -> marimo      (marimo notebook editor UI; WebSocket-upgraded)
 #
 # No Jaeger. Self-tracing of the gateway is omitted for now: MLflow only accepts
 # OTLP over HTTP (Envoy's OTel tracer prefers gRPC), and the server emits its own
 # spans, so a gateway tracer adds complexity without much value here. Re-add an
-# `envoy.tracers.opentelemetry` http_service -> mlflow /v1/traces if gateway
+# `envoy.tracers.opentelemetry` http_service -> mlflow /mlflow/v1/traces if gateway
 # spans are wanted.
 
 static_resources:
@@ -55,13 +64,49 @@ static_resources:
                             cluster: marquez_api
                           decorator:
                             operation: marquez_api
-                        # Unity Catalog REST API.
+                        # Unity Catalog REST API (Databricks-parallel root path).
                         - match:
                             prefix: "/api/2.1/unity-catalog"
                           route:
                             cluster: unity_catalog
                           decorator:
                             operation: unity_catalog
+                        # MLflow REST API (Databricks-parallel root path). MLflow
+                        # runs with --static-prefix /mlflow, so the API lives at
+                        # /mlflow/api/2.0/mlflow; rewrite to keep it at root. This
+                        # single prefix also covers /api/2.0/mlflow-artifacts.
+                        - match:
+                            prefix: "/api/2.0/mlflow"
+                          route:
+                            cluster: mlflow
+                            prefix_rewrite: "/mlflow/api/2.0/mlflow"
+                          decorator:
+                            operation: mlflow_api
+                        # MLflow OTLP/HTTP trace ingestion (root, OTLP convention).
+                        - match:
+                            prefix: "/v1/traces"
+                          route:
+                            cluster: mlflow
+                            prefix_rewrite: "/mlflow/v1/traces"
+                          decorator:
+                            operation: mlflow_traces
+                        # MLflow web UI (served by MLflow under --static-prefix
+                        # /mlflow: UI, /ajax-api, static assets, /health).
+                        - match:
+                            prefix: "/mlflow"
+                          route:
+                            cluster: mlflow
+                          decorator:
+                            operation: mlflow_ui
+                        # marimo notebook editor UI (served under --base-url
+                        # /marimo). Long-lived editor WebSocket -> no route timeout.
+                        - match:
+                            prefix: "/marimo"
+                          route:
+                            cluster: marimo
+                            timeout: 0s
+                          decorator:
+                            operation: marimo
 
     # ---- Marquez web UI (root listener) ------------------------------------
     - name: marquez_ui_listener
@@ -126,12 +171,54 @@ static_resources:
                       domains:
                         - "*"
                       routes:
+                        # MLflow serves under --static-prefix /mlflow now (UI at
+                        # /mlflow, OTLP ingestion at /mlflow/v1/traces).
                         - match:
-                            prefix: "/"
+                            prefix: "/mlflow"
                           route:
                             cluster: mlflow
                           decorator:
                             operation: mlflow
+
+    # ---- Marimo notebook editor UI (root listener) -------------------------
+    - name: marimo_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10130
+      traffic_direction: INBOUND
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                generate_request_id: true
+                codec_type: AUTO
+                upgrade_configs:
+                  upgrade_type: "websocket"
+                stat_prefix: ingress_http
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: marimo_routes
+                  virtual_hosts:
+                    - name: marimo
+                      domains:
+                        - "*"
+                      routes:
+                        # marimo serves under --base-url /marimo now.
+                        - match:
+                            prefix: "/marimo"
+                          route:
+                            cluster: marimo
+                            # marimo holds a long-lived WebSocket; disable the
+                            # per-route timeout so the editor connection isn't
+                            # dropped after the default 15s.
+                            timeout: 0s
+                          decorator:
+                            operation: marimo
 
   clusters:
     - name: marquez_api
@@ -185,3 +272,16 @@ static_resources:
                     socket_address:
                       address: unity-catalog
                       port_value: 8081
+
+    - name: marimo
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: marimo
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: marimo
+                      port_value: 2718

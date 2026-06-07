@@ -1,21 +1,10 @@
-# MLflow tracking server.
-#
-# Serves the UI at root behind its own dedicated Envoy listener, and doubles as
-# the OpenTelemetry trace sink: MLflow 3.6+ accepts OTLP **over HTTP** at
-# `/v1/traces` (no gRPC) with an `x-mlflow-experiment-id` header. We deliberately
-# run WITHOUT `--static-prefix` so that ingestion path stays the documented
-# `/v1/traces` (a prefix would move it to `/mlflow/v1/traces` and break the
-# prefix-unfriendly UI). Routing to root is handled by Envoy.
 services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.12.0-full
     restart: unless-stopped
-    profiles: [svc, full]
     depends_on:
       db:
         condition: service_healthy
-      seaweedfs-init:
-        condition: service_completed_successfully
     command:
       - "mlflow"
       - "server"
@@ -28,8 +17,9 @@ services:
       - "0.0.0.0"
       - "--port"
       - "5000"
+      - "--static-prefix"
+      - "${MLFLOW_STATIC_PREFIX:-/mlflow}"
     environment:
-      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
@@ -38,7 +28,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:5000/health'')"'
+        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:5000${MLFLOW_STATIC_PREFIX:-/mlflow}/health'')"'
       interval: 5s
       timeout: 5s
       retries: 10

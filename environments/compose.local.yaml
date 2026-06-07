@@ -1,21 +1,10 @@
-# Minimal local Unity Catalog stack: Postgres backend + a mounted FILESYSTEM
-# storage location. No SeaweedFS / S3 / credential vending.
-#
-# This is the simplest way to get a UC server serving real Delta tables: mount
-# the example data shipped in the Unity Catalog Java repo straight into the
-# server and register the tables as EXTERNAL `file://` tables. The data lives on
-# a bind mount, so the server reads it directly with no object store in the way.
-#
-# Bring it up:
-#   just env-local-up          # or: docker compose -f environments/compose.local.yaml up -d
-#
-# Seed the example tables (registers them in Postgres against the mounted path):
-#   uv run notebooks/scripts/seed_uc_local.py
-#
-# UC_DATA_DIR points at the Unity Catalog Java repo's data directory on the host.
-# Override it if your checkout lives elsewhere:
-#   UC_DATA_DIR=/path/to/unitycatalog/etc/data just env-local-up
 name: open-lakehouse-local
+
+configs:
+  uc_server_properties:
+    file: ./docker/unity-catalog/server-live.properties
+  uc_hibernate_properties:
+    file: ./docker/unity-catalog/hibernate.properties
 
 services:
   db:
@@ -47,17 +36,13 @@ services:
       db:
         condition: service_healthy
     command: ["./bin/start-uc-server"]
-    volumes:
-      # Postgres-backed persistence (same hibernate config as the S3 stack).
-      - ./docker/unity-catalog/hibernate.properties:/home/unitycatalog/etc/conf/hibernate.properties:ro
-      - ./docker/unity-catalog/server-live.properties:/home/unitycatalog/etc/conf/server.properties:ro
-      # The example Delta tables from the Unity Catalog Java repo, mounted at a
-      # fixed in-container path. Tables are registered with
-      # `file:///home/unitycatalog/etc/data/...` storage locations that resolve
-      # to this mount. Mounted read-write so writes (later phases) work too.
-      - ${UC_DATA_DIR:-${HOME}/code/unitycatalog/etc/data}:/home/unitycatalog/etc/data
     ports:
       - "${UC_PORT:-8081}:8081"
+    configs:
+      - source: uc_server_properties
+        target: /home/unitycatalog/etc/conf/server.properties
+      - source: uc_hibernate_properties
+        target: /home/unitycatalog/etc/conf/hibernate.properties
     healthcheck:
       test:
         ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8081' || exit 1"]

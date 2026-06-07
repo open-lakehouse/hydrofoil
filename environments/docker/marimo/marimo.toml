@@ -1,0 +1,25 @@
+# marimo user config, injected into the container at
+# /home/appuser/.config/marimo/marimo.toml (marimo's XDG config search path),
+# via the top-level `configs:` pattern — same mechanism unity-catalog uses for
+# its server/hibernate properties.
+#
+# Points marimo's AI assistant at the (forthcoming) in-network MLflow AI Gateway.
+# The "openlakehouse/" prefix in chat_model selects the custom_providers section
+# of the same name; base_url is the gateway's UNIFIED OpenAI-compatible surface
+# (marimo appends /chat/completions); the model "chat" matches the endpoint name
+# the gateway will serve. Harmless until the gateway service exists.
+[display]
+theme = "dark"
+width = "medium"
+
+[language_servers.ty]
+enabled = true
+
+[ai.models]
+chat_model = "openlakehouse/chat"
+
+[ai.custom_providers.openlakehouse]
+base_url = "http://mlflow-gateway:7000/gateway/mlflow/v1"
+# The gateway holds the real provider token; this is only the client-side header,
+# which the gateway ignores for its own endpoints. Non-empty avoids a client guard.
+api_key = "gateway-holds-key"

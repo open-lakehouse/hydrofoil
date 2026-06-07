@@ -1,0 +1,15 @@
+[display]
+theme = "dark"
+width = "medium"
+
+[language_servers.ty]
+enabled = true
+
+[ai.models]
+chat_model = "openlakehouse/chat"
+
+[ai.custom_providers.openlakehouse]
+base_url = "http://mlflow-gateway:7000/gateway/mlflow/v1"
+# The gateway holds the real provider token; this is only the client-side header,
+# which the gateway ignores for its own endpoints. Non-empty avoids a client guard.
+api_key = "gateway-holds-key"

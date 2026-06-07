@@ -1,0 +1,28 @@
+[project]
+name = "open-lakehouse-notebooks"
+version = "0.0.0"
+description = "Baked dependency set for the open-lakehouse marimo notebook server."
+requires-python = ">=3.13"
+dependencies = [
+    "marimo[sql]>=0.23.8",
+    # DuckDB UC path (uc_duckdb.py)
+    "duckdb>=1.5.0",
+    # Spark + Delta path (uc_crud.py, uc_managed.py, uc_duckdb.py) — needs a JRE
+    # in the image (installed in the Dockerfile runtime stage).
+    "delta-spark==4.0.1",
+    "pyspark==4.0.1",
+    # Flight SQL / ADBC client path (client.py, policy_demo.py)
+    "adbc-driver-flightsql>=1.9.0",
+    "deltalake>=1.3.0",
+    "pyarrow",
+    # UC REST calls
+    "requests",
+    # language server python
+    "ty>=0.0.40",
+    "openai>=2.38.0",
+    "ruff>=0.15.15",
+    "polars>=1.41.2",
+]
+
+[tool.uv]
+package = false

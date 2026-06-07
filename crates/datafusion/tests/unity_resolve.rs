@@ -27,7 +27,7 @@ use deltalake_core::delta_datafusion::DeltaScanNext;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
 use deltalake_core::logstore::{StorageConfig, logstore_with};
-use deltalake_datafusion::catalog::unity::{
+use datafusion_unitycatalog::catalog::{
     TableProviderBuilder, TableProviderError, UnityCatalogProviderList,
 };
 use object_store::path::Path;

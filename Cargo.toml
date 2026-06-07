@@ -52,10 +52,11 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3", features = [
+unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
     "rest-client",
     "axum",
 ] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "c001f6881862b6934fea216d3950173a202919c3" }
+unitycatalog-client = { path = "../unitycatalog-rs/crates/client" }
+unitycatalog-object-store = { path = "../unitycatalog-rs/crates/object-store" }
+datafusion-unitycatalog = { path = "../unitycatalog-rs/crates/datafusion" }
 deltalake-core = { version = "0.32.3", features = ["datafusion", "cloud"] }

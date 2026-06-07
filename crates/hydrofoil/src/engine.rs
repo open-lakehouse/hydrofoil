@@ -34,7 +34,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_cedar::{IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity};
 use datafusion_open_lineage::OpenLineageClient;
 use datafusion_open_lineage::context::LineageContext;
-use deltalake_datafusion::catalog::unity::UnityCatalogProviderList;
+use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 use uuid::Uuid;
 
