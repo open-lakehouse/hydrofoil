@@ -1,0 +1,23 @@
+# Install all workspace dependencies
+install:
+    npm install
+
+# Lint all TypeScript (check only)
+lint:
+    npm run lint
+
+# Lint and auto-fix TypeScript
+lint-fix:
+    npm run lint:fix
+
+# Start the UI dev server (Vite, localhost:3002)
+ui-dev:
+    npm run dev --prefix ui
+
+# Build the UI for production
+ui-build:
+    npm run build --prefix ui
+
+# Regenerate the Unity Catalog OpenAPI TypeScript client
+gen-api:
+    npm run gen:api --prefix uc-client

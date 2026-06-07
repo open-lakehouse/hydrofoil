@@ -1,0 +1,19 @@
+{
+  "name": "@open-lakehouse/uc-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "gen:api": "openapi-typescript openapi/unity-catalog.yaml -o src/uc-api.d.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5"
+  }
+}
