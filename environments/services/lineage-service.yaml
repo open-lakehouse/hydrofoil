@@ -1,0 +1,37 @@
+# OpenLineage ingest service (Rust). Accepts OpenLineage events over HTTP and
+# writes them to a Delta "events" table. Built from the shared workspace
+# Dockerfile: `just build-docker lineage-service` -> image `lineage-service:dev`.
+#
+# This is the SIMPLEST validation wiring: a standalone service writing to the
+# local filesystem. The Delta table is bind-mounted to a host directory
+# (./.data/lineage) so it can be inspected directly from the host, and the HTTP
+# port is published so events can be POSTed straight to the service without
+# going through Envoy. Object storage (S3/SeaweedFS) and Unity Catalog are
+# intentionally NOT wired up here yet.
+services:
+  lineage-service:
+    image: lineage-service:dev
+    restart: unless-stopped
+    environment:
+      # Flatten OpenLineage events into a single local Delta table. DELTA_TABLE_PATH
+      # is a bare path -> the writer resolves it to a file:// URL. It lands under
+      # the bind-mounted /data, i.e. host ./.data/lineage/events.
+      LINEAGE_SERVICE_PORT: "8091"
+      DELTA_TABLE_PATH: /data/events
+      DELTA_PARTITION_COLS: event_kind
+      TABLE_SINKS: delta
+      # Flush promptly so the table shows up quickly during manual validation.
+      FLUSH_INTERVAL_MS: "500"
+      RUST_LOG: ${LINEAGE_RUST_LOG:-lineage_service=info}
+    volumes:
+      # Bind-mount the Delta events table to a host dir so it's inspectable.
+      # ./.data is gitignored. The container runs as the distroless `nonroot`
+      # user (uid 65532); the host dir must be writable by it (see README).
+      - ./.data/lineage:/data
+    ports:
+      - "${LINEAGE_SERVICE_PORT:-8091}:8091"
+    expose:
+      - "8091"
+    # No healthcheck: the distroless runtime has no shell, curl, or wget, so the
+    # CMD-SHELL probes the other services use can't run here. Validate liveness
+    # from the host instead: `curl localhost:${LINEAGE_SERVICE_PORT:-8091}/health`.

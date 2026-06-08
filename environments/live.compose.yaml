@@ -21,3 +21,5 @@ include:
     project_directory: .
   - path: ./services/notebooks.yaml
     project_directory: .
+  - path: ./services/lineage-service.yaml
+    project_directory: .
