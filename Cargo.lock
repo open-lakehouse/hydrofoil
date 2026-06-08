@@ -4120,11 +4120,13 @@ dependencies = [
  "buffa-types",
  "chrono",
  "config",
+ "datafusion-unitycatalog",
  "deltalake",
  "futures",
  "http-body",
  "iceberg",
  "iceberg-catalog-rest",
+ "object_store",
  "parquet 55.2.0",
  "serde",
  "serde_json",
@@ -4133,6 +4135,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unitycatalog-client",
+ "unitycatalog-object-store",
  "url",
 ]
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 
-use lineage_service::config::{Config, SinkKind, WriterConfig};
+use lineage_service::config::{Config, DeltaTarget, SinkKind, WriterConfig};
 use lineage_service::http::{self, AppState};
 use lineage_service::writer::buffered::{BufferedWriter, BufferedWriterConfig};
 use lineage_service::writer::delta::DeltaWriter;
@@ -83,8 +83,7 @@ async fn build_sinks(cfg: &Config) -> anyhow::Result<Vec<Arc<dyn TableSink>>> {
     for kind in &cfg.sinks {
         match kind {
             SinkKind::Delta => {
-                tracing::info!("registering delta sink at {}", cfg.delta.table_path);
-                sinks.push(Arc::new(DeltaWriter::new(cfg)));
+                sinks.push(build_delta_sink(cfg).await?);
             }
             #[cfg(feature = "iceberg")]
             SinkKind::Iceberg => {
@@ -116,4 +115,52 @@ async fn build_sinks(cfg: &Config) -> anyhow::Result<Vec<Arc<dyn TableSink>>> {
         }
     }
     Ok(sinks)
+}
+
+/// Build the Delta sink for the configured table-location mode (`local`, `unity-external`, or
+/// `unity-managed`). The UC modes connect/resolve (and optionally create) at startup, so a
+/// misconfigured target fails fast here rather than on the first flush.
+async fn build_delta_sink(cfg: &Config) -> anyhow::Result<Arc<dyn TableSink>> {
+    match cfg.delta.resolve(&cfg.storage_options)? {
+        DeltaTarget::Local { table_uri, .. } => {
+            tracing::info!("registering local delta sink at {table_uri}");
+            Ok(Arc::new(DeltaWriter::new(cfg)))
+        }
+        #[cfg(feature = "unity")]
+        DeltaTarget::UnityExternal(target) => {
+            use lineage_service::writer::unity_external::UnityExternalSink;
+            tracing::info!(
+                "registering unity-external delta sink: {}.{}.{}",
+                target.catalog,
+                target.schema,
+                target.table
+            );
+            Ok(Arc::new(
+                UnityExternalSink::connect(target)
+                    .await
+                    .context("failed to initialize unity-external sink")?,
+            ))
+        }
+        #[cfg(feature = "unity")]
+        DeltaTarget::UnityManaged(target) => {
+            use lineage_service::writer::unity_managed::UnityManagedSink;
+            tracing::info!(
+                "registering unity-managed delta sink: {}.{}.{}",
+                target.catalog,
+                target.schema,
+                target.table
+            );
+            Ok(Arc::new(
+                UnityManagedSink::connect(target)
+                    .await
+                    .context("failed to initialize unity-managed sink")?,
+            ))
+        }
+        // Unity targets can only be produced with the `unity` feature (config validation
+        // rejects them otherwise), so these arms are unreachable in a non-unity build.
+        #[cfg(not(feature = "unity"))]
+        DeltaTarget::UnityExternal(_) | DeltaTarget::UnityManaged(_) => unreachable!(
+            "unity delta mode selected without the `unity` feature; config validation should have rejected this"
+        ),
+    }
 }

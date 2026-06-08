@@ -4,3 +4,9 @@ pub mod delta;
 pub mod iceberg;
 pub mod schema;
 pub mod sink;
+#[cfg(feature = "unity")]
+pub mod unity;
+#[cfg(feature = "unity")]
+pub mod unity_external;
+#[cfg(feature = "unity")]
+pub mod unity_managed;

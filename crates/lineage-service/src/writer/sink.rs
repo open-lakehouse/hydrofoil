@@ -34,6 +34,9 @@ pub enum SinkError {
 
     #[error("iceberg: {0}")]
     Iceberg(String),
+
+    #[error("unity: {0}")]
+    Unity(String),
 }
 
 #[cfg(test)]

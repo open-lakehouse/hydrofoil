@@ -19,6 +19,7 @@ fn local_config(path: &str) -> Config {
         delta: DeltaConfig {
             table_path: path.to_string(),
             partition_cols: vec![],
+            ..DeltaConfig::default()
         },
         ..Config::default()
     }
