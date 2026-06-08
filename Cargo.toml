@@ -59,4 +59,9 @@ unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
 unitycatalog-client = { path = "../unitycatalog-rs/crates/client" }
 unitycatalog-object-store = { path = "../unitycatalog-rs/crates/object-store" }
 datafusion-unitycatalog = { path = "../unitycatalog-rs/crates/datafusion" }
-deltalake-core = { version = "0.32.3", features = ["datafusion", "cloud"] }
+deltalake-core = { path = "../delta-rs/crates/core" , features = ["datafusion", "cloud"] }
+deltalake = { path = "../delta-rs/crates/deltalake", features = ["datafusion"] }
+
+[patch.crates-io]
+deltalake-core = { path = "../delta-rs/crates/core" }
+deltalake = { path = "../delta-rs/crates/deltalake" }

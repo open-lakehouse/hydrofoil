@@ -53,8 +53,11 @@ impl DeltaWriter {
     }
 
     async fn open_or_create_table(&self) -> Result<DeltaTable, DeltaWriteError> {
-        let builder = DeltaTableBuilder::from_uri(&self.table_uri)
-            .with_storage_options(self.storage_options.clone());
+        let builder = DeltaTableBuilder::from_url(
+            url::Url::parse(&self.table_uri).map_err(|e| DeltaWriteError::Create(e.to_string()))?,
+        )
+        .map_err(|e| DeltaWriteError::Create(e.to_string()))?
+        .with_storage_options(self.storage_options.clone());
 
         match builder.build() {
             Ok(mut table) => {
@@ -68,8 +71,8 @@ impl DeltaWriter {
     }
 
     async fn create_empty_table(&self) -> Result<DeltaTable, DeltaWriteError> {
-        let table = DeltaOps::try_from_uri_with_storage_options(
-            &self.table_uri,
+        let table = DeltaOps::try_from_url_with_storage_options(
+            url::Url::parse(&self.table_uri).map_err(|e| DeltaWriteError::Create(e.to_string()))?,
             self.storage_options.clone(),
         )
         .await

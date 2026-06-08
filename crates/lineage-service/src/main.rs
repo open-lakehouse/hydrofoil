@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
 
-use table_service::config::{Config, SinkKind, WriterConfig};
-use table_service::http::{self, AppState};
-use table_service::writer::buffered::{BufferedWriter, BufferedWriterConfig};
-use table_service::writer::delta::DeltaWriter;
-use table_service::writer::iceberg::IcebergSink;
-use table_service::writer::sink::TableSink;
+use lineage_service::config::{Config, SinkKind, WriterConfig};
+use lineage_service::http::{self, AppState};
+use lineage_service::writer::buffered::{BufferedWriter, BufferedWriterConfig};
+use lineage_service::writer::delta::DeltaWriter;
+// use lineage_service::writer::iceberg::IcebergSink;
+use lineage_service::writer::sink::TableSink;
 
 #[tokio::main]
 async fn main() {
@@ -80,21 +80,22 @@ async fn build_sinks(cfg: &Config) -> Vec<Arc<dyn TableSink>> {
                 sinks.push(Arc::new(DeltaWriter::new(cfg)));
             }
             SinkKind::Iceberg => {
-                let ic = cfg
-                    .iceberg
-                    .as_ref()
-                    .expect("iceberg sink requires ICEBERG_* config");
-                tracing::info!(
-                    "registering iceberg sink: catalog={} warehouse={} table={}.{}",
-                    ic.catalog_uri,
-                    ic.warehouse,
-                    ic.namespace,
-                    ic.table,
-                );
-                let sink = IcebergSink::from_config(ic)
-                    .await
-                    .expect("failed to initialize iceberg sink");
-                sinks.push(Arc::new(sink));
+                unimplemented!()
+                // let ic = cfg
+                //     .iceberg
+                //     .as_ref()
+                //     .expect("iceberg sink requires ICEBERG_* config");
+                // tracing::info!(
+                //     "registering iceberg sink: catalog={} warehouse={} table={}.{}",
+                //     ic.catalog_uri,
+                //     ic.warehouse,
+                //     ic.namespace,
+                //     ic.table,
+                // );
+                // let sink = IcebergSink::from_config(ic)
+                //     .await
+                //     .expect("failed to initialize iceberg sink");
+                // sinks.push(Arc::new(sink));
             }
         }
     }

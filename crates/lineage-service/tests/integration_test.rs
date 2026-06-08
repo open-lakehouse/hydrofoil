@@ -5,14 +5,14 @@ use deltalake::DeltaTableBuilder;
 use deltalake::arrow::array::StringArray;
 use deltalake::arrow::datatypes::DataType;
 
-use table_service::config::{Config, DeltaConfig};
-use table_service::lineage::v1::{
+use lineage_service::config::{Config, DeltaConfig};
+use lineage_service::lineage::v1::{
     ColumnLineageDatasetFacet, FieldTransformation, InputField, Job, OpenLineageEvent,
     OpenLineageEventView, OutputDataset, OutputFieldLineage, Run, RunEvent,
     open_lineage_event::Event,
 };
-use table_service::writer::delta::DeltaWriter;
-use table_service::writer::schema::{arrow_schema, events_to_record_batch};
+use lineage_service::writer::delta::DeltaWriter;
+use lineage_service::writer::schema::{arrow_schema, events_to_record_batch};
 
 fn local_config(path: &str) -> Config {
     Config {
@@ -277,7 +277,7 @@ async fn test_delta_writer_round_trip_with_column_lineage() {
     };
 
     let bytes = envelope.encode_to_vec();
-    let view: table_service::lineage::v1::OpenLineageEventView<'_> =
+    let view: lineage_service::lineage::v1::OpenLineageEventView<'_> =
         <OpenLineageEventView<'_> as buffa::MessageView>::decode_view(&bytes).unwrap();
 
     let batch = events_to_record_batch(std::slice::from_ref(&view)).unwrap();

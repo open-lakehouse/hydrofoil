@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn lifts_column_lineage_from_output_facets() {
         let data = include_bytes!(
-            "../../../../resources/examples/lineage/column-lineage/run-event-with-column-lineage.json"
+            "../../examples/lineage/column-lineage/run-event-with-column-lineage.json"
         );
         let ev = convert_event(data).unwrap();
         let re = match &ev.reborrow().event {
