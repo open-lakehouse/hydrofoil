@@ -8,6 +8,7 @@ license = "Apache-2.0"
 rust-version = "1.91"
 
 [workspace.dependencies]
+anyhow = "1"
 arrow = "58"
 arrow-array = { version = "58" }
 arrow-flight = { version = "58", features = ["flight-sql-experimental"] }
@@ -24,7 +25,11 @@ datafusion = "53.1"
 datafusion-common = "53.1"
 datafusion-expr = "53.1"
 datafusion-tracing = "53"
-delta_kernel = { package = "buoyant_kernel", version = "0.22", features = [
+# Track the same kernel source as the delta-rs fork (roeap/delta-rs) so the
+# whole graph resolves to a single buoyant_kernel version — otherwise hydrofoil
+# (which uses these types directly) and delta-rs disagree on the Engine/Field
+# kernel API.
+delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
     "internal-api",
     "arrow-58",
 ] }
@@ -52,11 +57,12 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-unitycatalog-common = { path = "../unitycatalog-rs/crates/common", features = [
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a", features = [
     "rest-client",
     "axum",
 ] }
-unitycatalog-client = { path = "../unitycatalog-rs/crates/client" }
-unitycatalog-object-store = { path = "../unitycatalog-rs/crates/object-store" }
-datafusion-unitycatalog = { path = "../unitycatalog-rs/crates/datafusion" }
-deltalake-core = { version = "0.32.3", features = ["datafusion", "cloud"] }
+unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion", "cloud"] }
+deltalake = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion"] }

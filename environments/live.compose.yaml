@@ -9,6 +9,8 @@ configs:
     file: ./config/live/marimo.toml
   envoy_config:
     file: ./config/live/envoy.yaml
+  lineage_service_config:
+    file: ./config/live/lineage-service.toml
 
 include:
   - path: ./services/envoy.yaml
@@ -20,4 +22,6 @@ include:
   - path: ./services/mlflow.yaml
     project_directory: .
   - path: ./services/notebooks.yaml
+    project_directory: .
+  - path: ./services/lineage-service.yaml
     project_directory: .

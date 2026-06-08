@@ -1,0 +1,53 @@
+# lineage-service configuration (live stack).
+#
+# Loaded by the service at startup (mounted to /etc/lineage-service/config.toml;
+# the path is passed as the binary's first argument in the compose command).
+# Any field may be overridden by a `LINEAGE__*` environment variable, e.g.
+# `LINEAGE__PORT=9000` or `LINEAGE__WRITER__BUFFER_SIZE=200`. Secrets
+# (AWS_*, UNITY_CATALOG_*) are supplied via the environment, never here.
+
+# HTTP listen port (matches the published port in the compose service).
+port = 8091
+
+# Lakehouse sinks to fan events out to. "iceberg" additionally requires the
+# binary to be built with the `iceberg` cargo feature.
+sinks = ["delta"]
+
+[delta]
+# Table-location mode: "local" (default), "unity-external", or "unity-managed".
+# The unity modes require the binary to be built with the `unity` cargo feature.
+mode = "local"
+# local mode: bare path -> resolved to a file:// URL. Lands under the bind-mounted
+# /data, i.e. host ./.data/lineage/events.
+table_path = "/data/events"
+partition_cols = ["event_kind"]
+
+# --- Unity Catalog modes (uncomment one; set mode above accordingly) ---
+#
+# unity-managed: a catalog-managed (commit-coordinated) table. Auto-created if absent.
+#   mode = "unity-managed"
+#   catalog = "demo"
+#   schema = "managed_demo"
+#   table = "events"
+#   endpoint = "http://unity-catalog:8081/api/2.1/unity-catalog/"  # or UNITY_CATALOG_URL env
+#   # auto_create = true            # default; set false to require a pre-created table
+#   # token via UNITY_CATALOG_TOKEN env; region via delta.region or AWS_REGION
+#
+# unity-external: a pre-created external table; writes direct-commit via delta-rs.
+#   mode = "unity-external"
+#   catalog = "demo"
+#   schema = "ext"
+#   table = "events"
+#   endpoint = "http://unity-catalog:8081/api/2.1/unity-catalog/"
+#   partition_cols = ["event_kind"]  # must match the pre-created table's partitioning
+
+[writer]
+# Flush promptly during manual validation.
+buffer_size = 100
+flush_interval_ms = 500
+channel_capacity = 1000
+
+# Object-store options forwarded to the writer. Secrets come from the
+# environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, …) and are layered in at
+# load time, so this table is empty for the local-filesystem setup.
+[storage_options]
