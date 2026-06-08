@@ -15,7 +15,9 @@ cedar-oci = { path = "../cedar-oci" }
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 async-trait = { workspace = true }
+axum = "0.8"
 bytes = { workspace = true }
+config = { workspace = true }
 datafusion = { workspace = true }
 datafusion-tracing = { workspace = true }
 delta_kernel = { workspace = true }
@@ -23,6 +25,7 @@ deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
 itertools = { workspace = true }
 object_store = { workspace = true }
 prost = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = { workspace = true }
@@ -54,6 +57,9 @@ tracing-subscriber = { version = "0.3", features = [
 #     "visitor",
 # ] }
 uuid = { version = "1.17", features = ["v4", "v7"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = []

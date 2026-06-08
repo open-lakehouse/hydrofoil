@@ -49,7 +49,8 @@ mod metadata;
 /// uses). See `docs/adr/0002-flight-sql-session-identity.md`.
 const SESSION_ID_HEADER: &str = "x-session-id";
 
-/// Default idle TTL for sessions when `HYDROFOIL_SESSION_TTL_SECS` is unset.
+/// Idle TTL for the placeholder session store created by [`FlightSqlServiceImpl::try_new`],
+/// before [`FlightSqlServiceImpl::build`] replaces it with the configured TTL.
 const DEFAULT_SESSION_TTL_SECS: u64 = 1800;
 
 macro_rules! status {
@@ -148,13 +149,9 @@ impl FlightSqlServiceImpl {
     }
 
     /// Finalize the configured components into an [`Engine`] + [`SessionStore`]
-    /// and start the background session sweeper. Call once before serving.
-    pub fn build(mut self) -> Self {
-        let ttl = std::env::var("HYDROFOIL_SESSION_TTL_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(Duration::from_secs(DEFAULT_SESSION_TTL_SECS));
+    /// and start the background session sweeper, using `ttl` as the idle session
+    /// timeout. Call once before serving.
+    pub fn build(mut self, ttl: Duration) -> Self {
         let mut engine = Engine::new(
             self.policy.clone(),
             self.unity_factory.clone(),
@@ -181,10 +178,24 @@ impl FlightSqlServiceImpl {
             return Ok(session);
         }
         // No session id, or a known-shaped but unknown/expired one: fall through
-        // to the principal's ephemeral session rather than hard-failing. Enrich
-        // the principal (attributes + group membership) before binding it; the
-        // engine cache makes this cheap on the reused ephemeral session.
+        // to the principal's ephemeral session rather than hard-failing.
         let principal = crate::identity::principal_from_metadata(req.metadata())?;
+        self.session_for_principal(principal).await
+    }
+
+    /// Resolve the stable ephemeral session for an already-parsed principal,
+    /// enriching it (attributes + group membership) first. Shared by the gRPC
+    /// no-session-id fallback ([`Self::resolve_session`]) and the HTTP query
+    /// surface ([`crate::http`]), which always resolves by principal.
+    ///
+    /// Enrichment is fail-closed: a provider error fails the request rather than
+    /// proceeding with an un-enriched (under/over-authorized) principal. The
+    /// engine cache makes the enrich cheap on the reused ephemeral session.
+    #[allow(clippy::result_large_err)]
+    pub(crate) async fn session_for_principal(
+        &self,
+        principal: datafusion_cedar::PrincipalIdentity,
+    ) -> Result<Arc<Session>, Status> {
         let principal = self
             .sessions
             .enrich(principal)
@@ -193,6 +204,13 @@ impl FlightSqlServiceImpl {
         self.sessions
             .ephemeral_for(principal)
             .map_err(|e| status!("Failed to resolve session", e))
+    }
+
+    /// The CPU runtime used to build logical plans off the async I/O runtime.
+    /// Exposed so the HTTP query surface ([`crate::http`]) shares the same
+    /// planner path as the Flight statement RPC.
+    pub(crate) fn executor(&self) -> &CpuRuntime {
+        &self.executor
     }
 
     /// Build the per-request lineage context: parent-run facet parsed from

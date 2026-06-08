@@ -2,9 +2,16 @@
 _default:
     just --list
 
-# run hydrofoil server
+# run the hydrofoil server on the host against the local config (which points at
+# the compose stack's host-published ports). Override the config path with
+# `HYDROFOIL_CONFIG=… just hydro`, or individual fields with `HYDROFOIL__*` env
+# vars. Telemetry endpoints stay env-driven (see below); secrets go via UC_TOKEN
+# / OPENLINEAGE_API_KEY.
 hydro:
-    RUST_LOG="hydrofoil=debug" cargo run --bin hydrofoil
+    RUST_LOG="hydrofoil=debug" \
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://localhost:10120/v1/traces}" \
+    MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-0}" \
+    cargo run --bin hydrofoil -- "${HYDROFOIL_CONFIG:-environments/config/local/hydrofoil.toml}"
 
 # run marimo notebook server
 scratch:

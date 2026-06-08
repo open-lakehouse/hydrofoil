@@ -1,0 +1,37 @@
+# Hydrofoil — the governed Flight SQL query server (Rust). Serves Arrow Flight
+# SQL over gRPC, resolving tables through Unity Catalog, enforcing Cedar policy,
+# and emitting OpenLineage events. Built from the shared workspace Dockerfile:
+# `just build-docker hydrofoil` -> image `hydrofoil:dev`.
+#
+# Connects to its in-compose siblings: Unity Catalog (table resolution + vended
+# creds), marquez-api (OpenLineage ingest), and MLflow (OTLP trace export).
+services:
+  hydrofoil:
+    image: hydrofoil:dev
+    restart: unless-stopped
+    depends_on:
+      unity-catalog:
+        condition: service_healthy
+    # Configuration comes from the mounted TOML file, passed as the binary's
+    # first argument (the distroless ENTRYPOINT is the app, so `command` appends
+    # args to it). Individual values can still be overridden with HYDROFOIL__*
+    # env vars; secrets (UC_TOKEN, OPENLINEAGE_API_KEY) are supplied via the
+    # environment, not the file.
+    command: ["/etc/hydrofoil/config.toml"]
+    environment:
+      RUST_LOG: ${HYDROFOIL_RUST_LOG:-hydrofoil=info}
+      # Telemetry stays env-driven (read by the tracing/otel layer, not the
+      # config file). Traces -> MLflow OTLP/HTTP; experiment "0" is the Default.
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${HYDROFOIL_OTEL_TRACES_ENDPOINT:-http://mlflow:5000/v1/traces}
+      MLFLOW_EXPERIMENT_ID: ${HYDROFOIL_MLFLOW_EXPERIMENT_ID:-0}
+    configs:
+      - source: hydrofoil_config
+        target: /etc/hydrofoil/config.toml
+    ports:
+      - "${HYDROFOIL_PORT:-50051}:50051"
+    expose:
+      - "50051"
+    # No healthcheck: the distroless runtime has no shell, curl, or wget, so the
+    # CMD-SHELL probes the other services use can't run here. Validate liveness
+    # from the host instead with a Flight SQL client against
+    # localhost:${HYDROFOIL_PORT:-50051}.
