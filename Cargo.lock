@@ -2525,16 +2525,17 @@ dependencies = [
 [[package]]
 name = "datafusion-unitycatalog"
 version = "0.1.0"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=8e86500eb5a64e8c811f440cccfa9b8138c83550#8e86500eb5a64e8c811f440cccfa9b8138c83550"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
 dependencies = [
  "async-trait",
  "buoyant_kernel",
  "bytes",
  "dashmap",
  "datafusion",
- "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34)",
+ "deltalake-core",
  "futures",
  "object_store",
+ "thiserror",
  "tokio",
  "tracing",
  "unitycatalog-client",
@@ -2557,17 +2558,17 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
+source = "git+https://github.com/roeap/delta-rs?rev=a52e341e9ec80ae2cef916364803c2fbdc2f848b#a52e341e9ec80ae2cef916364803c2fbdc2f848b"
 dependencies = [
  "buoyant_kernel",
  "ctor",
- "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
+ "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
 version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34#6825c1823d8a04290cfe19b8cf6b518cd0e6db34"
+source = "git+https://github.com/roeap/delta-rs?rev=a52e341e9ec80ae2cef916364803c2fbdc2f848b#a52e341e9ec80ae2cef916364803c2fbdc2f848b"
 dependencies = [
  "arrow",
  "arrow-arith 58.3.0",
@@ -2590,61 +2591,7 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-physical-expr-adapter",
  "datafusion-proto",
- "deltalake-derive 1.0.0 (git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34)",
- "dirs",
- "either",
- "futures",
- "humantime",
- "indexmap 2.14.0",
- "itertools 0.14.0",
- "num_cpus",
- "object_store",
- "parking_lot",
- "parquet 58.3.0",
- "percent-encoding",
- "percent-encoding-rfc3986",
- "pin-project-lite",
- "rand 0.10.1",
- "regex",
- "serde",
- "serde_json",
- "sqlparser",
- "strum",
- "thiserror",
- "tokio",
- "tracing",
- "url",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "deltalake-core"
-version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
-dependencies = [
- "arrow",
- "arrow-arith 58.3.0",
- "arrow-array 58.3.0",
- "arrow-buffer 58.3.0",
- "arrow-cast 58.3.0",
- "arrow-ipc 58.3.0",
- "arrow-json",
- "arrow-ord 58.3.0",
- "arrow-row",
- "arrow-schema 58.3.0",
- "arrow-select 58.3.0",
- "async-trait",
- "buoyant_kernel",
- "bytes",
- "cfg-if",
- "chrono",
- "dashmap",
- "datafusion",
- "datafusion-datasource",
- "datafusion-physical-expr-adapter",
- "datafusion-proto",
- "deltalake-derive 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
+ "deltalake-derive",
  "dirs",
  "either",
  "futures",
@@ -2680,7 +2627,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "datafusion-unitycatalog",
- "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
+ "deltalake-core",
  "futures",
  "object_store",
  "ordered-float 5.3.0",
@@ -2697,19 +2644,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34#6825c1823d8a04290cfe19b8cf6b518cd0e6db34"
-dependencies = [
- "convert_case 0.9.0",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "deltalake-derive"
-version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
+source = "git+https://github.com/roeap/delta-rs?rev=a52e341e9ec80ae2cef916364803c2fbdc2f848b#a52e341e9ec80ae2cef916364803c2fbdc2f848b"
 dependencies = [
  "convert_case 0.9.0",
  "itertools 0.14.0",
@@ -3443,7 +3378,7 @@ dependencies = [
  "datafusion-open-lineage",
  "datafusion-tracing",
  "datafusion-unitycatalog",
- "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
+ "deltalake-core",
  "deltalake-datafusion",
  "futures",
  "hydrofoil-common",
@@ -3478,7 +3413,7 @@ dependencies = [
  "arrow-schema 58.3.0",
  "bytes",
  "datafusion-common",
- "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
+ "deltalake-core",
  "futures",
  "hydrofoil-common",
  "itertools 0.14.0",
@@ -5357,7 +5292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -5376,7 +5311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn",
@@ -7108,7 +7043,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unitycatalog-client"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=8e86500eb5a64e8c811f440cccfa9b8138c83550#8e86500eb5a64e8c811f440cccfa9b8138c83550"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
 dependencies = [
  "futures",
  "olai-http",
@@ -7125,7 +7060,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-common"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=8e86500eb5a64e8c811f440cccfa9b8138c83550#8e86500eb5a64e8c811f440cccfa9b8138c83550"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -7155,7 +7090,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-object-store"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=8e86500eb5a64e8c811f440cccfa9b8138c83550#8e86500eb5a64e8c811f440cccfa9b8138c83550"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
 dependencies = [
  "async-trait",
  "chrono",

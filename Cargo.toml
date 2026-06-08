@@ -57,12 +57,12 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550", features = [
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a", features = [
     "rest-client",
     "axum",
 ] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
-datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc", features = ["datafusion", "cloud"] }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc", features = ["datafusion"] }
+unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "83175e0580b3c74e2b743219d9e371294735842a" }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion", "cloud"] }
+deltalake = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion"] }
