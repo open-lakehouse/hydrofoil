@@ -5,16 +5,32 @@ use std::env;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkKind {
     Delta,
+    /// Apache Iceberg. Only available when the crate is built with the
+    /// `iceberg` cargo feature.
     Iceberg,
 }
 
-/// Legacy storage tag retained for source-compatibility with older callers
-/// that built `Config` directly. New code should use `SinkKind`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StorageBackend {
-    Local,
-    S3,
-    Unity,
+/// Error raised when the environment carries a value the service cannot run
+/// with. Unset variables fall back to documented defaults and are *not* errors;
+/// a variable that is *set but unparsable* is, so a misconfigured deployment
+/// refuses to start instead of silently running on defaults.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("env var {key} has invalid value {value:?}: {reason}")]
+    Invalid {
+        key: &'static str,
+        value: String,
+        reason: String,
+    },
+
+    #[error("TABLE_SINKS contains unknown sink kind {0:?} (known: delta, iceberg)")]
+    UnknownSink(String),
+
+    #[cfg(not(feature = "iceberg"))]
+    #[error(
+        "TABLE_SINKS requests the iceberg sink, but this binary was built without the `iceberg` feature; rebuild with `--features iceberg`"
+    )]
+    IcebergNotCompiled,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +48,7 @@ impl Default for DeltaConfig {
     }
 }
 
+#[cfg(feature = "iceberg")]
 #[derive(Debug, Clone)]
 pub struct IcebergConfig {
     /// Iceberg REST catalog URI. For Lakekeeper this looks like
@@ -79,9 +96,8 @@ impl Default for WriterConfig {
 pub struct Config {
     pub port: u16,
     pub sinks: Vec<SinkKind>,
-    /// Legacy single-backend tag, kept for source compatibility.
-    pub storage: StorageBackend,
     pub delta: DeltaConfig,
+    #[cfg(feature = "iceberg")]
     pub iceberg: Option<IcebergConfig>,
     pub storage_options: HashMap<String, String>,
     pub writer: WriterConfig,
@@ -92,8 +108,8 @@ impl Default for Config {
         Self {
             port: 8091,
             sinks: vec![SinkKind::Delta],
-            storage: StorageBackend::Local,
             delta: DeltaConfig::default(),
+            #[cfg(feature = "iceberg")]
             iceberg: None,
             storage_options: HashMap::new(),
             writer: WriterConfig::default(),
@@ -102,20 +118,10 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from_env() -> Self {
-        let port = env::var("LINEAGE_SERVICE_PORT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(8091);
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let port = env_parse("LINEAGE_SERVICE_PORT", 8091u16)?;
 
-        let sinks = parse_sinks(&env::var("TABLE_SINKS").unwrap_or_else(|_| "delta".into()));
-
-        let storage_str = env::var("DELTA_STORAGE").unwrap_or_else(|_| "local".into());
-        let storage = match storage_str.as_str() {
-            "s3" => StorageBackend::S3,
-            "unity" => StorageBackend::Unity,
-            _ => StorageBackend::Local,
-        };
+        let sinks = parse_sinks(&env::var("TABLE_SINKS").unwrap_or_else(|_| "delta".into()))?;
 
         let table_path = env::var("DELTA_TABLE_PATH").unwrap_or_else(|_| "/data/events".into());
 
@@ -135,6 +141,7 @@ impl Config {
         Self::add_env(&mut storage_options, "UNITY_CATALOG_URL");
         Self::add_env(&mut storage_options, "UNITY_CATALOG_TOKEN");
 
+        #[cfg(feature = "iceberg")]
         let iceberg = if sinks.contains(&SinkKind::Iceberg) {
             Some(iceberg_from_env())
         } else {
@@ -143,23 +150,23 @@ impl Config {
 
         let defaults = WriterConfig::default();
         let writer = WriterConfig {
-            buffer_size: env_parse("BUFFER_SIZE", defaults.buffer_size),
-            flush_interval_ms: env_parse("FLUSH_INTERVAL_MS", defaults.flush_interval_ms),
-            channel_capacity: env_parse("CHANNEL_CAPACITY", defaults.channel_capacity),
+            buffer_size: env_parse("BUFFER_SIZE", defaults.buffer_size)?,
+            flush_interval_ms: env_parse("FLUSH_INTERVAL_MS", defaults.flush_interval_ms)?,
+            channel_capacity: env_parse("CHANNEL_CAPACITY", defaults.channel_capacity)?,
         };
 
-        Config {
+        Ok(Config {
             port,
             sinks,
-            storage,
             delta: DeltaConfig {
                 table_path,
                 partition_cols,
             },
+            #[cfg(feature = "iceberg")]
             iceberg,
             storage_options,
             writer,
-        }
+        })
     }
 
     fn add_env(opts: &mut HashMap<String, String>, key: &str) {
@@ -169,36 +176,48 @@ impl Config {
     }
 }
 
-/// Read `key` and parse it as `T`, falling back to `default` when unset or
-/// unparsable (same lenient pattern used for `LINEAGE_SERVICE_PORT`).
-fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn parse_sinks(raw: &str) -> Vec<SinkKind> {
-    let parsed: Vec<SinkKind> = raw
-        .split(',')
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| match s.as_str() {
-            "delta" => Some(SinkKind::Delta),
-            "iceberg" => Some(SinkKind::Iceberg),
-            other => {
-                tracing::warn!("ignoring unknown sink kind '{other}' in TABLE_SINKS");
-                None
-            }
-        })
-        .collect();
-    if parsed.is_empty() {
-        vec![SinkKind::Delta]
-    } else {
-        parsed
+/// Read `key` and parse it as `T`. An unset variable yields `default`; a value
+/// that is set but fails to parse is a hard [`ConfigError::Invalid`] so a
+/// typo'd deployment fails fast instead of silently running on `default`.
+fn env_parse<T: std::str::FromStr>(key: &'static str, default: T) -> Result<T, ConfigError>
+where
+    T::Err: std::fmt::Display,
+{
+    match env::var(key) {
+        Ok(v) => v.parse().map_err(|e: T::Err| ConfigError::Invalid {
+            key,
+            value: v,
+            reason: e.to_string(),
+        }),
+        Err(_) => Ok(default),
     }
 }
 
+fn parse_sinks(raw: &str) -> Result<Vec<SinkKind>, ConfigError> {
+    let mut parsed = Vec::new();
+    for token in raw.split(',').map(|s| s.trim().to_ascii_lowercase()) {
+        if token.is_empty() {
+            continue;
+        }
+        match token.as_str() {
+            "delta" => parsed.push(SinkKind::Delta),
+            "iceberg" => {
+                #[cfg(not(feature = "iceberg"))]
+                return Err(ConfigError::IcebergNotCompiled);
+                #[cfg(feature = "iceberg")]
+                parsed.push(SinkKind::Iceberg);
+            }
+            other => return Err(ConfigError::UnknownSink(other.to_string())),
+        }
+    }
+    if parsed.is_empty() {
+        Ok(vec![SinkKind::Delta])
+    } else {
+        Ok(parsed)
+    }
+}
+
+#[cfg(feature = "iceberg")]
 fn iceberg_from_env() -> IcebergConfig {
     let catalog_uri =
         env::var("ICEBERG_CATALOG_URI").unwrap_or_else(|_| "http://localhost:8181/catalog".into());
@@ -231,49 +250,54 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.port, 8091);
         assert_eq!(cfg.delta.table_path, "/data/events");
-        assert!(matches!(cfg.storage, StorageBackend::Local));
         assert_eq!(cfg.delta.partition_cols, vec!["event_kind"]);
         assert_eq!(cfg.sinks, vec![SinkKind::Delta]);
-        assert!(cfg.iceberg.is_none());
-    }
-
-    #[test]
-    fn test_storage_variants() {
-        assert!(matches!(StorageBackend::S3, StorageBackend::S3));
-        assert!(matches!(StorageBackend::Unity, StorageBackend::Unity));
-        assert!(matches!(StorageBackend::Local, StorageBackend::Local));
     }
 
     #[test]
     fn test_parse_sinks_default_when_empty() {
-        assert_eq!(parse_sinks(""), vec![SinkKind::Delta]);
+        assert_eq!(parse_sinks("").unwrap(), vec![SinkKind::Delta]);
     }
 
     #[test]
-    fn test_parse_sinks_single_iceberg() {
-        assert_eq!(parse_sinks("iceberg"), vec![SinkKind::Iceberg]);
+    fn test_parse_sinks_delta() {
+        assert_eq!(parse_sinks(" Delta ").unwrap(), vec![SinkKind::Delta]);
     }
 
+    #[test]
+    fn test_parse_sinks_unknown_is_error() {
+        let err = parse_sinks("hudi,delta").unwrap_err();
+        assert!(
+            matches!(err, ConfigError::UnknownSink(ref s) if s == "hudi"),
+            "unknown sinks fail loudly so a misconfigured deploy refuses to start: {err}",
+        );
+    }
+
+    #[cfg(feature = "iceberg")]
     #[test]
     fn test_parse_sinks_dual_write_order_preserved() {
         assert_eq!(
-            parse_sinks(" Delta , iceberg "),
+            parse_sinks(" Delta , iceberg ").unwrap(),
             vec![SinkKind::Delta, SinkKind::Iceberg]
         );
     }
 
+    #[cfg(not(feature = "iceberg"))]
     #[test]
-    fn test_parse_sinks_skips_unknown() {
-        assert_eq!(
-            parse_sinks("hudi,delta"),
-            vec![SinkKind::Delta],
-            "unknown sinks are ignored, valid ones are kept",
-        );
+    fn test_parse_sinks_iceberg_without_feature_is_error() {
+        assert!(matches!(
+            parse_sinks("iceberg").unwrap_err(),
+            ConfigError::IcebergNotCompiled
+        ));
     }
 
     #[test]
-    fn test_parse_sinks_only_unknown_falls_back_to_delta() {
-        assert_eq!(parse_sinks("hudi"), vec![SinkKind::Delta]);
+    fn test_env_parse_set_but_unparsable_is_error() {
+        // SAFETY: single-threaded test; restore the var after.
+        unsafe { env::set_var("LINEAGE_SERVICE_PORT", "not-a-port") };
+        let got = env_parse("LINEAGE_SERVICE_PORT", 8091u16);
+        unsafe { env::remove_var("LINEAGE_SERVICE_PORT") };
+        assert!(matches!(got, Err(ConfigError::Invalid { key, .. }) if key == "LINEAGE_SERVICE_PORT"));
     }
 
     #[test]

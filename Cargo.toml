@@ -8,6 +8,7 @@ license = "Apache-2.0"
 rust-version = "1.91"
 
 [workspace.dependencies]
+anyhow = "1"
 arrow = "58"
 arrow-array = { version = "58" }
 arrow-flight = { version = "58", features = ["flight-sql-experimental"] }
@@ -63,9 +64,5 @@ unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unityca
 unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
 unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
 datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "8e86500eb5a64e8c811f440cccfa9b8138c83550" }
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "6825c1823d8a04290cfe19b8cf6b518cd0e6db34", features = ["datafusion", "cloud"] }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "6825c1823d8a04290cfe19b8cf6b518cd0e6db34", features = ["datafusion"] }
-
-[patch.crates-io]
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "6825c1823d8a04290cfe19b8cf6b518cd0e6db34" }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "6825c1823d8a04290cfe19b8cf6b518cd0e6db34" }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc", features = ["datafusion", "cloud"] }
+deltalake = { git = "https://github.com/roeap/delta-rs", rev = "c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc", features = ["datafusion"] }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use deltalake::arrow::array::RecordBatch;
 use deltalake::protocol::SaveMode;
-use deltalake::{DeltaOps, DeltaTable, DeltaTableBuilder};
+use deltalake::{DeltaTable, DeltaTableBuilder, ensure_table_uri};
 
 use crate::config::Config;
 use crate::writer::sink::{SinkError, TableSink};
@@ -18,9 +18,6 @@ pub struct DeltaWriter {
     storage_options: HashMap<String, String>,
     partition_cols: Vec<String>,
 }
-
-/// Forward-looking alias matching the new `TableSink` naming convention.
-pub type DeltaSink = DeltaWriter;
 
 impl DeltaWriter {
     pub fn new(cfg: &Config) -> Self {
@@ -37,9 +34,7 @@ impl DeltaWriter {
         }
 
         let table = self.open_or_create_table().await?;
-        let mut write_op = DeltaOps(table)
-            .write(vec![batch])
-            .with_save_mode(SaveMode::Append);
+        let mut write_op = table.write(vec![batch]).with_save_mode(SaveMode::Append);
 
         if !self.partition_cols.is_empty() {
             write_op = write_op.with_partition_columns(self.partition_cols.clone());
@@ -52,12 +47,18 @@ impl DeltaWriter {
         Ok(())
     }
 
+    /// Resolve `table_uri` to a proper [`Url`](url::Url). `ensure_table_uri`
+    /// accepts both real URLs (`s3://…`, `file://…`) and bare filesystem paths
+    /// (relative or absolute), turning the latter into a `file://` URL — so a
+    /// local `DELTA_TABLE_PATH=/data/events` works the same as an `s3://` URI.
+    fn table_url(&self) -> Result<url::Url, DeltaWriteError> {
+        ensure_table_uri(&self.table_uri).map_err(|e| DeltaWriteError::Create(e.to_string()))
+    }
+
     async fn open_or_create_table(&self) -> Result<DeltaTable, DeltaWriteError> {
-        let builder = DeltaTableBuilder::from_url(
-            url::Url::parse(&self.table_uri).map_err(|e| DeltaWriteError::Create(e.to_string()))?,
-        )
-        .map_err(|e| DeltaWriteError::Create(e.to_string()))?
-        .with_storage_options(self.storage_options.clone());
+        let builder = DeltaTableBuilder::from_url(self.table_url()?)
+            .map_err(|e| DeltaWriteError::Create(e.to_string()))?
+            .with_storage_options(self.storage_options.clone());
 
         match builder.build() {
             Ok(mut table) => {
@@ -71,14 +72,12 @@ impl DeltaWriter {
     }
 
     async fn create_empty_table(&self) -> Result<DeltaTable, DeltaWriteError> {
-        let table = DeltaOps::try_from_url_with_storage_options(
-            url::Url::parse(&self.table_uri).map_err(|e| DeltaWriteError::Create(e.to_string()))?,
+        DeltaTable::try_from_url_with_storage_options(
+            self.table_url()?,
             self.storage_options.clone(),
         )
         .await
-        .map_err(|e| DeltaWriteError::Create(e.to_string()))?;
-
-        Ok(table.0)
+        .map_err(|e| DeltaWriteError::Create(e.to_string()))
     }
 }
 

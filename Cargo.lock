@@ -2532,7 +2532,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "datafusion",
- "deltalake-core",
+ "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34)",
  "futures",
  "object_store",
  "tokio",
@@ -2557,11 +2557,11 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34#6825c1823d8a04290cfe19b8cf6b518cd0e6db34"
+source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
 dependencies = [
  "buoyant_kernel",
  "ctor",
- "deltalake-core",
+ "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
 ]
 
 [[package]]
@@ -2590,7 +2590,61 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-physical-expr-adapter",
  "datafusion-proto",
- "deltalake-derive",
+ "deltalake-derive 1.0.0 (git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34)",
+ "dirs",
+ "either",
+ "futures",
+ "humantime",
+ "indexmap 2.14.0",
+ "itertools 0.14.0",
+ "num_cpus",
+ "object_store",
+ "parking_lot",
+ "parquet 58.3.0",
+ "percent-encoding",
+ "percent-encoding-rfc3986",
+ "pin-project-lite",
+ "rand 0.10.1",
+ "regex",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "strum",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "deltalake-core"
+version = "1.0.0"
+source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
+dependencies = [
+ "arrow",
+ "arrow-arith 58.3.0",
+ "arrow-array 58.3.0",
+ "arrow-buffer 58.3.0",
+ "arrow-cast 58.3.0",
+ "arrow-ipc 58.3.0",
+ "arrow-json",
+ "arrow-ord 58.3.0",
+ "arrow-row",
+ "arrow-schema 58.3.0",
+ "arrow-select 58.3.0",
+ "async-trait",
+ "buoyant_kernel",
+ "bytes",
+ "cfg-if",
+ "chrono",
+ "dashmap",
+ "datafusion",
+ "datafusion-datasource",
+ "datafusion-physical-expr-adapter",
+ "datafusion-proto",
+ "deltalake-derive 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
  "dirs",
  "either",
  "futures",
@@ -2626,7 +2680,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "datafusion-unitycatalog",
- "deltalake-core",
+ "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
  "futures",
  "object_store",
  "ordered-float 5.3.0",
@@ -2644,6 +2698,18 @@ dependencies = [
 name = "deltalake-derive"
 version = "1.0.0"
 source = "git+https://github.com/roeap/delta-rs?rev=6825c1823d8a04290cfe19b8cf6b518cd0e6db34#6825c1823d8a04290cfe19b8cf6b518cd0e6db34"
+dependencies = [
+ "convert_case 0.9.0",
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "deltalake-derive"
+version = "1.0.0"
+source = "git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc#c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc"
 dependencies = [
  "convert_case 0.9.0",
  "itertools 0.14.0",
@@ -3377,7 +3443,7 @@ dependencies = [
  "datafusion-open-lineage",
  "datafusion-tracing",
  "datafusion-unitycatalog",
- "deltalake-core",
+ "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
  "deltalake-datafusion",
  "futures",
  "hydrofoil-common",
@@ -3412,7 +3478,7 @@ dependencies = [
  "arrow-schema 58.3.0",
  "bytes",
  "datafusion-common",
- "deltalake-core",
+ "deltalake-core 1.0.0 (git+https://github.com/roeap/delta-rs?rev=c5b8f4f98d9dc19f9b183e62c453a4512c57d1cc)",
  "futures",
  "hydrofoil-common",
  "itertools 0.14.0",
@@ -4112,6 +4178,7 @@ dependencies = [
 name = "lineage-service"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "axum 0.7.9",
  "buffa",

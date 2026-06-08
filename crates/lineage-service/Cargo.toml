@@ -8,24 +8,32 @@ rust-version = "1.88"
 buffa = { version = "0.7", features = ["json"] }
 buffa-types = { version = "0.7", features = ["json"] }
 deltalake = { workspace = true, features = ["datafusion"] }
-# Iceberg 0.7.x is the last release that pins arrow/parquet 55.x, matching the
-# version pulled in by `deltalake` 0.28. Bumping iceberg to >=0.8 also requires
-# bumping deltalake (or vendoring an arrow conversion bridge).
-iceberg = "0.9.1"
-iceberg-catalog-rest = "0.9.1"
-parquet = "55"
-async-trait = "0.1"
-thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+# Iceberg sink — opt-in via the `iceberg` feature (off by default). It is NOT
+# part of the default build because iceberg 0.9.1 / iceberg-catalog-rest 0.9.1
+# pull arrow/parquet 57 and the sink's own `parquet` dep is 55, while the Delta
+# path runs on arrow 58 (via `deltalake`). Reconciling that three-way skew is a
+# tracked follow-up; until then the default graph stays single-arrow-58.
+iceberg = { version = "0.9.1", optional = true }
+iceberg-catalog-rest = { version = "0.9.1", optional = true }
+parquet = { version = "55", optional = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 axum = "0.7"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 serde_json = "1"
 http-body = "1"
-tracing = "0.1"
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = { workspace = true }
 futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[features]
+# Build the Apache Iceberg sink. Currently requires resolving the arrow/parquet
+# version skew noted above before it will compile.
+iceberg = ["dep:iceberg", "dep:iceberg-catalog-rest", "dep:parquet"]
 
 [dev-dependencies]
 tempfile = "3"

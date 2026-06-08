@@ -56,6 +56,7 @@ pub fn arrow_schema() -> Arc<Schema> {
 /// helper only seeds the *initial* layout. If `arrow_schema()` ever grows or
 /// shrinks columns, an existing Iceberg table will refuse the write —
 /// schema evolution is intentionally out of scope for the v1 sink.
+#[cfg(feature = "iceberg")]
 pub fn iceberg_schema() -> Result<iceberg::spec::Schema, String> {
     use iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type};
     use std::sync::Arc as StdArc;
@@ -129,11 +130,12 @@ pub fn iceberg_schema() -> Result<iceberg::spec::Schema, String> {
 /// our canonical Arrow schema uses `"UTC"`). Callers cast their columns
 /// onto these types — which is a metadata-only change for the timestamp tz
 /// case.
-// pub fn arrow_schema_with_field_ids() -> Result<Arc<Schema>, String> {
-//     let ice = iceberg_schema()?;
-//     let arrow = iceberg::arrow::schema_to_arrow_schema(&ice).map_err(|e| e.to_string())?;
-//     Ok(Arc::new(arrow))
-// }
+#[cfg(feature = "iceberg")]
+pub fn arrow_schema_with_field_ids() -> Result<Arc<Schema>, String> {
+    let ice = iceberg_schema()?;
+    let arrow = iceberg::arrow::schema_to_arrow_schema(&ice).map_err(|e| e.to_string())?;
+    Ok(Arc::new(arrow))
+}
 
 pub fn events_to_record_batch(events: &[OpenLineageEventView<'_>]) -> Result<RecordBatch, String> {
     let schema = arrow_schema();

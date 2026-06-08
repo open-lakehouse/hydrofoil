@@ -2,8 +2,9 @@
 //!
 //! Each `TableSink` impl owns its own table handle (Delta, Iceberg, ...) and
 //! consumes the same shared Arrow schema produced by `events_to_record_batch`.
-//! `TableWriterServiceImpl` fans every incoming `RecordBatch` out to one or
-//! more sinks, fail-fast on the first sink error.
+//! The [`BufferedWriter`](crate::writer::buffered) fans every flushed
+//! `RecordBatch` out to one or more sinks; a sink failure is logged and the
+//! remaining sinks still run (fail-soft).
 
 use async_trait::async_trait;
 use deltalake::arrow::array::RecordBatch;

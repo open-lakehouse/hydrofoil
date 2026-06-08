@@ -122,7 +122,7 @@ fn test_column_lineage_fixture_round_trips_through_record_batch() {
 
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../resources/examples/lineage/column-lineage/run-event-with-column-lineage.json",
+        "/examples/lineage/column-lineage/run-event-with-column-lineage.json",
     );
     let json = std::fs::read_to_string(path).expect("fixture readable");
     let raw: serde_json::Value = serde_json::from_str(&json).expect("fixture is valid JSON");
