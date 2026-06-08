@@ -46,7 +46,7 @@ carry structured detail as JSON (column lineage mirrors the OpenLineage 1.2.0 sh
 ## Running
 
 ```sh
-cargo run -p lineage-service
+cargo run -p lineage-service -- path/to/config.toml
 # then, from another shell:
 curl -XPOST localhost:8091/api/v1/lineage \
   -H 'content-type: application/json' \
@@ -54,27 +54,46 @@ curl -XPOST localhost:8091/api/v1/lineage \
 curl localhost:8091/health    # -> OK
 ```
 
-By default it writes a local Delta table at `/data/events`. Point `DELTA_TABLE_PATH` at a
-writable directory (or an `s3://…` URI) to change that.
+With no config file the service runs on defaults (a local Delta table at `/data/events`,
+the `delta` sink, port `8091`).
 
 ### Configuration (`src/config.rs`)
 
-All configuration is via environment variables. An **unset** variable falls back to the
-documented default; a variable that is **set but unparsable** is a hard error so a
-misconfigured deployment refuses to start rather than silently running on defaults.
+Configuration is a TOML (or YAML/JSON) file, layered with defaults and environment
+overrides. `Config::load` composes three sources, lowest precedence first:
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `LINEAGE_SERVICE_PORT` | `8091` | HTTP listen port |
-| `TABLE_SINKS` | `delta` | Comma-separated sinks: `delta`, `iceberg` (order preserved; unknown values are rejected) |
-| `DELTA_TABLE_PATH` | `/data/events` | Events-table location — a bare path or any object-store URI (`s3://…`, `file://…`) |
-| `DELTA_PARTITION_COLS` | `event_kind` | Comma-separated partition columns (empty for unpartitioned) |
-| `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_S3_ALLOW_UNSAFE_RENAME` | — | Forwarded to the object store when writing to S3-compatible storage |
-| `BUFFER_SIZE` | `100` | Flush once this many events are buffered |
-| `FLUSH_INTERVAL_MS` | `500` | Flush at least this often, even below `BUFFER_SIZE` |
-| `CHANNEL_CAPACITY` | `1000` | Bounded ingest channel depth (backpressure point) |
+1. **struct defaults** — every field has one, so an empty or partial file is valid;
+2. **the config file** — passed as the binary's first argument, or via the `LINEAGE_CONFIG`
+   env var. A file requested explicitly that is missing or malformed is a hard error (a
+   misconfigured deployment refuses to start rather than silently running on defaults);
+3. **`LINEAGE__*` environment overrides** — `__` separates nested keys, e.g.
+   `LINEAGE__PORT=9000`, `LINEAGE__WRITER__BUFFER_SIZE=200`,
+   `LINEAGE__DELTA__TABLE_PATH=s3://bucket/events`.
 
-`RUST_LOG` controls tracing verbosity (e.g. `RUST_LOG=lineage_service=info`).
+```toml
+port = 8091                 # HTTP listen port
+sinks = ["delta"]           # lakehouse sinks; "iceberg" needs the `iceberg` feature
+
+[delta]
+table_path = "/data/events"        # bare path or object-store URI (s3://…, file://…)
+partition_cols = ["event_kind"]    # empty list = unpartitioned
+
+[writer]
+buffer_size = 100           # flush once this many events are buffered
+flush_interval_ms = 500     # flush at least this often, even below buffer_size
+channel_capacity = 1000     # bounded ingest channel depth (backpressure point)
+
+[storage_options]           # object-store options forwarded to the writer
+# region = "us-east-1"
+```
+
+**Secrets stay in the environment, never the file.** `AWS_REGION`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_S3_ALLOW_UNSAFE_RENAME`,
+`UNITY_CATALOG_URL`, and `UNITY_CATALOG_TOKEN` are read from the environment at load time and
+layered into `storage_options`. `RUST_LOG` controls tracing verbosity (e.g.
+`RUST_LOG=lineage_service=info`).
+
+A complete example lives at `environments/config/live/lineage-service.toml`.
 
 ## Building with the Iceberg sink
 

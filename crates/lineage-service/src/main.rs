@@ -15,7 +15,11 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cfg = Config::from_env().context("invalid configuration")?;
+    // Config file path: first positional arg, else the LINEAGE_CONFIG env var
+    // (handled inside Config::load). With neither, run on defaults + LINEAGE__*
+    // env overrides.
+    let config_path = std::env::args().nth(1);
+    let cfg = Config::load(config_path.as_ref()).context("invalid configuration")?;
     let sinks = build_sinks(&cfg).await?;
 
     let writer = BufferedWriter::spawn(sinks, writer_config(&cfg.writer));

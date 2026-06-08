@@ -12,17 +12,16 @@ services:
   lineage-service:
     image: lineage-service:dev
     restart: unless-stopped
+    # Configuration comes from the mounted TOML file, passed as the binary's
+    # first argument (the distroless ENTRYPOINT is the app, so `command` appends
+    # args to it). Individual values can still be overridden with LINEAGE__*
+    # env vars; secrets (AWS_*) are supplied via the environment, not the file.
+    command: ["/etc/lineage-service/config.toml"]
     environment:
-      # Flatten OpenLineage events into a single local Delta table. DELTA_TABLE_PATH
-      # is a bare path -> the writer resolves it to a file:// URL. It lands under
-      # the bind-mounted /data, i.e. host ./.data/lineage/events.
-      LINEAGE_SERVICE_PORT: "8091"
-      DELTA_TABLE_PATH: /data/events
-      DELTA_PARTITION_COLS: event_kind
-      TABLE_SINKS: delta
-      # Flush promptly so the table shows up quickly during manual validation.
-      FLUSH_INTERVAL_MS: "500"
       RUST_LOG: ${LINEAGE_RUST_LOG:-lineage_service=info}
+    configs:
+      - source: lineage_service_config
+        target: /etc/lineage-service/config.toml
     volumes:
       # Bind-mount the Delta events table to a host dir so it's inspectable.
       # ./.data is gitignored. The container runs as the distroless `nonroot`

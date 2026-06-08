@@ -1,0 +1,31 @@
+# lineage-service configuration (live stack).
+#
+# Loaded by the service at startup (mounted to /etc/lineage-service/config.toml;
+# the path is passed as the binary's first argument in the compose command).
+# Any field may be overridden by a `LINEAGE__*` environment variable, e.g.
+# `LINEAGE__PORT=9000` or `LINEAGE__WRITER__BUFFER_SIZE=200`. Secrets
+# (AWS_*, UNITY_CATALOG_*) are supplied via the environment, never here.
+
+# HTTP listen port (matches the published port in the compose service).
+port = 8091
+
+# Lakehouse sinks to fan events out to. "iceberg" additionally requires the
+# binary to be built with the `iceberg` cargo feature.
+sinks = ["delta"]
+
+[delta]
+# Bare path -> resolved to a file:// URL. Lands under the bind-mounted /data,
+# i.e. host ./.data/lineage/events.
+table_path = "/data/events"
+partition_cols = ["event_kind"]
+
+[writer]
+# Flush promptly during manual validation.
+buffer_size = 100
+flush_interval_ms = 500
+channel_capacity = 1000
+
+# Object-store options forwarded to the writer. Secrets come from the
+# environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, …) and are layered in at
+# load time, so this table is empty for the local-filesystem setup.
+[storage_options]

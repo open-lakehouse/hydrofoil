@@ -4184,6 +4184,7 @@ dependencies = [
  "buffa",
  "buffa-types",
  "chrono",
+ "config",
  "deltalake",
  "futures",
  "http-body",
