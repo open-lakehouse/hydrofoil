@@ -13,6 +13,7 @@ mod config;
 mod engine;
 mod error;
 mod execution;
+mod http;
 mod identity;
 mod lineage;
 mod planner;
@@ -94,17 +95,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Finalize the configured components into the engine + session store and
-    // start the background session sweeper.
-    let service = service.build(Duration::from_secs(cfg.session_ttl_secs));
+    // start the background session sweeper. Shared (as an `Arc`) between the
+    // Flight SQL gRPC server and the HTTP query surface so both speak to the
+    // same engine, sessions, and UC/Cedar/lineage wiring.
+    let service = Arc::new(service.build(Duration::from_secs(cfg.session_ttl_secs)));
 
-    tracing::info!("Listening on {addr:?}");
-    let svc = FlightServiceServer::new(service);
-
-    Server::builder()
+    // Flight SQL over gRPC (ADBC, arrow-flight clients).
+    let svc = FlightServiceServer::from_arc(service.clone());
+    let grpc = Server::builder()
         .layer(OtelGrpcLayer::default().filter(filters::reject_healthcheck))
         .add_service(svc)
-        .serve(addr)
-        .await?;
+        .serve(addr);
+
+    // Catalog-native HTTP query surface (`POST /query`), replacing the
+    // UC-quickstart query sidecar. Runs on its own port, same host. Optional:
+    // with `http_enabled = false` only the Flight SQL gRPC server runs.
+    if !cfg.http_enabled {
+        tracing::info!("Flight SQL listening on {addr:?}; HTTP query surface disabled");
+        grpc.await?;
+        return Ok(());
+    }
+
+    let http_addr: std::net::SocketAddr = format!("{}:{}", cfg.host, cfg.http_port).parse()?;
+    let router = http::router(http::AppState {
+        service: service.clone(),
+        query_default_limit: cfg.query_default_limit,
+        query_max_limit: cfg.query_max_limit,
+    });
+    let listener = tokio::net::TcpListener::bind(http_addr).await?;
+
+    tracing::info!("Flight SQL listening on {addr:?}; HTTP query surface on {http_addr:?}");
+
+    // Run both servers concurrently; if either exits (error or clean), bring the
+    // process down so a supervisor restarts it rather than serving half-up.
+    tokio::select! {
+        res = grpc => res?,
+        res = axum::serve(listener, router) => res?,
+    }
 
     Ok(())
 }

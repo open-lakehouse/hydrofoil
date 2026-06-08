@@ -15,6 +15,7 @@ cedar-oci = { path = "../cedar-oci" }
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 async-trait = { workspace = true }
+axum = "0.8"
 bytes = { workspace = true }
 config = { workspace = true }
 datafusion = { workspace = true }

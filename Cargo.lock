@@ -3369,6 +3369,7 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "async-trait",
+ "axum 0.8.9",
  "buoyant_kernel",
  "bytes",
  "cedar-oci",

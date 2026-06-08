@@ -31,6 +31,30 @@ fn default_session_ttl_secs() -> u64 {
     1800
 }
 
+/// Default HTTP query-surface listen port. Matches the UC-quickstart query
+/// sidecar's default (`QUERY_BIND` -> `…:9082`) so its callers point here
+/// unchanged.
+fn default_http_port() -> u16 {
+    9082
+}
+
+/// The HTTP query surface is exposed by default (it replaces the query
+/// sidecar). Set `http_enabled = false` to run Flight SQL only.
+fn default_http_enabled() -> bool {
+    true
+}
+
+/// Default hard cap on a query's row limit (sidecar parity: `QUERY_MAX_LIMIT`).
+fn default_query_max_limit() -> u32 {
+    10_000
+}
+
+/// Default row limit applied when a request omits one (sidecar parity:
+/// `QUERY_DEFAULT_LIMIT`).
+fn default_query_default_limit() -> u32 {
+    1_000
+}
+
 /// OpenLineage integration. Enabled when [`url`](LineageConfig::url) is set.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -82,6 +106,20 @@ pub struct Config {
     pub host: String,
     /// Flight SQL listen port.
     pub port: u16,
+    /// Whether to expose the HTTP query surface (`POST /query`) at all. When
+    /// false, only the Flight SQL gRPC server runs. Defaults to true.
+    pub http_enabled: bool,
+    /// HTTP query-surface listen port (the catalog-native `POST /query`
+    /// endpoint that replaces the UC-quickstart query sidecar). Shares
+    /// [`host`](Self::host) with the Flight SQL listener; bound on its own port
+    /// so Flight (ADBC) and HTTP clients coexist.
+    pub http_port: u16,
+    /// Hard cap on a query's row limit; a request asking for more is clamped to
+    /// this. Mirrors the sidecar's `QUERY_MAX_LIMIT`.
+    pub query_max_limit: u32,
+    /// Row limit applied when a `POST /query` request omits one. Mirrors the
+    /// sidecar's `QUERY_DEFAULT_LIMIT`.
+    pub query_default_limit: u32,
     /// Idle TTL after which a session (and its statements) is swept.
     pub session_ttl_secs: u64,
     pub lineage: LineageConfig,
@@ -94,6 +132,10 @@ impl Default for Config {
         Self {
             host: default_host(),
             port: default_port(),
+            http_enabled: default_http_enabled(),
+            http_port: default_http_port(),
+            query_max_limit: default_query_max_limit(),
+            query_default_limit: default_query_default_limit(),
             session_ttl_secs: default_session_ttl_secs(),
             lineage: LineageConfig::default(),
             policy: PolicyConfig::default(),
@@ -199,6 +241,10 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.host, "0.0.0.0");
         assert_eq!(cfg.port, 50051);
+        assert!(cfg.http_enabled);
+        assert_eq!(cfg.http_port, 9082);
+        assert_eq!(cfg.query_max_limit, 10_000);
+        assert_eq!(cfg.query_default_limit, 1_000);
         assert_eq!(cfg.session_ttl_secs, 1800);
         assert!(cfg.lineage.url.is_none());
         assert!(cfg.policy.oci_ref.is_none());
@@ -259,6 +305,25 @@ mod tests {
         );
         assert_eq!(cfg.unity.endpoint.as_deref(), Some("http://uc:8081/"));
         assert_eq!(cfg.unity.region.as_deref(), Some("eu-central-1"));
+    }
+
+    #[test]
+    fn test_http_surface_fields_parse_from_file() {
+        let cfg = from_toml(
+            r#"
+            http_enabled = false
+            http_port = 8088
+            query_max_limit = 5000
+            query_default_limit = 250
+            "#,
+        )
+        .unwrap();
+        assert!(!cfg.http_enabled);
+        assert_eq!(cfg.http_port, 8088);
+        assert_eq!(cfg.query_max_limit, 5000);
+        assert_eq!(cfg.query_default_limit, 250);
+        // Untouched fields keep their defaults.
+        assert_eq!(cfg.port, 50051);
     }
 
     #[test]

@@ -76,10 +76,48 @@ pub fn principal_from_metadata(meta: &MetadataMap) -> Result<PrincipalIdentity, 
             .and_then(|v| v.to_str().ok())
             .map(str::to_string)
     };
+    principal_from_headers(get).map_err(|e| tonic::Status::invalid_argument(e.message))
+}
 
+/// The axum-`HeaderMap` analog of [`principal_from_metadata`], for the HTTP
+/// query surface (`crate::http`).
+///
+/// Same trust boundary as the gRPC path (see module docs): until a real
+/// authenticating interceptor lands, the principal is parsed straight from
+/// headers for local/dev use. The UC user token (`Authorization: Bearer <token>`)
+/// is *not* yet exchanged for a verified identity — that is the deferred
+/// interceptor work; for now an explicit `x-hydrofoil-principal` selects the
+/// principal and a bare bearer token falls back to [`DEFAULT_PRINCIPAL`].
+pub fn principal_from_http_headers(
+    headers: &axum::http::HeaderMap,
+) -> Result<PrincipalIdentity, PrincipalParseError> {
+    let get = |key: &str| {
+        headers
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    principal_from_headers(get)
+}
+
+/// A failure to parse a principal from request headers — the supplied uid was
+/// not a valid Cedar `EntityUid`.
+#[derive(Debug)]
+pub struct PrincipalParseError {
+    pub message: String,
+}
+
+/// Shared core of [`principal_from_metadata`] /
+/// [`principal_from_http_headers`]: build the [`PrincipalIdentity`] from a
+/// transport-agnostic header getter, folding in the advisory `role`/`region`
+/// attributes. Falls back to [`DEFAULT_PRINCIPAL`] when no principal header is
+/// present.
+fn principal_from_headers(
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<PrincipalIdentity, PrincipalParseError> {
     let uid_str = get(headers::PRINCIPAL).unwrap_or_else(|| DEFAULT_PRINCIPAL.to_string());
-    let uid: EntityUid = uid_str.parse().map_err(|e| {
-        tonic::Status::invalid_argument(format!("invalid principal '{uid_str}': {e}"))
+    let uid: EntityUid = uid_str.parse().map_err(|e| PrincipalParseError {
+        message: format!("invalid principal '{uid_str}': {e}"),
     })?;
 
     let mut identity = PrincipalIdentity::new(uid);
