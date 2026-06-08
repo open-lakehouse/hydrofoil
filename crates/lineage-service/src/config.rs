@@ -103,7 +103,7 @@ impl Default for Config {
 
 impl Config {
     pub fn from_env() -> Self {
-        let port = env::var("TABLE_SERVICE_PORT")
+        let port = env::var("LINEAGE_SERVICE_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(8091);
@@ -170,7 +170,7 @@ impl Config {
 }
 
 /// Read `key` and parse it as `T`, falling back to `default` when unset or
-/// unparseable (same lenient pattern used for `TABLE_SERVICE_PORT`).
+/// unparsable (same lenient pattern used for `LINEAGE_SERVICE_PORT`).
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
     env::var(key)
         .ok()

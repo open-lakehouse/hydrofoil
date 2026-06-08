@@ -91,9 +91,8 @@ async fn test_delta_writer_create_and_append() {
     writer.append(batch).await.unwrap();
 
     // Verify the table was created and has version 1.
-    let mut table = DeltaTableBuilder::from_uri(tmp.path().to_str().unwrap())
-        .build()
-        .unwrap();
+    let url = url::Url::from_directory_path(tmp.path()).unwrap();
+    let mut table = DeltaTableBuilder::from_url(url).unwrap().build().unwrap();
     table.load().await.unwrap();
     assert!(table.version().is_some());
 }
@@ -306,9 +305,8 @@ async fn test_delta_writer_round_trip_with_column_lineage() {
 
     writer.append(batch).await.unwrap();
 
-    let mut table = DeltaTableBuilder::from_uri(tmp.path().to_str().unwrap())
-        .build()
-        .unwrap();
+    let url = url::Url::from_directory_path(tmp.path()).unwrap();
+    let mut table = DeltaTableBuilder::from_url(url).unwrap().build().unwrap();
     table.load().await.unwrap();
     assert!(table.version().is_some());
 }
@@ -349,9 +347,8 @@ async fn test_delta_writer_multiple_appends() {
     writer.append(make_batch("run", "p1")).await.unwrap();
     writer.append(make_batch("job", "p2")).await.unwrap();
 
-    let mut table = DeltaTableBuilder::from_uri(tmp.path().to_str().unwrap())
-        .build()
-        .unwrap();
+    let url = url::Url::from_directory_path(tmp.path()).unwrap();
+    let mut table = DeltaTableBuilder::from_url(url).unwrap().build().unwrap();
     table.load().await.unwrap();
     assert!(table.version().is_some());
 }

@@ -36,5 +36,12 @@ push-demo-policy:
 trust-me:
     ./scripts/generate-notation-certs.sh
 
-build-docker:
-    docker build -f crates/hydrofoil/Dockerfile -t hydrofoil:dev .
+# build a service image from the shared Dockerfile, e.g. `just build-docker hydrofoil`
+# or `just build-docker lineage-service`. Set CRATES_PROXY to route crates-io
+# through a sparse mirror on networks without direct crates.io access, e.g.
+# `CRATES_PROXY=sparse+https://crates-proxy.dev.databricks.com/ just build-docker hydrofoil`.
+build-docker bin:
+    docker build -f docker/Dockerfile \
+      --build-arg BIN={{ bin }} \
+      --build-arg CRATES_PROXY="${CRATES_PROXY:-}" \
+      -t {{ bin }}:dev .

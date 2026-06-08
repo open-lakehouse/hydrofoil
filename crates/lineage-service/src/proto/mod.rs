@@ -5,7 +5,7 @@
 //! `lineage.v1.rs`; regenerate it instead.
 //!
 //! Only message/view/enum types are generated (no ConnectRPC services): the
-//! table-service ingests OpenLineage JSON over HTTP, and these types are the
+//! lineage-service ingests OpenLineage JSON over HTTP, and these types are the
 //! in-memory model that `writer::schema` converts to Arrow.
 
 #[allow(

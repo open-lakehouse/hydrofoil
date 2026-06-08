@@ -24,7 +24,7 @@ async fn main() {
     });
 
     let addr = format!("0.0.0.0:{}", cfg.port);
-    tracing::info!("table-service listening on {}", addr);
+    tracing::info!("lineage-service listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app)
