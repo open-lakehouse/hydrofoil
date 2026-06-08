@@ -11,6 +11,8 @@ configs:
     file: ./config/live/envoy.yaml
   lineage_service_config:
     file: ./config/live/lineage-service.toml
+  hydrofoil_config:
+    file: ./config/live/hydrofoil.toml
 
 include:
   - path: ./services/envoy.yaml
@@ -24,4 +26,6 @@ include:
   - path: ./services/notebooks.yaml
     project_directory: .
   - path: ./services/lineage-service.yaml
+    project_directory: .
+  - path: ./services/hydrofoil.yaml
     project_directory: .

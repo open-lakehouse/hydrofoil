@@ -49,7 +49,8 @@ mod metadata;
 /// uses). See `docs/adr/0002-flight-sql-session-identity.md`.
 const SESSION_ID_HEADER: &str = "x-session-id";
 
-/// Default idle TTL for sessions when `HYDROFOIL_SESSION_TTL_SECS` is unset.
+/// Idle TTL for the placeholder session store created by [`FlightSqlServiceImpl::try_new`],
+/// before [`FlightSqlServiceImpl::build`] replaces it with the configured TTL.
 const DEFAULT_SESSION_TTL_SECS: u64 = 1800;
 
 macro_rules! status {
@@ -148,13 +149,9 @@ impl FlightSqlServiceImpl {
     }
 
     /// Finalize the configured components into an [`Engine`] + [`SessionStore`]
-    /// and start the background session sweeper. Call once before serving.
-    pub fn build(mut self) -> Self {
-        let ttl = std::env::var("HYDROFOIL_SESSION_TTL_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(Duration::from_secs(DEFAULT_SESSION_TTL_SECS));
+    /// and start the background session sweeper, using `ttl` as the idle session
+    /// timeout. Call once before serving.
+    pub fn build(mut self, ttl: Duration) -> Self {
         let mut engine = Engine::new(
             self.policy.clone(),
             self.unity_factory.clone(),

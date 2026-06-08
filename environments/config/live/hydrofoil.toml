@@ -1,0 +1,40 @@
+# hydrofoil configuration (live stack).
+#
+# Loaded by the server at startup (mounted to /etc/hydrofoil/config.toml; the
+# path is passed as the binary's first argument in the compose command). Any
+# field may be overridden by a `HYDROFOIL__*` environment variable, e.g.
+# `HYDROFOIL__PORT=9050` or `HYDROFOIL__UNITY__ENDPOINT=http://uc/`. Secrets
+# (UC_TOKEN, OPENLINEAGE_API_KEY) are supplied via the environment, never here.
+
+# Flight SQL gRPC listen address (matches the published port in the compose
+# service).
+host = "0.0.0.0"
+port = 50051
+
+# Idle session TTL in seconds (sessions and their statements are swept after
+# this long without activity).
+session_ttl_secs = 1800
+
+# --- OpenLineage ---
+# Emit lineage events to the in-compose Marquez ingest API. Omit / leave `url`
+# empty to disable lineage. `endpoint` defaults to "/api/v1/lineage".
+[lineage]
+url = "http://marquez-api:5000"
+namespace = "hydrofoil-live"
+# api_key via the OPENLINEAGE_API_KEY env var (a secret), not this file.
+
+# --- Cedar policy enforcement ---
+# Enable by setting `oci_ref` to a Cedar policy image (e.g.
+# `localhost:10100/hydrofoil/plan-policy:latest`, pushed via `just push_policy`).
+# Without it the server runs allow-all (open, ungoverned). The live compose stack
+# ships no OCI registry, so policy is disabled by default here.
+[policy]
+# oci_ref = "localhost:10100/hydrofoil/plan-policy:latest"
+
+# --- Unity Catalog ---
+# Resolve qualified table references against the in-compose Unity Catalog OSS
+# server (unauthenticated locally; omit `unity.endpoint` to disable).
+[unity]
+endpoint = "http://unity-catalog:8081/api/2.1/unity-catalog/"
+# token via UC_TOKEN env (a secret); region via UNITY's `region` or AWS_REGION.
+# region = "eu-central-1"

@@ -1,0 +1,285 @@
+//! Server configuration.
+//!
+//! Mirrors the layered approach used by `lineage-service`: struct defaults are
+//! overlaid with an optional config file and then `HYDROFOIL__*` environment
+//! overrides, with secrets pulled from the environment so they never live in the
+//! checked-in file. See [`Config::load`].
+//!
+//! The three integrations (OpenLineage, Cedar policy, Unity Catalog) are each
+//! optional: a section that is absent (or whose required field is empty) leaves
+//! that integration disabled, reproducing an empty config = fully-ungoverned,
+//! standalone server.
+
+use std::env;
+use std::path::{Path, PathBuf};
+
+use config::{Config as ConfigSource, Environment, File};
+use serde::Deserialize;
+
+/// Default Flight SQL listen address.
+fn default_host() -> String {
+    "0.0.0.0".into()
+}
+
+/// Default Flight SQL listen port.
+fn default_port() -> u16 {
+    50051
+}
+
+/// Default idle session TTL (30 minutes).
+fn default_session_ttl_secs() -> u64 {
+    1800
+}
+
+/// OpenLineage integration. Enabled when [`url`](LineageConfig::url) is set.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LineageConfig {
+    /// Base URL of an OpenLineage-compatible service, e.g.
+    /// `http://marquez:9080`. Empty/absent disables lineage emission.
+    pub url: Option<String>,
+    /// Path appended to `url` to form the lineage endpoint. Defaults to
+    /// `/api/v1/lineage` when unset.
+    pub endpoint: Option<String>,
+    /// Default OpenLineage job namespace (falls back to `default`).
+    pub namespace: Option<String>,
+    /// Optional bearer token. A secret — supply via the `OPENLINEAGE_API_KEY`
+    /// env var rather than the config file (see [`SECRET_ENV_KEYS`]).
+    pub api_key: Option<String>,
+}
+
+/// Cedar policy enforcement. Enabled when [`oci_ref`](PolicyConfig::oci_ref) is
+/// set; otherwise the server runs allow-all (open, ungoverned).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PolicyConfig {
+    /// OCI reference to a Cedar policy image, e.g.
+    /// `localhost:10100/hydrofoil/plan-policy:latest`.
+    pub oci_ref: Option<String>,
+}
+
+/// Unity Catalog integration. Enabled when [`endpoint`](UnityConfig::endpoint)
+/// is set.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UnityConfig {
+    /// Unity Catalog REST base URL, e.g.
+    /// `http://unity-catalog:8081/api/2.1/unity-catalog/`.
+    pub endpoint: Option<String>,
+    /// Optional bearer token; when absent the factory runs unauthenticated
+    /// (a local OSS server). A secret — supply via `UC_TOKEN` (see
+    /// [`SECRET_ENV_KEYS`]).
+    pub token: Option<String>,
+    /// AWS region hint for the UC object-store factory. Falls back to
+    /// `AWS_REGION` (see [`SECRET_ENV_KEYS`]).
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// Flight SQL listen host.
+    pub host: String,
+    /// Flight SQL listen port.
+    pub port: u16,
+    /// Idle TTL after which a session (and its statements) is swept.
+    pub session_ttl_secs: u64,
+    pub lineage: LineageConfig,
+    pub policy: PolicyConfig,
+    pub unity: UnityConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            host: default_host(),
+            port: default_port(),
+            session_ttl_secs: default_session_ttl_secs(),
+            lineage: LineageConfig::default(),
+            policy: PolicyConfig::default(),
+            unity: UnityConfig::default(),
+        }
+    }
+}
+
+/// Error raised while loading configuration. A missing file (when none was
+/// explicitly requested) falls back to defaults and is *not* an error; a
+/// malformed file or unparsable value is, so a misconfigured deployment refuses
+/// to start instead of silently running on defaults.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("failed to load configuration: {0}")]
+    Source(#[from] config::ConfigError),
+}
+
+/// Environment variable holding the path to the config file. Also accepted as
+/// the binary's first positional argument (see `main`).
+pub const CONFIG_PATH_ENV: &str = "HYDROFOIL_CONFIG";
+
+/// Prefix and separator for environment overrides of structured config keys,
+/// e.g. `HYDROFOIL__PORT=9050` or `HYDROFOIL__UNITY__ENDPOINT=http://uc/`.
+const ENV_PREFIX: &str = "HYDROFOIL";
+const ENV_SEPARATOR: &str = "__";
+
+/// Secrets sourced from the environment rather than the config file and overlaid
+/// onto the corresponding config field at load time, keeping credentials out of
+/// the checked-in file. Each entry maps an env var to where it lands.
+const SECRET_ENV_KEYS: &[&str] = &[
+    "OPENLINEAGE_API_KEY", // -> lineage.api_key
+    "UC_TOKEN",            // -> unity.token
+    "AWS_REGION",          // -> unity.region (fallback)
+];
+
+impl Config {
+    /// Load configuration by layering, lowest precedence first:
+    ///
+    /// 1. struct defaults,
+    /// 2. the config file (TOML/YAML/… — `path` if given, otherwise the
+    ///    `HYDROFOIL_CONFIG` path if set; a missing file is only an error when
+    ///    the path was explicitly requested),
+    /// 3. `HYDROFOIL__*` environment overrides (e.g. `HYDROFOIL__PORT=9050`).
+    ///
+    /// Secrets (`OPENLINEAGE_API_KEY`, `UC_TOKEN`, `AWS_REGION`) are then overlaid
+    /// from the environment so they never need to live in the checked-in file —
+    /// but only when not already set by the file/env layers above.
+    pub fn load(path: Option<impl AsRef<Path>>) -> Result<Self, ConfigError> {
+        let path = path
+            .map(|p| p.as_ref().to_path_buf())
+            .or_else(|| env::var_os(CONFIG_PATH_ENV).map(PathBuf::from));
+
+        let mut builder = ConfigSource::builder();
+        if let Some(path) = path {
+            // Explicitly requested -> the file must exist and parse.
+            builder = builder.add_source(File::from(path).required(true));
+        }
+        builder = builder.add_source(
+            Environment::with_prefix(ENV_PREFIX)
+                .separator(ENV_SEPARATOR)
+                .try_parsing(true),
+        );
+
+        let mut cfg: Config = builder.build()?.try_deserialize()?;
+        cfg.overlay_secrets();
+        Ok(cfg)
+    }
+
+    /// Overlay secret env vars onto their config fields, without clobbering a
+    /// value already provided by the file or `HYDROFOIL__*` layers.
+    fn overlay_secrets(&mut self) {
+        for key in SECRET_ENV_KEYS {
+            let Ok(val) = env::var(key) else { continue };
+            if val.is_empty() {
+                continue;
+            }
+            match *key {
+                "OPENLINEAGE_API_KEY" => self.lineage.api_key.get_or_insert(val),
+                "UC_TOKEN" => self.unity.token.get_or_insert(val),
+                "AWS_REGION" => self.unity.region.get_or_insert(val),
+                _ => continue,
+            };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deserialize a TOML body into `Config` the way `load` does (defaults +
+    /// file), without touching the process environment.
+    fn from_toml(body: &str) -> Result<Config, config::ConfigError> {
+        ConfigSource::builder()
+            .add_source(File::from_str(body, config::FileFormat::Toml))
+            .build()?
+            .try_deserialize()
+    }
+
+    #[test]
+    fn test_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.host, "0.0.0.0");
+        assert_eq!(cfg.port, 50051);
+        assert_eq!(cfg.session_ttl_secs, 1800);
+        assert!(cfg.lineage.url.is_none());
+        assert!(cfg.policy.oci_ref.is_none());
+        assert!(cfg.unity.endpoint.is_none());
+    }
+
+    #[test]
+    fn test_empty_file_is_all_defaults_and_disabled() {
+        let cfg = from_toml("").unwrap();
+        assert_eq!(cfg.port, 50051);
+        // Every integration stays disabled (its enabling field is absent).
+        assert!(cfg.lineage.url.is_none());
+        assert!(cfg.policy.oci_ref.is_none());
+        assert!(cfg.unity.endpoint.is_none());
+    }
+
+    #[test]
+    fn test_partial_file_overrides_only_named_fields() {
+        let cfg = from_toml(
+            r#"
+            port = 9050
+            [unity]
+            endpoint = "http://uc:8081/api/2.1/unity-catalog/"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.port, 9050);
+        assert_eq!(
+            cfg.unity.endpoint.as_deref(),
+            Some("http://uc:8081/api/2.1/unity-catalog/")
+        );
+        // Untouched fields keep their defaults.
+        assert_eq!(cfg.host, "0.0.0.0");
+        assert_eq!(cfg.session_ttl_secs, 1800);
+        assert!(cfg.lineage.url.is_none());
+    }
+
+    #[test]
+    fn test_integrations_parse_from_file() {
+        let cfg = from_toml(
+            r#"
+            [lineage]
+            url = "http://marquez:9080"
+            namespace = "hydrofoil-live"
+            [policy]
+            oci_ref = "localhost:10100/hydrofoil/plan-policy:latest"
+            [unity]
+            endpoint = "http://uc:8081/"
+            region = "eu-central-1"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.lineage.url.as_deref(), Some("http://marquez:9080"));
+        assert_eq!(cfg.lineage.namespace.as_deref(), Some("hydrofoil-live"));
+        assert_eq!(
+            cfg.policy.oci_ref.as_deref(),
+            Some("localhost:10100/hydrofoil/plan-policy:latest")
+        );
+        assert_eq!(cfg.unity.endpoint.as_deref(), Some("http://uc:8081/"));
+        assert_eq!(cfg.unity.region.as_deref(), Some("eu-central-1"));
+    }
+
+    #[test]
+    fn test_malformed_value_is_error() {
+        assert!(from_toml("port = \"not-a-port\"").is_err());
+    }
+
+    #[test]
+    fn test_load_from_file_path() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hydrofoil.toml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(f, "port = 9055\nsession_ttl_secs = 600\n").unwrap();
+        let cfg = Config::load(Some(&path)).unwrap();
+        assert_eq!(cfg.port, 9055);
+        assert_eq!(cfg.session_ttl_secs, 600);
+    }
+
+    #[test]
+    fn test_load_missing_explicit_path_is_error() {
+        assert!(Config::load(Some("/nonexistent/hydrofoil.toml")).is_err());
+    }
+}

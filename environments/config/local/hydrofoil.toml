@@ -1,0 +1,27 @@
+# hydrofoil configuration for a HOST run (`just hydro`).
+#
+# The server runs on the host while the supporting services run in the compose
+# stack, so endpoints use host-published ports (localhost) rather than the
+# in-compose service names used by environments/config/live/hydrofoil.toml.
+#
+# Any field may be overridden by a `HYDROFOIL__*` env var; secrets (UC_TOKEN,
+# OPENLINEAGE_API_KEY) come from the environment, never this file.
+
+host = "0.0.0.0"
+port = 50051
+session_ttl_secs = 1800
+
+# OpenLineage events -> Envoy main listener -> marquez-api. `endpoint` defaults
+# to "/api/v1/lineage".
+[lineage]
+url = "http://localhost:9080"
+namespace = "hydrofoil-local"
+
+# Cedar policy is disabled by default. Enable it by pushing a policy
+# (`just push_policy`) and uncommenting the ref below.
+[policy]
+# oci_ref = "localhost:10100/hydrofoil/plan-policy:latest"
+
+# Unity Catalog REST endpoint (host-published UC port).
+[unity]
+endpoint = "http://localhost:8081/api/2.1/unity-catalog/"
