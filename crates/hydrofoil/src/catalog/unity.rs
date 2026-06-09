@@ -6,6 +6,8 @@ use datafusion::execution::TaskContext;
 use datafusion::sql::TableReference;
 use datafusion_cedar::TableFacts;
 use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};
+use unitycatalog_client::UnityCatalogClient;
+use unitycatalog_common::models::delta::v1::DeltaTableType;
 use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
 
@@ -30,13 +32,19 @@ use crate::session::TaskExt;
 /// Cedar evaluation.
 pub struct LakehouseTableProviderBuilder {
     ctx: Arc<TaskContext>,
+    /// UC client used to call the `/delta/v1` loadTable endpoint, which tells us
+    /// whether a table is catalog-managed and, if so, supplies its ratified
+    /// commit tail + latest version (the filesystem `_delta_log/` is not
+    /// authoritative for managed tables).
+    client: UnityCatalogClient,
     tag_provider: Arc<dyn TagProvider>,
 }
 
 impl LakehouseTableProviderBuilder {
-    pub fn new(ctx: Arc<TaskContext>) -> Arc<Self> {
+    pub fn new(ctx: Arc<TaskContext>, client: UnityCatalogClient) -> Arc<Self> {
         Arc::new(Self {
             ctx,
+            client,
             tag_provider: Arc::new(ConventionTagProvider),
         })
     }
@@ -100,10 +108,40 @@ impl TableProviderBuilder for LakehouseTableProviderBuilder {
         // provider build).
         self.record_facts(table).await;
 
-        self.ctx
-            .lh()
-            .delta_provider_for(location, None)
+        // Ask the catalog whether this is a managed (coordinated-commit) table.
+        // The `/delta/v1` loadTable response carries the table type and — for a
+        // managed table — the unbackfilled commit tail + latest ratified version
+        // a reader needs to materialize the catalog's snapshot.
+        let loaded = self
+            .client
+            .delta_v1()
+            .load_table(&table.catalog_name, &table.schema_name, &table.name)
             .await
-            .map_err(|e: DataFusionError| e)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        match loaded.metadata.table_type {
+            DeltaTableType::Managed => {
+                // The catalog is the source of truth: build from the ratified
+                // commit tail + latest version rather than scanning `_delta_log/`.
+                let commits = loaded.commits.as_deref().unwrap_or(&[]);
+                let latest = loaded
+                    .latest_table_version
+                    .unwrap_or(loaded.metadata.last_commit_version.unwrap_or(0));
+                self.ctx
+                    .lh()
+                    .delta_managed_provider_for(location, commits, latest, None)
+                    .await
+                    .map_err(|e: DataFusionError| e)
+            }
+            DeltaTableType::External => {
+                // External tables track version on the filesystem; the legacy
+                // (non-catalog-managed) path must not set a catalog version.
+                self.ctx
+                    .lh()
+                    .delta_provider_for(location, None)
+                    .await
+                    .map_err(|e: DataFusionError| e)
+            }
+        }
     }
 }

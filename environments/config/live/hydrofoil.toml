@@ -36,5 +36,5 @@ namespace = "hydrofoil-live"
 # server (unauthenticated locally; omit `unity.endpoint` to disable).
 [unity]
 endpoint = "http://unity-catalog:8081/api/2.1/unity-catalog/"
-# token via UC_TOKEN env (a secret); region via UNITY's `region` or AWS_REGION.
-# region = "eu-central-1"
+# token via UC_TOKEN env (a secret).
+region = "eu-central-1"
