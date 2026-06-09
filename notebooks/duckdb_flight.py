@@ -47,26 +47,24 @@ def _():
     import marimo as mo
 
     # The Flight SQL endpoint hydrofoil listens on (host port-mapped from the container).
-    ENDPOINT = "grpc://localhost:50051"
+    ENDPOINT = "grpc://hydrofoil:50051"
     return ENDPOINT, mo
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        """
-        # DuckDB → hydrofoil over Flight SQL
+    mo.md("""
+    # DuckDB → hydrofoil over Flight SQL
 
-        A marimo **SQL cell** (DuckDB) reaches the **hydrofoil** Arrow Flight SQL service via
-        the `adbc_scanner` extension. The query `SELECT 1` is sent *to hydrofoil* and the
-        single-row result comes back into DuckDB — a focused connectivity check that reads no
-        data.
-        """
-    )
+    A marimo **SQL cell** (DuckDB) reaches the **hydrofoil** Arrow Flight SQL service via
+    the `adbc_scanner` extension. The query `SELECT 1` is sent *to hydrofoil* and the
+    single-row result comes back into DuckDB — a focused connectivity check that reads no
+    data.
+    """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     # adbc_scanner loads a native ADBC driver shared library. The Flight SQL driver ships
     # bundled inside the adbc-driver-flightsql wheel; ask the package for its path rather than
@@ -105,7 +103,7 @@ def _(ENDPOINT, driver_path):
         f"""
         SET VARIABLE conn = (SELECT adbc_connect({{
             'driver': getvariable('flightsql_driver'),
-            'uri':    '{ENDPOINT}',
+            'uri': '{ENDPOINT}',
             'adbc.flight.sql.rpc.call_header.x-hydrofoil-principal': 'User::"robert.pack"'
         }}));
         """
@@ -114,16 +112,10 @@ def _(ENDPOINT, driver_path):
 
 
 @app.cell
-def _(con, mo):
-    # The connectivity test: scan `SELECT 1` on the remote server. The SQL string travels to
-    # hydrofoil over Flight SQL; the single-row result is materialized back into DuckDB.
-    result = mo.sql(
-        """
-        SELECT * FROM adbc_scan(getvariable('conn')::BIGINT, 'SELECT 1');
-        """,
-        engine=con,
-    )
-    return (result,)
+def _(con):
+    query = "SELECT * FROM demo.managed_demo.events WHERE id > 1"
+    con.execute(f"SELECT * FROM adbc_scan(getvariable('conn')::BIGINT, '{query}')").to_arrow_table()
+    return
 
 
 @app.cell
