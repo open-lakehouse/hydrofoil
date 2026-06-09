@@ -22,7 +22,22 @@ dependencies = [
     "openai>=2.38.0",
     "ruff>=0.15.15",
     "polars>=1.41.2",
+    # Native Unity Catalog client (PyO3). Built locally from the sibling
+    # unitycatalog-rs repo (`just build-py-wheels`) and resolved from the
+    # find-links wheel dir below — see wheels/README.md and the Dockerfile.
+    "unitycatalog-client",
 ]
 
 [tool.uv]
 package = false
+
+# unitycatalog-client is not on any index; resolve it from the local wheels/ dir.
+# The Dockerfile also sets UV_FIND_LINKS=/wheels so the same source is reachable
+# inside the build. Both arch wheels (amd64 + arm64) live in wheels/.
+[tool.uv.sources]
+unitycatalog-client = { index = "uc-wheels" }
+
+[[tool.uv.index]]
+name = "uc-wheels"
+url = "./wheels"
+format = "flat"

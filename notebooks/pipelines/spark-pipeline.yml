@@ -1,0 +1,39 @@
+# Spark Declarative Pipelines spec for the OpenLineage spike.
+#
+# `spark-pipelines run --spec spark-pipeline.yml` is built on spark-submit, so all
+# Spark config (Delta, Unity Catalog, S3A, and the OpenLineage listener/transport)
+# is supplied here in `configuration:` — except jars/packages and the Maven proxy
+# repository, which are passed on the command line at run time (see
+# notebooks/spark_lineage.py).
+#
+# Target: the pipeline writes UC-managed Delta tables into demo.sdp_demo on real S3.
+# The `demo` catalog (with a storage_root) and `sdp_demo` schema must already exist
+# — the notebook creates the catalog; create the schema via the UC REST API the same
+# way (POST /api/2.1/unity-catalog/schemas {name: sdp_demo, catalog_name: demo}).
+name: lineage_demo
+libraries:
+  - glob:
+      include: transformations/**
+catalog: demo
+database: sdp_demo
+# Local dir for streaming-table checkpoints / pipeline state. Materialized views
+# don't need it, but the framework requires the field.
+storage: file:///tmp/sdp-lineage-demo
+configuration:
+  # Delta + Unity Catalog (UCSingleCatalog), matching the notebook session.
+  spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+  spark.sql.catalog.spark_catalog: io.unitycatalog.spark.UCSingleCatalog
+  spark.sql.catalog.demo: io.unitycatalog.spark.UCSingleCatalog
+  spark.sql.catalog.demo.uri: http://unity-catalog:8081
+  spark.sql.catalog.demo.token: ""
+  spark.sql.defaultCatalog: demo
+  # S3A region; UC vends STS creds per table (no static keys).
+  spark.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+  spark.hadoop.fs.s3a.endpoint.region: eu-central-1
+  # --- the spike: OpenLineage listener under spark-pipelines run ---
+  spark.extraListeners: io.openlineage.spark.agent.OpenLineageSparkListener
+  spark.openlineage.transport.type: http
+  spark.openlineage.transport.url: http://lineage-service:8091
+  spark.openlineage.transport.endpoint: /api/v1/lineage
+  spark.openlineage.namespace: sdp-demo
+  spark.openlineage.columnLineage.datasetLineageEnabled: "true"

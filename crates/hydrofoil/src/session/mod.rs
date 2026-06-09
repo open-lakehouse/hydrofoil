@@ -40,8 +40,9 @@ use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
+use datafusion_unitycatalog::catalog::{UnityCatalogProviderList, build_catalog_managed_snapshot};
 use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension};
+use unitycatalog_common::models::delta::v1::DeltaCommit;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use datafusion_open_lineage::context::LineageContext;
@@ -531,6 +532,30 @@ impl LakehouseTaskContext {
         Ok(provider)
     }
 
+    /// Build a Delta [`TableProvider`] for a **catalog-managed** (coordinated-
+    /// commit) table, where the catalog — not `_delta_log/` — is the source of
+    /// truth for the latest version.
+    #[instrument(skip(self, commits), level = "info")]
+    pub async fn delta_managed_provider_for(
+        &self,
+        location: &Url,
+        commits: &[DeltaCommit],
+        latest: i64,
+        at_version: Option<Version>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let log_store = self.delta_logstore_for(location)?;
+        let engine = DataFusionEngine::new_from_context(self.inner.clone());
+        let snapshot =
+            build_catalog_managed_snapshot(engine.as_ref(), location, commits, latest, at_version)?;
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(Arc::new(snapshot))
+            .with_log_store(log_store)
+            .await?;
+
+        Ok(provider)
+    }
+
     /// Build a logical scan of a Delta table by object-store URL (optionally at a
     /// specific version). Retained as a seam for direct-by-location scans; the
     /// catalog path resolves tables by name instead, so this isn't wired in yet.
@@ -734,7 +759,8 @@ pub fn build_unity_resolver(
     factory: Arc<UnityObjectStoreFactory>,
 ) -> Arc<UnityCatalogProviderList> {
     let runtime = ctx.runtime_env();
-    let builder = LakehouseTableProviderBuilder::new(ctx.task_ctx());
+    let builder =
+        LakehouseTableProviderBuilder::new(ctx.task_ctx(), factory.unity_client().clone());
     Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 

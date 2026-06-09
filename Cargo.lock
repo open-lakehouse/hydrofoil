@@ -2525,7 +2525,7 @@ dependencies = [
 [[package]]
 name = "datafusion-unitycatalog"
 version = "0.1.0"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf#d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf"
 dependencies = [
  "async-trait",
  "buoyant_kernel",
@@ -7051,7 +7051,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unitycatalog-client"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf#d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf"
 dependencies = [
  "futures",
  "olai-http",
@@ -7068,7 +7068,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-common"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf#d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -7098,13 +7098,14 @@ dependencies = [
 [[package]]
 name = "unitycatalog-object-store"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=83175e0580b3c74e2b743219d9e371294735842a#83175e0580b3c74e2b743219d9e371294735842a"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf#d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf"
 dependencies = [
  "async-trait",
  "chrono",
  "object_store",
  "olai-http",
  "thiserror",
+ "tokio",
  "unitycatalog-client",
  "unitycatalog-common",
  "url",

@@ -77,7 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // optional bearer token (omit for a local unauthenticated OSS server).
     match cfg.unity.endpoint.as_deref() {
         Some(uri) if !uri.is_empty() => {
-            let mut builder = UnityObjectStoreFactory::builder().with_uri(uri.to_string());
+            let mut builder = UnityObjectStoreFactory::builder()
+                .with_uri(uri.to_string())
+                .with_io_runtime(tokio::runtime::Handle::current());
             match cfg.unity.token.as_deref().filter(|t| !t.is_empty()) {
                 Some(token) => builder = builder.with_token(token.to_string()),
                 None => builder = builder.with_allow_unauthenticated(true),
