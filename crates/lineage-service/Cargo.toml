@@ -41,6 +41,7 @@ futures = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [features]
+default = ["unity"]
 # Build the Apache Iceberg sink. Currently requires resolving the arrow/parquet
 # version skew noted above before it will compile.
 iceberg = ["dep:iceberg", "dep:iceberg-catalog-rest", "dep:parquet"]
