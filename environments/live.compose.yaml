@@ -29,3 +29,6 @@ include:
     project_directory: .
   - path: ./services/hydrofoil.yaml
     project_directory: .
+  # Marquez web UI pointed at lineage-service's Marquez-compatible read API.
+  - path: ./services/marquez-web.yaml
+    project_directory: .

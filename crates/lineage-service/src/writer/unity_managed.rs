@@ -29,7 +29,12 @@ impl UnityManagedSink {
     /// fast before any event is ingested.
     pub async fn connect(target: UnityTarget) -> Result<Self, UnitySinkError> {
         let factory = Arc::new(
-            build_factory(&target.endpoint, target.token.clone(), target.region.clone()).await?,
+            build_factory(
+                &target.endpoint,
+                target.token.clone(),
+                target.region.clone(),
+            )
+            .await?,
         );
         let client = Arc::new(factory.unity_client().delta_v1());
 

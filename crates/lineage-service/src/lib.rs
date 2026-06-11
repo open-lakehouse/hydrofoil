@@ -7,4 +7,5 @@ pub use proto::lineage;
 pub mod config;
 pub mod http;
 pub mod ingest;
+pub mod read;
 pub mod writer;

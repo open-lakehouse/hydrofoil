@@ -43,6 +43,34 @@ Every event is flattened into a 15-column Arrow `RecordBatch` (`src/writer/schem
 carry structured detail as JSON (column lineage mirrors the OpenLineage 1.2.0 shape), and
 `raw_json` keeps the original event so no information is lost in the flattening.
 
+## Read API (Marquez-compatible) — `src/read/`
+
+The same service also serves a read-only, **Marquez-compatible** REST API so the upstream
+[Marquez web UI](https://github.com/MarquezProject/marquez/tree/main/web) can visualize the
+lineage with no UI code of our own. The Marquez UI is plain REST (no GraphQL); we implement
+the subset its graph/browse views need under `/api/v1`:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/namespaces` | distinct job/dataset namespaces |
+| `GET /api/v1/namespaces/{ns}/jobs` | jobs with their input/output datasets |
+| `GET /api/v1/namespaces/{ns}/jobs/{job}` | one job |
+| `GET /api/v1/namespaces/{ns}/datasets` | datasets (standalone + job-referenced) |
+| `GET /api/v1/namespaces/{ns}/datasets/{name}` | one dataset |
+| `GET /api/v1/search?q=` | name substring search |
+| `GET /api/v1/lineage?nodeId=&depth=` | the lineage graph (BFS from a seed node) |
+
+These do **not** store a materialized model — they reconstruct Marquez's namespaces / jobs /
+datasets / graph **on read** by scanning the events table with DataFusion
+(`LineageStore` in `src/read/mod.rs`, queries + graph BFS in `src/read/queries.rs`). Reads
+re-open the Delta table per request so freshly ingested events are visible. Fields the event
+log can't supply (run history, dataset versions, tags, facets, column lineage, metrics) are
+returned empty/`null` — enough for the graph view. A permissive CORS layer is applied so the
+browser-served UI can call the API directly.
+
+To run the UI against it, point the `marquezproject/marquez-web` image's proxy at this
+service (`MARQUEZ_HOST` / `MARQUEZ_PORT`) — see `environments/services/marquez-web.yaml`.
+
 ## Running
 
 ```sh

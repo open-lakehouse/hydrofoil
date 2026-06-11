@@ -1,1 +1,28 @@
+# The Rust service images (docker/Dockerfile) only need the workspace sources;
+# everything below is irrelevant to that build and was bloating the context to
+# ~1.9 GB (slow transfers + memory pressure during unpack).
+
+# Rust build artifacts.
 target/
+
+# Local stack runtime state: bind-mounted Delta tables, Postgres data, SeaweedFS
+# volumes, etc. Created by docker compose; never an input to a build.
+**/.data/
+
+# Service container build contexts unrelated to the Rust binaries. marimo alone
+# is ~1.2 GB (baked Spark jars / uv cache).
+environments/docker/
+
+# Node / web UI — not part of the Rust service images.
+node_modules/
+**/node_modules/
+node/
+
+# VCS and editor noise.
+.git/
+.github/
+
+# Docs and notebooks.
+docs/
+notebooks/
+spark-warehouse/

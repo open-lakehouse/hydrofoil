@@ -488,7 +488,11 @@ mod tests {
         let cfg = DeltaConfig::default();
         let target = cfg.resolve(&HashMap::new()).unwrap();
         match target {
-            DeltaTarget::Local { table_uri, partition_cols, .. } => {
+            DeltaTarget::Local {
+                table_uri,
+                partition_cols,
+                ..
+            } => {
                 assert_eq!(table_uri, "/data/events");
                 assert_eq!(partition_cols, vec!["event_kind"]);
             }
@@ -536,7 +540,10 @@ mod tests {
         .unwrap();
         // Endpoint not in config -> read from storage_options (where the loader puts UNITY_CATALOG_URL).
         let mut so = HashMap::new();
-        so.insert("unity_catalog_url".to_string(), "http://uc:8081/".to_string());
+        so.insert(
+            "unity_catalog_url".to_string(),
+            "http://uc:8081/".to_string(),
+        );
         so.insert("unity_catalog_token".to_string(), "tok".to_string());
         match cfg.delta.resolve(&so).unwrap() {
             DeltaTarget::UnityExternal(t) => {

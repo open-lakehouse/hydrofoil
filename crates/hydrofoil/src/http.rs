@@ -145,8 +145,7 @@ async fn execute(
     // Resolve the principal from headers, then its session — the same engine
     // (UC factory + Cedar policy) the Flight path uses. UC table resolution and
     // per-session credential vending happen inside planning/execution.
-    let principal = crate::identity::principal_from_http_headers(headers)
-        .map_err(|e| e.message)?;
+    let principal = crate::identity::principal_from_http_headers(headers).map_err(|e| e.message)?;
     let session = state
         .service
         .session_for_principal(principal)
@@ -282,7 +281,10 @@ fn normalize_schema(schema: &Schema) -> Schema {
 
 /// Cast any `Utf8View`/`BinaryView` columns of `batch` to match
 /// `target_schema`, leaving other columns untouched.
-fn normalize_batch(batch: &RecordBatch, target_schema: &Arc<Schema>) -> Result<RecordBatch, String> {
+fn normalize_batch(
+    batch: &RecordBatch,
+    target_schema: &Arc<Schema>,
+) -> Result<RecordBatch, String> {
     let columns = batch
         .columns()
         .iter()
@@ -348,7 +350,11 @@ mod tests {
         let schema = Schema::new(vec![Field::new("name", DataType::Utf8View, true)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(StringViewArray::from(vec![Some("a"), None, Some("c")]))],
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("a"),
+                None,
+                Some("c"),
+            ]))],
         )
         .unwrap();
 
