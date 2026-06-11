@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 
 use lineage_service::config::{Config, DeltaTarget, SinkKind, WriterConfig};
 use lineage_service::http::{self, AppState};
+use lineage_service::read::LineageStore;
 use lineage_service::writer::buffered::{BufferedWriter, BufferedWriterConfig};
 use lineage_service::writer::delta::DeltaWriter;
 use lineage_service::writer::sink::TableSink;
@@ -23,8 +24,10 @@ async fn main() -> anyhow::Result<()> {
     let sinks = build_sinks(&cfg).await?;
 
     let writer = BufferedWriter::spawn(sinks, writer_config(&cfg.writer));
+    let store = LineageStore::from_config(&cfg);
     let app = http::router(AppState {
         writer: writer.handle(),
+        store,
     });
 
     let addr = format!("0.0.0.0:{}", cfg.port);

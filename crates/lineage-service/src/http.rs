@@ -15,23 +15,38 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use serde::Serialize;
+use tower_http::cors::CorsLayer;
 
 use crate::ingest::{convert_batch, convert_event};
+use crate::read::{self, LineageStore};
 use crate::writer::buffered::BufferedWriterHandle;
 
 /// Shared handler state: a handle onto the buffered writer.
 #[derive(Clone)]
 pub struct AppState {
     pub writer: BufferedWriterHandle,
+    /// Read-only handle onto the events table for the Marquez-compatible API.
+    pub store: LineageStore,
 }
 
-/// Build the ingestion router. Mounted by `main.rs` alongside `/health`.
+/// Build the service router: `/health`, the OpenLineage ingest endpoints, and
+/// the Marquez-compatible read API under `/api/v1`. The read routes are merged
+/// in with their own [`LineageStore`] state.
+///
+/// A permissive [`CorsLayer`] is applied because the Marquez web UI is served
+/// from a different origin and calls these endpoints directly from the browser.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let read_routes = read::http::router(state.store.clone());
+
+    let ingest_routes = Router::new()
         .route("/health", get(|| async { "OK" }))
         .route("/api/v1/lineage", post(ingest_event))
         .route("/api/v1/lineage/batch", post(ingest_batch))
-        .with_state(state)
+        .with_state(state);
+
+    ingest_routes
+        .merge(read_routes)
+        .layer(CorsLayer::permissive())
 }
 
 #[derive(Serialize)]

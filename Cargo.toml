@@ -57,12 +57,14 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf", features = [
-    "rest-client",
-    "axum",
-] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf" }
-datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "d3fca5b74bc6a05226eb4ffdd9b0be993b1665cf" }
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion", "cloud"] }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "a52e341e9ec80ae2cef916364803c2fbdc2f848b", features = ["datafusion"] }
+# delta-rs / unitycatalog-rs forks, pinned to pushed git revs so the workspace
+# (and the Docker build, whose context is just this repo) resolves them without
+# sibling checkouts. To iterate against in-progress fork changes locally, swap
+# these for the `path = "../delta-rs/..."` / `../unitycatalog-rs/...` overrides
+# (and bump the delta-rs rev here once the changes are pushed).
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "b355ca52a9613210ccbbe81f1f8d20821bdac03a", features = ["rest-client", "axum"] }
+unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "b355ca52a9613210ccbbe81f1f8d20821bdac03a" }
+unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "b355ca52a9613210ccbbe81f1f8d20821bdac03a" }
+datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "b355ca52a9613210ccbbe81f1f8d20821bdac03a" }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "6af22cb61db16afe97d7b93e636547535ac0c5ea", features = ["datafusion", "cloud"] }
+deltalake = { git = "https://github.com/roeap/delta-rs", rev = "6af22cb61db16afe97d7b93e636547535ac0c5ea", features = ["datafusion"] }

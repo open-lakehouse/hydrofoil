@@ -1,0 +1,38 @@
+# Marquez web UI, pointed at OUR lineage-service instead of the Marquez backend.
+#
+# The upstream Marquez web image is a thin React app: its bundled setupProxy.js
+# forwards every `/api/*` request to `MARQUEZ_HOST:MARQUEZ_PORT`. Our
+# lineage-service now serves the subset of the Marquez REST contract the UI needs
+# (namespaces, jobs, datasets, /search, /lineage) under `/api/v1` — reconstructed
+# on read from the Delta events table — so we just point the proxy at it.
+#
+# This lets us reuse the upstream UI unmodified for lineage visualization without
+# running the full Java Marquez backend (`marquez.yaml`) or its Postgres schema.
+#
+# Access: the web UI listens on 3000; published to the host for direct access.
+# A permissive CORS layer on lineage-service covers the browser-origin calls the
+# proxy does not absorb.
+services:
+  marquez-web:
+    image: marquezproject/marquez-web:0.50.0
+    restart: unless-stopped
+    depends_on:
+      lineage-service:
+        condition: service_started
+    environment:
+      # The web server's own listen port (setupProxy.js reads WEB_PORT)...
+      WEB_PORT: 3000
+      # ...and where it proxies /api/* to: our lineage-service, which speaks the
+      # Marquez read contract under /api/v1.
+      MARQUEZ_HOST: lineage-service
+      MARQUEZ_PORT: 8091
+    ports:
+      - "${MARQUEZ_WEB_PORT:-3000}:3000"
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
