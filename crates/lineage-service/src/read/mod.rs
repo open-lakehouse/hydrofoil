@@ -100,8 +100,8 @@ impl LineageStore {
     /// been ingested) so callers can return empty results rather than an error —
     /// a brand-new deployment should render an empty UI, not a 500.
     pub(crate) async fn session(&self) -> Result<Option<SessionContext>, ReadError> {
-        let url = ensure_table_uri(&self.table_uri)
-            .map_err(|e| ReadError::OpenTable(e.to_string()))?;
+        let url =
+            ensure_table_uri(&self.table_uri).map_err(|e| ReadError::OpenTable(e.to_string()))?;
 
         let table = match open_table_with_storage_options(url, self.storage_options.clone()).await {
             Ok(t) => t,

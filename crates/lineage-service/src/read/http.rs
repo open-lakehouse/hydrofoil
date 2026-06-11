@@ -70,7 +70,11 @@ impl IntoResponse for ReadError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         tracing::warn!(error = %self, "lineage read error");
-        (status, Json(serde_json::json!({ "error": self.to_string() }))).into_response()
+        (
+            status,
+            Json(serde_json::json!({ "error": self.to_string() })),
+        )
+            .into_response()
     }
 }
 
@@ -86,7 +90,9 @@ fn default_limit() -> usize {
     100
 }
 
-async fn list_namespaces(State(store): State<LineageStore>) -> Result<impl IntoResponse, ReadError> {
+async fn list_namespaces(
+    State(store): State<LineageStore>,
+) -> Result<impl IntoResponse, ReadError> {
     Ok(Json(store.namespaces().await?))
 }
 
@@ -104,7 +110,9 @@ async fn list_jobs(
     Query(page): Query<Pagination>,
 ) -> Result<impl IntoResponse, ReadError> {
     Ok(Json(
-        store.jobs(Some(&namespace), page.limit, page.offset).await?,
+        store
+            .jobs(Some(&namespace), page.limit, page.offset)
+            .await?,
     ))
 }
 

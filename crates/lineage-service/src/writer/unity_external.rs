@@ -33,7 +33,12 @@ impl UnityExternalSink {
     /// absent — external tables must be pre-created/registered in UC.
     pub async fn connect(target: UnityTarget) -> Result<Self, UnitySinkError> {
         let factory = Arc::new(
-            build_factory(&target.endpoint, target.token.clone(), target.region.clone()).await?,
+            build_factory(
+                &target.endpoint,
+                target.token.clone(),
+                target.region.clone(),
+            )
+            .await?,
         );
         let loaded = factory
             .unity_client()

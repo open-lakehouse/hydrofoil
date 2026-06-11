@@ -126,8 +126,8 @@ pub(crate) fn init_tracing_subscriber() -> OtelGuard {
 
     // Honor `RUST_LOG` if set, otherwise fall back to a filter that keeps the
     // delta-rs/kernel DEBUG spans (the engine/kernel zones) so they reach MLflow.
-    let telemetry_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_TRACE_FILTER));
+    let telemetry_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_TRACE_FILTER));
 
     let telemetry_layer = tracing_opentelemetry::layer()
         .with_tracer(tracer)

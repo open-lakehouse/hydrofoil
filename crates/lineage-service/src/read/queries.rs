@@ -250,10 +250,18 @@ impl LineageStore {
         // Build directed edges and an adjacency map (undirected, for traversal).
         let mut edges: HashSet<LineageEdge> = HashSet::new();
         let mut neighbors: HashMap<String, HashSet<String>> = HashMap::new();
-        let connect = |from: String, to: String, edges: &mut HashSet<LineageEdge>,
+        let connect = |from: String,
+                       to: String,
+                       edges: &mut HashSet<LineageEdge>,
                        neighbors: &mut HashMap<String, HashSet<String>>| {
-            neighbors.entry(from.clone()).or_default().insert(to.clone());
-            neighbors.entry(to.clone()).or_default().insert(from.clone());
+            neighbors
+                .entry(from.clone())
+                .or_default()
+                .insert(to.clone());
+            neighbors
+                .entry(to.clone())
+                .or_default()
+                .insert(from.clone());
             edges.insert(LineageEdge {
                 origin: from,
                 destination: to,
@@ -314,7 +322,11 @@ fn fold_batch(model: &mut Model, batch: &RecordBatch) -> Result<(), ReadError> {
     let outputs = str_col(batch, 7)?;
 
     for row in 0..batch.num_rows() {
-        let ts = if etime.is_null(row) { 0 } else { etime.value(row) };
+        let ts = if etime.is_null(row) {
+            0
+        } else {
+            etime.value(row)
+        };
         match value(&kind, row) {
             Some("run") | Some("job") => {
                 let (Some(ns), Some(name)) = (value(&job_ns, row), value(&job_name, row)) else {
@@ -436,7 +448,10 @@ fn build_node(node_id: &str, model: &Model, edges: &HashSet<LineageEdge>) -> Opt
         }
         NodeKind::Dataset => {
             let times = model.datasets.get(&id).copied().unwrap_or((0, 0));
-            ("DATASET", serde_json::to_value(build_dataset(&id, times)).ok()?)
+            (
+                "DATASET",
+                serde_json::to_value(build_dataset(&id, times)).ok()?,
+            )
         }
     };
     let in_edges = edges

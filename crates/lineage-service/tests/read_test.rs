@@ -29,28 +29,31 @@ fn run_event_batch() -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from(vec!["run"])),               // event_kind
-            Arc::new(StringArray::from(vec![Some("COMPLETE")])),    // event_type
-            Arc::new(                                               // event_time
+            Arc::new(StringArray::from(vec!["run"])), // event_kind
+            Arc::new(StringArray::from(vec![Some("COMPLETE")])), // event_type
+            Arc::new(
+                // event_time
                 TimestampMicrosecondArray::from(vec![1_700_000_000_000_000i64])
                     .with_timezone("UTC"),
             ),
-            Arc::new(StringArray::from(vec!["test-producer"])),     // producer
-            Arc::new(StringArray::from(vec![None::<&str>])),        // schema_url
-            Arc::new(StringArray::from(vec![Some("run-1")])),       // run_id
-            Arc::new(StringArray::from(vec![Some("etl")])),         // job_namespace
+            Arc::new(StringArray::from(vec!["test-producer"])), // producer
+            Arc::new(StringArray::from(vec![None::<&str>])),    // schema_url
+            Arc::new(StringArray::from(vec![Some("run-1")])),   // run_id
+            Arc::new(StringArray::from(vec![Some("etl")])),     // job_namespace
             Arc::new(StringArray::from(vec![Some("build_daily")])), // job_name
-            Arc::new(StringArray::from(vec![None::<&str>])),        // dataset_namespace
-            Arc::new(StringArray::from(vec![None::<&str>])),        // dataset_name
-            Arc::new(StringArray::from(vec![None::<&str>])),        // facets_json
-            Arc::new(StringArray::from(vec![Some(                   // inputs_json
+            Arc::new(StringArray::from(vec![None::<&str>])),    // dataset_namespace
+            Arc::new(StringArray::from(vec![None::<&str>])),    // dataset_name
+            Arc::new(StringArray::from(vec![None::<&str>])),    // facets_json
+            Arc::new(StringArray::from(vec![Some(
+                // inputs_json
                 r#"[{"namespace":"raw","name":"orders"}]"#,
             )])),
-            Arc::new(StringArray::from(vec![Some(                   // outputs_json
+            Arc::new(StringArray::from(vec![Some(
+                // outputs_json
                 r#"[{"namespace":"marts","name":"daily_orders"}]"#,
             )])),
-            Arc::new(StringArray::from(vec![None::<&str>])),        // column_lineage_json
-            Arc::new(StringArray::from(vec![None::<&str>])),        // raw_json
+            Arc::new(StringArray::from(vec![None::<&str>])), // column_lineage_json
+            Arc::new(StringArray::from(vec![None::<&str>])), // raw_json
         ],
     )
     .unwrap()
@@ -73,7 +76,10 @@ async fn namespaces_lists_job_and_dataset_namespaces() {
     let ns = store.namespaces().await.unwrap();
     let names: Vec<&str> = ns.namespaces.iter().map(|n| n.name.as_str()).collect();
     assert!(names.contains(&"etl"), "job namespace present: {names:?}");
-    assert!(names.contains(&"raw"), "input ds namespace present: {names:?}");
+    assert!(
+        names.contains(&"raw"),
+        "input ds namespace present: {names:?}"
+    );
     assert!(
         names.contains(&"marts"),
         "output ds namespace present: {names:?}"
@@ -116,7 +122,10 @@ async fn lineage_graph_connects_job_to_its_datasets() {
     // Seed job + one input + one output dataset reachable within 2 hops.
     let ids: Vec<&str> = graph.graph.iter().map(|n| n.id.as_str()).collect();
     assert!(ids.contains(&node), "seed job present: {ids:?}");
-    assert!(ids.contains(&"dataset:raw:orders"), "input present: {ids:?}");
+    assert!(
+        ids.contains(&"dataset:raw:orders"),
+        "input present: {ids:?}"
+    );
     assert!(
         ids.contains(&"dataset:marts:daily_orders"),
         "output present: {ids:?}"
@@ -154,10 +163,7 @@ async fn empty_table_yields_empty_results() {
 async fn missing_job_is_not_found() {
     let (_tmp, store) = seeded_store().await;
     let err = store.job("etl", "nope").await.unwrap_err();
-    assert!(matches!(
-        err,
-        lineage_service::read::ReadError::NotFound(_)
-    ));
+    assert!(matches!(err, lineage_service::read::ReadError::NotFound(_)));
 }
 
 // --- HTTP-level tests ---------------------------------------------------------
@@ -203,7 +209,11 @@ async fn http_global_jobs_route_resolves() {
 #[tokio::test]
 async fn http_job_runs_returns_synthetic_run() {
     let (_tmp, store) = seeded_store().await;
-    let (status, body) = get(store, "/api/v1/namespaces/etl/jobs/build_daily/runs?limit=14&offset=0").await;
+    let (status, body) = get(
+        store,
+        "/api/v1/namespaces/etl/jobs/build_daily/runs?limit=14&offset=0",
+    )
+    .await;
     assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
     assert!(body.contains("\"runs\""), "body: {body}");
     assert!(body.contains("\"totalCount\""), "body: {body}");
