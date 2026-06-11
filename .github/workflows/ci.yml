@@ -36,7 +36,7 @@ jobs:
       # tracks that floor so CI fails the same way a local 1.91 build would.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.91"
+          toolchain: "1.96"
           components: rustfmt, clippy
 
       # cedar-policy's build script compiles .proto schemas via prost-build,
