@@ -265,7 +265,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
     /// the handshake payload and as `authorization: Bearer <id>` + `x-session-id`
     /// response metadata (ADBC echoes the Bearer on subsequent RPCs). See
     /// `docs/adr/0002-flight-sql-session-identity.md`.
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_handshake(
         &self,
         request: Request<Streaming<HandshakeRequest>>,
@@ -309,7 +316,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(response)
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_catalogs(
         &self,
         query: CommandGetCatalogs,
@@ -330,7 +344,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_schemas(
         &self,
         query: CommandGetDbSchemas,
@@ -351,7 +372,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_tables(
         &self,
         query: CommandGetTables,
@@ -372,7 +400,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -396,7 +431,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(tonic::Response::new(flight_info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_xdbc_type_info(
         &self,
         query: CommandGetXdbcTypeInfo,
@@ -421,7 +463,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     /// Get a FlightInfo for executing a SQL query.
-    #[instrument(skip_all, level = "info", fields(query = query.query.as_str()))]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            query = query.query.as_str(),
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
@@ -485,7 +535,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
@@ -520,7 +577,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(info))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -536,7 +600,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_get_xdbc_type_info(
         &self,
         query: CommandGetXdbcTypeInfo,
@@ -553,7 +624,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,
@@ -577,7 +655,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         result
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_get_prepared_statement(
         &self,
         query: CommandPreparedStatementQuery,
@@ -597,7 +682,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.do_get_handle(Arc::new(lh), stored.plan.clone())
     }
 
-    #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            message_type_url = message.type_url.as_str(),
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_get_fallback(
         &self,
         _request: Request<Ticket>,
@@ -609,7 +702,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         )))
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_put_statement_update(
         &self,
         _handle: CommandStatementUpdate,
@@ -621,7 +721,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(-1)
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_put_prepared_statement_update(
         &self,
         _handle: CommandPreparedStatementUpdate,
@@ -640,6 +747,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
             table = ticket.table,
             schema = ticket.schema,
             catalog = ticket.catalog,
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL,
         )
     )]
     async fn do_put_statement_ingest(
@@ -677,7 +786,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         }
     }
 
-    #[instrument(skip_all, level = "info", fields(message_type_url = message.type_url.as_str()))]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            message_type_url = message.type_url.as_str(),
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_put_fallback(
         &self,
         request: Request<PeekableFlightDataStream>,
@@ -716,7 +833,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         Ok(Response::new(Box::pin(output)))
     }
 
-    #[instrument(skip_all, level = "info", fields(query = query.query.as_str()))]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            query = query.query.as_str(),
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
@@ -756,7 +881,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         })
     }
 
-    #[instrument(skip_all, level = "info")]
+    #[instrument(
+        skip_all,
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_WORKFLOW,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     async fn do_action_close_prepared_statement(
         &self,
         handle: ActionClosePreparedStatementRequest,

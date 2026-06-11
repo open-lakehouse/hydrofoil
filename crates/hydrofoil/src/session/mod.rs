@@ -515,7 +515,14 @@ impl LakehouseTaskContext {
     /// returns a [`DeltaScanNext`] provider. The object store backing
     /// `location` must already be registered on the runtime (e.g. via the
     /// Unity Catalog routing store) so reads succeed at scan time.
-    #[instrument(skip(self), level = "info")]
+    #[instrument(
+        skip(self),
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_TASK,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     pub async fn delta_provider_for(
         &self,
         location: &Url,
@@ -535,7 +542,14 @@ impl LakehouseTaskContext {
     /// Build a Delta [`TableProvider`] for a **catalog-managed** (coordinated-
     /// commit) table, where the catalog — not `_delta_log/` — is the source of
     /// truth for the latest version.
-    #[instrument(skip(self, commits), level = "info")]
+    #[instrument(
+        skip(self, commits),
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_TASK,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     pub async fn delta_managed_provider_for(
         &self,
         location: &Url,
@@ -560,7 +574,14 @@ impl LakehouseTaskContext {
     /// specific version). Retained as a seam for direct-by-location scans; the
     /// catalog path resolves tables by name instead, so this isn't wired in yet.
     #[allow(dead_code)]
-    #[instrument(skip(self), level = "info")]
+    #[instrument(
+        skip(self),
+        level = "info",
+        fields(
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_TASK,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL
+        )
+    )]
     pub async fn scan_delta_table(
         &self,
         location: &Url,

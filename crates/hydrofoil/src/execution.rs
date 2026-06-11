@@ -124,6 +124,8 @@ impl CpuRuntime {
         fields(
             hydrofoil.query = query.as_ref(),
             hydrofoil.plan = field::Empty,
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_CHAIN,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL,
         )
     )]
     pub async fn create_logical_plan(
@@ -146,6 +148,8 @@ impl CpuRuntime {
         level = "info",
         fields(
             hydrofoil.plan = plan.display_indent().to_string(),
+            {crate::telemetry::mlflow::FIELD_SPAN_TYPE} = crate::telemetry::mlflow::SPAN_TYPE_CHAIN,
+            {crate::telemetry::mlflow::FIELD_ZONE} = crate::telemetry::mlflow::ZONE_HYDROFOIL,
         )
     )]
     pub async fn execute_logical_plan(

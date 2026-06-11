@@ -8,12 +8,47 @@ use opentelemetry_sdk::{
     metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
     trace::{Sampler, SdkTracerProvider},
 };
-use tracing::{Level, level_filters::LevelFilter};
+use tracing::Level;
 use tracing_opentelemetry::MetricsLayer;
 use tracing_subscriber::{
-    Layer as _, fmt::writer::MakeWriterExt as _, layer::SubscriberExt as _,
+    EnvFilter, Layer as _, fmt::writer::MakeWriterExt as _, layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
 };
+
+/// OTel span attributes that MLflow's trace UI recognizes, plus the custom
+/// `delta.zone` tag the demo groups on.
+///
+/// `tracing-opentelemetry` forwards each span field to an OTel attribute using
+/// the field name verbatim, so a field named `mlflow.spanType` becomes the
+/// attribute MLflow renders as a span-type chip. Field names contain dots:
+/// `info_span!` accepts quoted dotted names directly, but the `#[instrument]`
+/// attribute macro (tracing-attributes 0.1.31) requires a const in braces —
+/// `#[instrument(fields({mlflow::FIELD_SPAN_TYPE} = mlflow::SPAN_TYPE_WORKFLOW))]`.
+///
+/// This mirrors `deltalake_core`'s internal `kernel::mlflow` module so hydrofoil
+/// and delta-rs spans share one vocabulary across the trace tree.
+pub(crate) mod mlflow {
+    pub(crate) const FIELD_SPAN_TYPE: &str = "mlflow.spanType";
+    pub(crate) const FIELD_ZONE: &str = "delta.zone";
+
+    pub(crate) const SPAN_TYPE_WORKFLOW: &str = "WORKFLOW";
+    pub(crate) const SPAN_TYPE_CHAIN: &str = "CHAIN";
+    pub(crate) const SPAN_TYPE_TASK: &str = "TASK";
+
+    /// The Flight SQL / query-serving frontend that originates each trace.
+    pub(crate) const ZONE_HYDROFOIL: &str = "hydrofoil";
+}
+
+/// Default span filter for the OTLP→MLflow export layer.
+///
+/// The bulk of the delta-rs ↔ Delta Kernel handoff is instrumented at `DEBUG`
+/// (engine callbacks, deletion-vector loads, metadata lookups, object-store IO)
+/// and would be dropped by a plain `INFO` filter, so the kernel/engine zones
+/// never reach MLflow. We default to `DEBUG` for the delta-rs and kernel crates
+/// (keeping everything else at `INFO` to avoid noisy dependency spans). Set
+/// `RUST_LOG` to override entirely — e.g. `deltalake_core=trace` to also capture
+/// the `TRACE`-level parquet-footer reads.
+const DEFAULT_TRACE_FILTER: &str = "info,deltalake_core=debug,buoyant_kernel=debug";
 
 /// Default OTLP/HTTP traces endpoint when `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
 /// is unset. Points at the MLflow tracking server's OTLP ingestion path, served
@@ -89,10 +124,15 @@ pub(crate) fn init_tracing_subscriber() -> OtelGuard {
 
     let tracer = tracer_provider.tracer("hydrofoil");
 
+    // Honor `RUST_LOG` if set, otherwise fall back to a filter that keeps the
+    // delta-rs/kernel DEBUG spans (the engine/kernel zones) so they reach MLflow.
+    let telemetry_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_TRACE_FILTER));
+
     let telemetry_layer = tracing_opentelemetry::layer()
         .with_tracer(tracer)
         .with_location(false)
-        .with_filter(LevelFilter::INFO);
+        .with_filter(telemetry_filter);
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_thread_ids(true)
