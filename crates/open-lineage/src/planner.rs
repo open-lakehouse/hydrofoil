@@ -9,6 +9,10 @@
 //! execution* by the [`OpenLineageExec`] node we wrap the physical plan in, so
 //! a query that plans cleanly but errors mid-stream reports FAIL, not COMPLETE.
 //! A planning failure (no plan to wrap) emits FAIL directly.
+//!
+//! Queries that read and write nothing — `information_schema` introspection,
+//! `SET`/`SHOW`, metadata probes — are suppressed entirely (no START, no
+//! wrapping), since a dataset-less job node only adds noise to the graph.
 
 use std::sync::Arc;
 
@@ -63,6 +67,19 @@ impl QueryPlanner for OpenLineageQueryPlanner {
         // The SQL text isn't recoverable from the plan; take it from the
         // host-supplied context (absent on non-SQL paths, e.g. ingest).
         lineage.sql = cx.sql.clone();
+
+        // Suppress lineage for queries that touch no datasets — information_schema
+        // introspection, `SET`/`SHOW`, metadata-RPC probes, and the like. They
+        // carry no input or output, so a START/COMPLETE pair only adds noise (a
+        // job node with no edges) to the lineage graph. Plan straight through
+        // without wrapping so no events fire.
+        if lineage.inputs.is_empty() && lineage.outputs.is_empty() {
+            return self
+                .inner
+                .create_physical_plan(logical_plan, session_state)
+                .await;
+        }
+
         let run_id = cx.run_id.unwrap_or_else(Uuid::now_v7);
 
         self.client

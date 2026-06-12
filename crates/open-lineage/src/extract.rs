@@ -76,6 +76,16 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
+            // Skip scans of the `information_schema` virtual catalog: it is
+            // DataFusion's metadata surface, not a real dataset, so reporting it
+            // as a lineage input only adds noise. Treating these scans as
+            // non-inputs is also what lets the planner suppress pure-metadata
+            // queries (no inputs + no outputs => no events).
+            LogicalPlan::TableScan(scan)
+                if scan
+                    .table_name
+                    .schema()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("information_schema")) => {}
             LogicalPlan::TableScan(scan) => {
                 let dataset = self.dataset_for(&scan.table_name);
                 // Report the *full* table schema, not the projected scan schema:

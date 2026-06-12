@@ -157,6 +157,10 @@ async fn execute(
     // root run rather than the metadata-derived context the Flight path builds.
     let lineage = LineageContext {
         run_id: Some(Uuid::now_v7()),
+        // Derive a stable per-statement job name (the SQL hash) so distinct
+        // queries are distinct Marquez jobs, matching the Flight path. The HTTP
+        // surface carries no client job header, so the hash fallback is used.
+        job_name: Some(crate::lineage::job_name_from_sql(&req.sql)),
         sql: Some(req.sql.clone()),
         ..Default::default()
     };
