@@ -3393,6 +3393,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

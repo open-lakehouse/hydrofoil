@@ -144,6 +144,50 @@ pub struct JobTypeJobFacet {
     pub job_type: String,
 }
 
+/// Free-text description of a job (the `documentation` job facet).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentationJobFacet {
+    #[serde(flatten)]
+    pub base: BaseFacet,
+    pub description: String,
+}
+
+/// Who owns a job (the `ownership` job facet).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnershipJobFacet {
+    #[serde(flatten)]
+    pub base: BaseFacet,
+    pub owners: Vec<Owner>,
+}
+
+/// One owner entry of an [`OwnershipJobFacet`]: a name plus an optional kind
+/// (e.g. `MAINTAINER`, or a custom value like `team` / `user`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Owner {
+    pub name: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub type_: Option<String>,
+}
+
+/// Business tags on a job (the `tags` job facet).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagsJobFacet {
+    #[serde(flatten)]
+    pub base: BaseFacet,
+    pub tags: Vec<TagsJobFacetFields>,
+}
+
+/// One tag of a [`TagsJobFacet`]: a key with an optional value and an optional
+/// source naming the system that assigned the tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagsJobFacetFields {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Dataset facets
 // ---------------------------------------------------------------------------

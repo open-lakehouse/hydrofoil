@@ -244,10 +244,9 @@ impl Session {
             .saturating_sub(Duration::from_millis(last))
     }
 
-    /// The principal this session runs as. Retained as part of the session
-    /// surface; the policy gate reads the principal off the per-query
-    /// `LakehouseSession`.
-    #[allow(dead_code)]
+    /// The principal this session runs as. The policy gate reads the principal
+    /// off the per-query `LakehouseSession`; the server reads it here to stamp
+    /// lineage provenance (the `hydrofoil` run facet).
     pub fn principal(&self) -> &PrincipalIdentity {
         &self.principal
     }
@@ -791,6 +790,52 @@ mod tests {
             let parent = e.run.facets.parent.as_ref().expect("parent facet present");
             assert_eq!(parent.run.run_id, planning_run.to_string());
             assert_eq!(e.job.name, stored.job_name.clone().unwrap());
+        }
+    }
+
+    /// ADR 0012: client-forwarded job metadata (documentation/tags facets via
+    /// `LineageContext.job_facets`) and the `hydrofoil` provenance run facet
+    /// (`run_facets`) ride through planning into every emitted event.
+    #[tokio::test]
+    async fn client_metadata_facets_land_in_events() {
+        let (eng, recorder) = recording_engine();
+        let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+        register_tiny_table(&session);
+
+        let mut lineage = LineageContext {
+            run_id: Some(Uuid::now_v7()),
+            job_namespace: Some("demo-pipeline".into()),
+            job_name: Some("events_summary".into()),
+            sql: Some("SELECT id FROM t".into()),
+            ..Default::default()
+        };
+        lineage.job_facets.insert(
+            "documentation".into(),
+            serde_json::json!({"description": "Daily rollup."}),
+        );
+        lineage.run_facets.insert(
+            "hydrofoil".into(),
+            serde_json::json!({"principal": "User::\"alice\""}),
+        );
+
+        run_query(&session, lineage, "SELECT id FROM t").await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events = recorder.events.lock().unwrap();
+        assert!(!events.is_empty());
+        for e in events.iter() {
+            assert_eq!(e.job.namespace, "demo-pipeline", "namespace override applies");
+            assert_eq!(e.job.name, "events_summary");
+            assert_eq!(
+                e.job.facets.extra["documentation"]["description"],
+                "Daily rollup."
+            );
+            assert_eq!(
+                e.run.facets.extra["hydrofoil"]["principal"],
+                "User::\"alice\""
+            );
         }
     }
 

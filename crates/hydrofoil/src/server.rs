@@ -222,22 +222,32 @@ impl FlightSqlServiceImpl {
         &self.executor
     }
 
-    /// Build the per-request lineage context: parent-run facet parsed from
-    /// metadata, the pinned `run_id`, the derived job name, and the statement's
-    /// SQL text. The job namespace stays config-driven (set from the engine's
-    /// `OpenLineageConfig` at emit time); the job *name* is derived per statement
-    /// so distinct queries are distinct Marquez jobs — see
-    /// [`crate::lineage::job_name_from_metadata`].
+    /// Build the per-request lineage context: parent-run facet, job-metadata
+    /// facets (description/tags/owners), and namespace override parsed from
+    /// metadata; the pinned `run_id`; the derived job name; the statement's SQL
+    /// text; and the governance provenance (principal + agent context) as the
+    /// custom `hydrofoil` run facet. The job namespace falls back to the
+    /// engine's `OpenLineageConfig` at emit time when no header overrides it;
+    /// the job *name* is derived per statement so distinct queries are distinct
+    /// Marquez jobs — see [`crate::lineage::job_name_from_metadata`] and the
+    /// `crate::lineage` module docs for the full header reference.
     fn lineage_context<T>(
         &self,
         req: &Request<T>,
         run_id: Uuid,
         sql: Option<&str>,
+        principal: &datafusion_cedar::PrincipalIdentity,
+        agent: Option<&crate::agent::AgentContext>,
     ) -> datafusion_open_lineage::context::LineageContext {
         let mut ctx = crate::lineage::context_from_metadata(req.metadata(), &self.lineage_config);
         ctx.run_id = Some(run_id);
         ctx.job_name = sql.map(|s| crate::lineage::job_name_from_metadata(req.metadata(), s));
         ctx.sql = sql.map(str::to_string);
+        if let Some(facet) =
+            crate::lineage::hydrofoil_run_facet(Some(principal), agent, &self.lineage_config)
+        {
+            ctx.run_facets.insert("hydrofoil".to_string(), facet);
+        }
         ctx
     }
 
@@ -525,8 +535,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // later do_get reuses the same snapshot so COMPLETE/FAIL correlate. See
         // docs/adr/0003-per-statement-run-id-correlation.md.
         let run_id = Uuid::now_v7();
-        let lineage = self.lineage_context(&request, run_id, Some(&query.query));
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lineage = self.lineage_context(
+            &request,
+            run_id,
+            Some(&query.query),
+            session.principal(),
+            agent.as_ref(),
+        );
         let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
         let plan = match self.executor.create_logical_plan(lh, query.query.clone()).await {
@@ -696,8 +712,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // 0003): START and COMPLETE/FAIL emitted by the OpenLineageExec share
         // this execution's run id, while the parent chain ties it back to the
         // statement it was planned from. Layer this request's agent context on top.
-        let lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
+        let mut lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        // This request may carry its own agent context (it can differ from
+        // planning's); refresh the provenance facet then — otherwise the
+        // planning-time snapshot carried by `execution_context` stands.
+        if agent.is_some()
+            && let Some(facet) = crate::lineage::hydrofoil_run_facet(
+                Some(session.principal()),
+                agent.as_ref(),
+                &self.lineage_config,
+            )
+        {
+            lineage.run_facets.insert("hydrofoil".to_string(), facet);
+        }
         let lh = session.lakehouse_for_query(lineage, agent);
         let result = self.do_get_handle(Arc::new(lh), stored.plan.clone());
         session.statements().remove(&handle);
@@ -730,8 +758,19 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // execution (parented to the planning run) so re-executions don't share
         // a runId and clobber one another's terminal event — see
         // crate::lineage::execution_context and ADR 0003.
-        let lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
+        let mut lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        // Per-execution agent context wins over the creation-time snapshot (one
+        // prepared handle may serve many distinct agent tasks).
+        if agent.is_some()
+            && let Some(facet) = crate::lineage::hydrofoil_run_facet(
+                Some(session.principal()),
+                agent.as_ref(),
+                &self.lineage_config,
+            )
+        {
+            lineage.run_facets.insert("hydrofoil".to_string(), facet);
+        }
         let lh = session.lakehouse_for_query(lineage, agent);
         self.do_get_handle(Arc::new(lh), stored.plan.clone())
     }
@@ -905,8 +944,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let plan_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
-        let lineage = self.lineage_context(&request, run_id, Some(&query.query));
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lineage = self.lineage_context(
+            &request,
+            run_id,
+            Some(&query.query),
+            session.principal(),
+            agent.as_ref(),
+        );
         let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
         let plan = match self.executor.create_logical_plan(lh, query.query).await {

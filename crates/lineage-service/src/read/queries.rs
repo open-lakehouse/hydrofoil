@@ -109,6 +109,14 @@ struct JobAgg {
     /// Event time at which the current input/output sets were last set — used to
     /// decide whether a newer dataset-bearing event should replace them.
     edges_at: i64,
+    /// Job description from the `documentation` job facet, latest-event-wins.
+    description: Option<String>,
+    /// Job tags from the `tags` job facet, rendered as `key` / `key:value`
+    /// strings (the Marquez job model carries plain strings).
+    tags: Vec<String>,
+    /// Event time at which `description`/`tags` were last set (same
+    /// latest-event-wins pattern as `edges_at`).
+    meta_at: i64,
     /// Per-run state keyed by runId, in arrival order (for newest-first sort).
     runs: HashMap<String, RunAgg>,
 }
@@ -131,7 +139,7 @@ impl LineageStore {
         let batches = ctx
             .sql(&format!(
                 "SELECT {kind}, {etype}, {etime}, {run_id}, {jns}, {jname}, {dns}, {dname}, \
-                 {inputs}, {outputs} FROM events",
+                 {inputs}, {outputs}, {raw} FROM events",
                 kind = col::EVENT_KIND,
                 etype = col::EVENT_TYPE,
                 etime = col::EVENT_TIME,
@@ -142,6 +150,7 @@ impl LineageStore {
                 dname = col::DATASET_NAME,
                 inputs = col::INPUTS_JSON,
                 outputs = col::OUTPUTS_JSON,
+                raw = col::RAW_JSON,
             ))
             .await?
             .collect()
@@ -589,6 +598,7 @@ fn fold_batch(model: &mut Model, batch: &RecordBatch) -> Result<(), ReadError> {
     let ds_name = str_col(batch, 7)?;
     let inputs = str_col(batch, 8)?;
     let outputs = str_col(batch, 9)?;
+    let raw = str_col(batch, 10)?;
 
     for row in 0..batch.num_rows() {
         // A missing event_time is "unknown" (None), distinct from the epoch — so
@@ -616,6 +626,7 @@ fn fold_batch(model: &mut Model, batch: &RecordBatch) -> Result<(), ReadError> {
                     first_seen: ts_or_zero,
                     last_seen: ts_or_zero,
                     edges_at: i64::MIN,
+                    meta_at: i64::MIN,
                     ..Default::default()
                 });
                 // Edge union (Marquez merges I/O cumulatively per job version): an
@@ -627,6 +638,15 @@ fn fold_batch(model: &mut Model, batch: &RecordBatch) -> Result<(), ReadError> {
                     entry.inputs = in_refs.clone();
                     entry.outputs = out_refs.clone();
                     entry.edges_at = ts_or_zero;
+                }
+                // Job metadata (description/tags from the documentation/tags
+                // job facets), latest-event-wins like the edges: an event that
+                // carries none must not erase metadata an earlier one set.
+                let (description, tags) = parse_job_meta(value(&raw, row));
+                if (description.is_some() || !tags.is_empty()) && ts_or_zero >= entry.meta_at {
+                    entry.description = description;
+                    entry.tags = tags;
+                    entry.meta_at = ts_or_zero;
                 }
                 entry.first_seen = entry.first_seen.min(ts_or_zero);
                 entry.last_seen = entry.last_seen.max(ts_or_zero);
@@ -689,6 +709,51 @@ fn fold_run(job: &mut JobAgg, run_id: &str, event_type: Option<&str>, ts: Option
     }
 }
 
+/// Extract job-level metadata from an event's raw JSON: the description from
+/// the `documentation` job facet and tags from the `tags` job facet (rendered
+/// as `key` / `key:value` strings). Returns empty values when the event carries
+/// neither — a cheap substring pre-filter skips the JSON parse for the common
+/// facet-less event.
+fn parse_job_meta(raw: Option<&str>) -> (Option<String>, Vec<String>) {
+    let Some(raw) = raw else {
+        return (None, Vec::new());
+    };
+    if !raw.contains("\"documentation\"") && !raw.contains("\"tags\"") {
+        return (None, Vec::new());
+    }
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, Vec::new());
+    };
+    let Some(facets) = event.get("job").and_then(|j| j.get("facets")) else {
+        return (None, Vec::new());
+    };
+
+    let description = facets
+        .get("documentation")
+        .and_then(|d| d.get("description"))
+        .and_then(|d| d.as_str())
+        .map(str::to_string);
+
+    let tags = facets
+        .get("tags")
+        .and_then(|t| t.get("tags"))
+        .and_then(|t| t.as_array())
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|t| {
+                    let key = t.get("key")?.as_str()?;
+                    Some(match t.get("value").and_then(|v| v.as_str()) {
+                        Some(value) => format!("{key}:{value}"),
+                        None => key.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    (description, tags)
+}
+
 fn note_dataset(model: &mut Model, namespace: String, name: String, ts: i64) {
     let id = EntityId { namespace, name };
     let e = model.datasets.entry(id).or_insert((ts, ts));
@@ -739,10 +804,10 @@ fn build_job(id: &EntityId, agg: &JobAgg) -> Job {
         inputs: agg.inputs.clone(),
         outputs: agg.outputs.clone(),
         location: None,
-        description: None,
+        description: agg.description.clone(),
         latest_run,
         latest_runs,
-        tags: Vec::new(),
+        tags: agg.tags.clone(),
         parent_job_name: None,
         parent_job_uuid: None,
     }
@@ -870,7 +935,7 @@ mod tests {
 
     /// One row of the projected events query, mirroring the column order in
     /// [`LineageStore::model`]: kind, event_type, event_time, run_id, job_ns,
-    /// job_name, ds_ns, ds_name, inputs_json, outputs_json.
+    /// job_name, ds_ns, ds_name, inputs_json, outputs_json, raw_json.
     struct Row {
         kind: &'static str,
         event_type: Option<&'static str>,
@@ -882,6 +947,7 @@ mod tests {
         ds_name: Option<&'static str>,
         inputs: Option<&'static str>,
         outputs: Option<&'static str>,
+        raw: Option<&'static str>,
     }
 
     fn batch(rows: &[Row]) -> RecordBatch {
@@ -900,6 +966,7 @@ mod tests {
             Field::new("dataset_name", DataType::Utf8, true),
             Field::new("inputs_json", DataType::Utf8, true),
             Field::new("outputs_json", DataType::Utf8, true),
+            Field::new("raw_json", DataType::Utf8, true),
         ]));
         let kind = StringArray::from_iter_values(rows.iter().map(|r| r.kind));
         let etype = StringArray::from(rows.iter().map(|r| r.event_type).collect::<Vec<_>>());
@@ -913,6 +980,7 @@ mod tests {
         let ds_name = StringArray::from(rows.iter().map(|r| r.ds_name).collect::<Vec<_>>());
         let inputs = StringArray::from(rows.iter().map(|r| r.inputs).collect::<Vec<_>>());
         let outputs = StringArray::from(rows.iter().map(|r| r.outputs).collect::<Vec<_>>());
+        let raw = StringArray::from(rows.iter().map(|r| r.raw).collect::<Vec<_>>());
         RecordBatch::try_new(
             schema,
             vec![
@@ -926,6 +994,7 @@ mod tests {
                 Arc::new(ds_name),
                 Arc::new(inputs),
                 Arc::new(outputs),
+                Arc::new(raw),
             ],
         )
         .unwrap()
@@ -949,6 +1018,7 @@ mod tests {
             ds_name: None,
             inputs,
             outputs,
+            raw: None,
         }
     }
 
@@ -1069,10 +1139,50 @@ mod tests {
             ds_name: None,
             inputs: None,
             outputs: None,
+            raw: None,
         }]);
         let j = job(&model);
         assert_eq!(j.latest_runs.len(), 1);
         assert_eq!(j.latest_runs[0].state, "COMPLETED");
         assert!(j.latest_runs[0].id.starts_with("norun:"));
+    }
+
+    /// A raw event whose `job.facets` carries `documentation` + `tags` (the
+    /// shape hydrofoil emits for client-forwarded metadata, ADR 0012).
+    const RAW_WITH_META: &str = r#"{"job":{"namespace":"ns","name":"job","facets":{
+        "documentation":{"_producer":"p","_schemaURL":"s","description":"Daily rollup."},
+        "tags":{"_producer":"p","_schemaURL":"s","tags":[
+            {"key":"tier","value":"bronze"},{"key":"adhoc"}]}}}}"#;
+
+    #[test]
+    fn job_metadata_folds_from_documentation_and_tags_facets() {
+        let mut row = run_event("START", 1_000, "r1", None, None);
+        row.raw = Some(RAW_WITH_META);
+        let model = fold(&[row, run_event("COMPLETE", 2_000, "r1", None, None)]);
+        let j = job(&model);
+        assert_eq!(j.description.as_deref(), Some("Daily rollup."));
+        assert_eq!(j.tags, vec!["tier:bronze".to_string(), "adhoc".to_string()]);
+    }
+
+    #[test]
+    fn job_metadata_survives_meta_less_later_event() {
+        // The COMPLETE (no job facets) arrives later: it must not erase the
+        // metadata the START carried — same latest-wins rule as the edges.
+        let mut start = run_event("START", 1_000, "r1", None, None);
+        start.raw = Some(RAW_WITH_META);
+        let mut complete = run_event("COMPLETE", 2_000, "r1", None, None);
+        complete.raw = Some(r#"{"job":{"namespace":"ns","name":"job"}}"#);
+        let model = fold(&[start, complete]);
+        let j = job(&model);
+        assert_eq!(j.description.as_deref(), Some("Daily rollup."));
+        assert!(!j.tags.is_empty());
+    }
+
+    #[test]
+    fn job_without_metadata_keeps_empty_fields() {
+        let model = fold(&[run_event("START", 1_000, "r1", None, None)]);
+        let j = job(&model);
+        assert!(j.description.is_none());
+        assert!(j.tags.is_empty());
     }
 }
