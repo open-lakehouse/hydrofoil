@@ -2,6 +2,7 @@
 
 | | |
 |---|---|
+| Status | ✅ **Done** — commit `4e759dd` (2026-06-12), incl. drain wiring + ADR 0003 update |
 | Target repo | `open-lakehouse` (crates/hydrofoil, touches crates/open-lineage config surface) |
 | Depends on | S10 (uses its `shutdown()`/drain API; job-name change pairs with S13's read model) |
 | Scope | One PR |

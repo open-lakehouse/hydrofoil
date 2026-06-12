@@ -2,6 +2,7 @@
 
 | | |
 |---|---|
+| Status | ✅ **Done** — commit `75e9d2c` (2026-06-12), incl. all four endpoints + minors |
 | Target repo | `open-lakehouse` (crates/lineage-service/src/read) |
 | Depends on | — (S10/S11 improve the *data* quality; this fixes the read model regardless) |
 | Scope | One PR |

@@ -94,28 +94,32 @@ lifecycle test suite are solid.
 
 ## Sessions and execution order
 
-| ID | Title | Repo(s) | Depends on |
-|----|-------|---------|-----------|
-| [S01](tasks/S01-cedar-gate-coverage.md) | Cedar gate coverage (subqueries, unmodeled nodes, statements) | open-lakehouse | — |
-| [S02](tasks/S02-delta-rs-catalog-managed-write-gate.md) | Reject path-based commits on catalog-managed tables | delta-rs | — |
-| [S03](tasks/S03-uc-rs-commit-lifecycle.md) | Commit lifecycle: publish, backfill, retry, metrics | unitycatalog-rs | S04 helps, not required |
-| [S04](tasks/S04-uc-rs-client-surface.md) | Client surface: typed Delta errors + missing endpoints | unitycatalog-rs (+ open-lakehouse follow-through) | — |
-| [S05](tasks/S05-uc-rs-managed-read-path.md) | Managed read path: latest-version resolution + fallbacks | unitycatalog-rs + open-lakehouse | S04 optional |
-| [S06](tasks/S06-uc-rs-create-staging-contract.md) | Create/staging contract + staging credentials + A11 | unitycatalog-rs (+ ADR 0010 fix) | S04 (staging creds endpoint) |
-| [S07](tasks/S07-hydrofoil-server-hardening.md) | Flight server hardening + first server.rs tests | open-lakehouse | S01 |
-| [S08](tasks/S08-hydrofoil-identity-facts.md) | Identity & facts: ACL case-folding, enrichment TTL | open-lakehouse | — |
-| [S09](tasks/S09-hydrofoil-authn-interceptor.md) | Authn interceptor (design + implement) | open-lakehouse | S08 |
-| [S10](tasks/S10-open-lineage-producer.md) | OpenLineage producer correctness | open-lakehouse | — |
-| [S11](tasks/S11-hydrofoil-lineage-integration.md) | Hydrofoil lineage integration | open-lakehouse | S10 (drain API) |
-| [S12](tasks/S12-lineage-service-ingest-durability.md) | Ingest durability | open-lakehouse | — |
-| [S13](tasks/S13-lineage-service-read-api.md) | Marquez read API correctness | open-lakehouse | — |
+| ID | Title | Repo(s) | Depends on | Status |
+|----|-------|---------|-----------|--------|
+| [S01](tasks/S01-cedar-gate-coverage.md) | Cedar gate coverage (subqueries, unmodeled nodes, statements) | open-lakehouse | — | open |
+| [S02](tasks/S02-delta-rs-catalog-managed-write-gate.md) | Reject path-based commits on catalog-managed tables | delta-rs | — | open |
+| [S03](tasks/S03-uc-rs-commit-lifecycle.md) | Commit lifecycle: publish, backfill, retry, metrics | unitycatalog-rs | S04 helps, not required | open |
+| [S04](tasks/S04-uc-rs-client-surface.md) | Client surface: typed Delta errors + missing endpoints | unitycatalog-rs (+ open-lakehouse follow-through) | — | open |
+| [S05](tasks/S05-uc-rs-managed-read-path.md) | Managed read path: latest-version resolution + fallbacks | unitycatalog-rs + open-lakehouse | S04 optional | open |
+| [S06](tasks/S06-uc-rs-create-staging-contract.md) | Create/staging contract + staging credentials + A11 | unitycatalog-rs (+ ADR 0010 fix) | S04 (staging creds endpoint) | open |
+| [S07](tasks/S07-hydrofoil-server-hardening.md) | Flight server hardening + first server.rs tests | open-lakehouse | S01 | open |
+| [S08](tasks/S08-hydrofoil-identity-facts.md) | Identity & facts: ACL case-folding, enrichment TTL | open-lakehouse | — | open |
+| [S09](tasks/S09-hydrofoil-authn-interceptor.md) | Authn interceptor (design + implement) | open-lakehouse | S08 | open |
+| [S10](tasks/S10-open-lineage-producer.md) | OpenLineage producer correctness | open-lakehouse | — | ✅ done (`01f4c09`) |
+| [S11](tasks/S11-hydrofoil-lineage-integration.md) | Hydrofoil lineage integration | open-lakehouse | S10 (drain API) | ✅ done (`4e759dd`) |
+| [S12](tasks/S12-lineage-service-ingest-durability.md) | Ingest durability | open-lakehouse | — | open |
+| [S13](tasks/S13-lineage-service-read-api.md) | Marquez read API correctness | open-lakehouse | — | ✅ done (`75e9d2c`) |
 
-**Recommended order.** First the criticals: S01, S02, and S10 (whose first item
-disables the misleading column-lineage facet), plus S13's nodeId fix. Then the
-protocol/majors: S03–S06 (unitycatalog-rs) and S07–S08 (hydrofoil). S09 (authn) after
-S08. S11–S12 parallelize freely. Sessions touching different repos/crates are safe to
-run concurrently; S01→S07 share `crates/hydrofoil/src/server.rs` and should be
-sequential.
+**Status (2026-06-12).** The lineage track (S10, S11, S13) is complete — all C-series
+findings are resolved except the ingest-durability items in S12. Findings C1–C5,
+C7–C8 and the C9 minors are fixed; column-level lineage is disabled pending a sound
+scope-aware extraction (design sketch recorded in `docs/open-lineage-design.md`).
+
+**Recommended order for the remainder.** First the criticals: S01 (subquery authz
+bypass) and S02 (managed-table write gate) — different repos, parallelizable. Then
+S04 (it unblocks typed errors for S03 and the staging-credentials endpoint for S06),
+then S03/S05/S06 in parallel. S07 after S01 (shared `server.rs` guards), S08 → S09,
+S12 anytime.
 
 **Conventions for every session** (also restated in each task file): fix at the right
 layer — prefer unitycatalog-rs / delta-rs changes over hydrofoil workarounds; the

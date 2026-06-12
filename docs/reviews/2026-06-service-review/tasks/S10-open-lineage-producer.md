@@ -2,6 +2,7 @@
 
 | | |
 |---|---|
+| Status | ✅ **Done** — commit `01f4c09` (2026-06-12), incl. all C9 minors + drain API |
 | Target repo | `open-lakehouse` (crates/open-lineage) |
 | Depends on | — |
 | Scope | One PR |
