@@ -18,6 +18,7 @@ that it draws on or refines.
 | [0008](0008-principal-identity-resolution.md) | Principal/identity resolution: dynamic group membership and enrichment freshness | Accepted |
 | [0009](0009-lineage-service-unity-catalog-write-path.md) | lineage-service Unity Catalog write path: `TableLocator` seam + write-credential vending | Proposed |
 | [0010](0010-catalog-managed-table-writes.md) | Unity Catalog catalog-managed Delta table writes via the kernel `Committer` | Accepted |
+| [0011](0011-uc-credential-vending-server-token.md) | UC credential vending with the server token; Cedar as the sole access control | Accepted |
 
 Related design docs: [`session-management.md`](../session-management.md),
 [`open-lineage-design.md`](../open-lineage-design.md),
