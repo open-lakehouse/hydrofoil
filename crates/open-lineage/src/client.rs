@@ -7,8 +7,12 @@
 //! not stall planning).
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::event::RunEvent;
 use crate::transport::{NoopTransport, Transport};
@@ -23,31 +27,73 @@ pub enum ClientError {
 }
 
 /// Non-blocking front-end for emitting OpenLineage events.
+///
+/// Must be constructed from within a Tokio runtime (it spawns a background
+/// drain task); see [`OpenLineageClient::try_new`] for the non-panicking form.
 #[derive(Debug, Clone)]
 pub struct OpenLineageClient {
     tx: mpsc::Sender<RunEvent>,
+    /// Events dropped on a full queue (back-pressure) or by transport failure.
+    /// Shared across clones so the count is process-global.
+    dropped: Arc<AtomicU64>,
+    /// The background drain task, shared across clones. [`Self::shutdown`] takes
+    /// it to await a final flush of queued events before process exit.
+    drain: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl OpenLineageClient {
     /// Start a client that drains events into `transport` on a background task.
+    ///
+    /// # Panics
+    /// Panics if called outside a Tokio runtime. Use [`Self::try_new`] to get a
+    /// clear error instead.
     pub fn new(transport: Arc<dyn Transport>) -> Self {
         Self::with_queue_size(transport, DEFAULT_QUEUE_SIZE)
     }
 
+    /// Fallible [`Self::new`]: returns [`ClientError::Config`] instead of
+    /// panicking when no Tokio runtime is available to host the drain task.
+    pub fn try_new(transport: Arc<dyn Transport>) -> Result<Self, ClientError> {
+        Self::try_with_queue_size(transport, DEFAULT_QUEUE_SIZE)
+    }
+
+    /// # Panics
+    /// Panics if called outside a Tokio runtime; see [`Self::try_with_queue_size`].
     pub fn with_queue_size(transport: Arc<dyn Transport>, queue_size: usize) -> Self {
+        Self::try_with_queue_size(transport, queue_size)
+            .expect("OpenLineageClient must be constructed within a Tokio runtime")
+    }
+
+    pub fn try_with_queue_size(
+        transport: Arc<dyn Transport>,
+        queue_size: usize,
+    ) -> Result<Self, ClientError> {
+        let handle = Handle::try_current().map_err(|_| {
+            ClientError::Config(
+                "OpenLineageClient must be constructed within a Tokio runtime".to_string(),
+            )
+        })?;
         let (tx, mut rx) = mpsc::channel::<RunEvent>(queue_size);
-        tokio::spawn(async move {
+        let dropped = Arc::new(AtomicU64::new(0));
+        let drain_dropped = dropped.clone();
+        let drain = handle.spawn(async move {
             while let Some(event) = rx.recv().await {
                 if let Err(err) = transport.emit(&event).await {
+                    let n = drain_dropped.fetch_add(1, Ordering::Relaxed) + 1;
                     tracing::warn!(
                         target: "openlineage",
                         error = %err,
+                        dropped_total = n,
                         "failed to emit lineage event; dropping"
                     );
                 }
             }
         });
-        Self { tx }
+        Ok(Self {
+            tx,
+            dropped,
+            drain: Arc::new(Mutex::new(Some(drain))),
+        })
     }
 
     pub fn builder() -> OpenLineageClientBuilder {
@@ -101,11 +147,37 @@ impl OpenLineageClient {
     /// with a warning — lineage never applies back-pressure to the query.
     pub fn emit(&self, event: RunEvent) {
         if let Err(err) = self.tx.try_send(event) {
+            let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
             tracing::warn!(
                 target: "openlineage",
                 error = %err,
+                dropped_total = n,
                 "lineage queue full or closed; dropping event"
             );
+        }
+    }
+
+    /// Total events dropped so far — on a full/closed queue (back-pressure) or
+    /// by transport failure. Process-global (shared across clones).
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Flush queued events and stop the background drain task.
+    ///
+    /// Awaits the drain task to completion so events still queued at process
+    /// exit are delivered rather than lost. The drain task ends once the event
+    /// channel closes, which requires every sender to be dropped — so call this
+    /// after (or while) dropping all other clones of the client; this consumes
+    /// the clone it is called on. Idempotent across clones: only the clone
+    /// holding the drain handle awaits it, the rest return immediately.
+    pub async fn shutdown(self) {
+        // Drop our sender so this clone no longer keeps the channel open.
+        let Self { tx, drain, .. } = self;
+        drop(tx);
+        let handle = drain.lock().unwrap().take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
         }
     }
 }

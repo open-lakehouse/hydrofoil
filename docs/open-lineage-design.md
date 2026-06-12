@@ -160,25 +160,40 @@ authorize, which keeps the two readable side by side.
   built from the scan's `projected_schema`.
 - **Outputs**: `Dml` (`Insert`/`Update`/`Delete`/`Ctas`) and
   `CreateExternalTable` → output datasets.
-- **Column lineage** is the marquee feature, and follows the same node set
-  Spark's `ExpressionDependencyCollector` handles. For each `Projection`, we pair
-  every output field with its defining `Expr`, collect the expression's
-  `column_refs()`, and resolve each `Column.relation` back to its source dataset.
-  An identity column (`Expr::Column`) is `DIRECT/IDENTITY`; any computed
-  expression is `DIRECT/TRANSFORMATION`.
+- **Schema**: every input carries a `SchemaDatasetFacet` built from the table's
+  *full* schema (`scan.source.schema()`), not the projected scan schema — so a
+  dataset's reported schema is stable across queries that read different column
+  subsets after projection pushdown.
 
-### The subtle bit: identity lineage lives on the scan
+Inputs are deduped by `(namespace, name)`: a self-join scans one table twice but
+is a single input dataset.
 
-A trivial `SELECT a, b FROM t` *has no `Projection` node* after optimization —
-the identity projection is absorbed into the scan's `projection=[a, b]`. If you
-only handle `Projection`, you silently lose column lineage for the most common
-query shape. So we also emit identity lineage directly from the `TableScan`
-(each projected column maps 1:1 to itself), and let a `Projection` above
-override it for transformed columns. The visitor runs top-down, so the
-projection's richer mapping is recorded first and the scan uses `entry().or_*`
-to fill only what's missing. This "read the optimized plan, and know what the
-optimizer did to it" insight is the kind of thing that only surfaces once you
-test against real plans.
+### Column lineage is deferred until a sound extraction exists
+
+Events currently carry **table-level lineage only**. An earlier name-based
+column-lineage extraction was removed as unsound, and emitting it was actively
+misleading to consumers:
+
+- It mapped column qualifiers to datasets *by name*, so aliases/CTEs
+  (`SubqueryAlias`) fabricated datasets that don't exist, and unqualified column
+  refs were silently dropped.
+- The output→inputs map was keyed by bare output-column name with top-down
+  visitation, so a deeper same-named projection overwrote the real top-level
+  mapping; there was no transitive resolution through intermediate projections.
+- The facet was attached to **input** datasets, but the OpenLineage
+  `ColumnLineageDatasetFacet` is defined on **outputs**, keyed by output field —
+  so consumers saw no column lineage at all.
+
+**The sound approach (future work).** Walk the optimized plan **bottom-up**
+(`f_up`), maintaining a per-node map of *output column → set of physical
+`(dataset, column)`*. Resolve that map through the relational operators —
+`SubqueryAlias` (rename, don't fabricate), `Projection` (rewrite via each
+expression's `column_refs`), `Aggregate` (group/agg inputs), `Join` (union of
+sides, with the join predicate's columns as `INDIRECT` influences). Only the
+**root** node's map is published, and the facet is attached to the **output**
+datasets, keyed by output field. Identity vs. computed maps to
+`DIRECT/IDENTITY` vs. `DIRECT/TRANSFORMATION` as before. Until that exists we
+ship correct table-level lineage rather than a misleading column-level facet.
 
 ### No silent truncation
 
@@ -195,9 +210,10 @@ object spec precisely with `serde` types rather than approximating it:
 - Every facet embeds a `BaseFacet { _producer, _schemaURL }` (the underscore
   prefix is mandated to avoid collisions) pointing at versioned spec URLs.
 - The facets a query engine is expected to populate: `processing_engine` (engine
-  name/version), `schema`, `dataSource`, `columnLineage` (with the
-  `DIRECT`/`INDIRECT` + subtype model), `sql`, `jobType`, plus `parent` and
-  `errorMessage`.
+  name/version), `schema`, `dataSource`, `sql`, `jobType`, plus `parent` and
+  `errorMessage`. (`columnLineage` is deferred — see *Column lineage is deferred*
+  above.) `processing_engine.version` reports the **DataFusion** version (the
+  engine), while `openlineageAdapterVersion` reports this crate's version.
 
 Two `serde` details that bit us and are worth calling out:
 
@@ -307,8 +323,9 @@ could pre-mint the `runId` the planner uses).
 ## Patterns adopted vs. deferred
 
 **Adopted** (validated by mature integrations, mostly Spark): planner-wrapping as
-the hook; `TreeNodeVisitor` plan walk; the `DIRECT`/`INDIRECT` column-lineage
-model; spec-exact facets with `_producer`/`_schemaURL`; async fail-safe emission;
+the hook; `TreeNodeVisitor` plan walk; table-level input/output lineage with
+full-schema facets; spec-exact facets with `_producer`/`_schemaURL`; async
+fail-safe emission with a flush-on-shutdown drain and a dropped-events counter;
 standard env-var config; pluggable transport; **end-of-execution COMPLETE/FAIL
 via a `Drop`-based physical-plan wrapper** (`OpenLineageExec`), so terminal events
 reflect runtime outcome, not just planning success; **`outputStatistics`
@@ -316,7 +333,9 @@ facets** (rows written, from the write-result `count` batch); **`inputStatistics
 facets for single-input reads** (rows/bytes scanned, summed from the plan tree's
 file-scan nodes).
 
-**Deferred** (complexity that doesn't earn its place yet): **per-dataset input
+**Deferred** (complexity that doesn't earn its place yet): **column-level
+lineage** — until a sound, scope-aware extraction exists (see *Column lineage is
+deferred* above); **per-dataset input
 attribution** for multi-input queries — needs location-based dataset naming
 (object-store URL + `symlinks`) first, so scan nodes can be matched to datasets
 (see *Input statistics* above); the full

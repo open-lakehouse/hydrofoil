@@ -22,7 +22,7 @@ pub struct BaseFacet {
 
 impl BaseFacet {
     /// Build a [`BaseFacet`] for `producer` pointing at the facet schema named
-    /// `schema` (e.g. `1-2-0/ColumnLineageDatasetFacet.json`).
+    /// `schema` (e.g. `1-1-0/SchemaDatasetFacet.json`).
     pub fn new(producer: &str, schema: &str) -> Self {
         Self {
             producer: producer.to_string(),
@@ -43,7 +43,7 @@ pub struct RunFacets {
     pub processing_engine: Option<ProcessingEngineRunFacet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<ParentRunFacet>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nominalTime", skip_serializing_if = "Option::is_none")]
     pub nominal_time: Option<NominalTimeRunFacet>,
     #[serde(rename = "errorMessage", skip_serializing_if = "Option::is_none")]
     pub error_message: Option<ErrorMessageRunFacet>,
@@ -154,8 +154,8 @@ pub struct DatasetFacets {
     pub schema: Option<SchemaDatasetFacet>,
     #[serde(rename = "dataSource", skip_serializing_if = "Option::is_none")]
     pub data_source: Option<DataSourceDatasetFacet>,
-    #[serde(rename = "columnLineage", skip_serializing_if = "Option::is_none")]
-    pub column_lineage: Option<ColumnLineageDatasetFacet>,
+    // Column-level lineage is intentionally not emitted; see `extract.rs` and
+    // `docs/open-lineage-design.md`. Events carry table-level lineage only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symlinks: Option<SymlinksDatasetFacet>,
     #[serde(flatten)]
@@ -257,54 +257,8 @@ pub struct SymlinkIdentifier {
     pub type_: String,
 }
 
-/// Column-level lineage facet (schema `1-2-0`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColumnLineageDatasetFacet {
-    #[serde(flatten)]
-    pub base: BaseFacet,
-    /// Output column name -> its provenance.
-    pub fields: Map<String, Value>,
-    /// Dataset-level (whole-row) influences not tied to a single output column.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dataset: Vec<InputField>,
-}
-
-/// Provenance of a single output column.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FieldLineage {
-    #[serde(rename = "inputFields")]
-    pub input_fields: Vec<InputField>,
-}
-
-/// A source `(dataset, field)` an output column derives from, with how.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputField {
-    pub namespace: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transformations: Vec<Transformation>,
-}
-
-/// How an input influences an output: `DIRECT` (source value) or `INDIRECT`
-/// (influence via filter/group/join/sort). `subtype` is conventionally one of
-/// `IDENTITY`, `TRANSFORMATION`, `AGGREGATION`, `JOIN`, `FILTER`, `GROUP_BY`, `SORT`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transformation {
-    #[serde(rename = "type")]
-    pub type_: TransformationType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtype: Option<String>,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub masking: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum TransformationType {
-    Direct,
-    Indirect,
-}
+// Column-level lineage facet types (`ColumnLineageDatasetFacet`, `FieldLineage`,
+// `InputField`, `Transformation`) were removed: the name-based extraction that
+// fed them was unsound (see `extract.rs` / `docs/open-lineage-design.md`).
+// Events carry table-level lineage only until a sound, scope-aware extraction
+// exists.

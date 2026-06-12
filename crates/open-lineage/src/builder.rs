@@ -101,7 +101,7 @@ fn base_event(
         .map(|input| Dataset {
             namespace: input.name.namespace.clone(),
             name: input.name.name.clone(),
-            facets: input_dataset_facets(input, &lineage.column_lineage, config),
+            facets: input_dataset_facets(input, config),
             // Runtime read statistics are filled in by OpenLineageExec at end of
             // execution (single-input queries only; see exec.rs).
             input_facets: None,
