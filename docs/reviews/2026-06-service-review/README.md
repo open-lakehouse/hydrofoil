@@ -115,6 +115,18 @@ findings are resolved except the ingest-durability items in S12. Findings C1–C
 C7–C8 and the C9 minors are fixed; column-level lineage is disabled pending a sound
 scope-aware extraction (design sketch recorded in `docs/open-lineage-design.md`).
 
+**Reference validation (2026-06-13).** S03, S05, and S06 were validated against the
+reference implementations: the UC OSS Java server (`~/code/unitycatalog`, HEAD
+`5a3b69dd`) and the Delta kernel/Spark catalog-managed clients (`~/code/delta`). The
+plans are directionally confirmed; corrections and additional obligations are folded
+into each task file as a superseding "Reference-implementation validation" section.
+Highlights: error dispatch must be by Delta error *type* (two distinct 409s, version
+gaps are 400, `CommitStateUnknownException` is never emitted — verify on transport
+ambiguity by content comparison); the server never returns `latest-table-version: -1`
+(absence/table-type is the routing signal); the staging contract is server-enforced
+(ignoring it fails createTable with 400); and `data_source_format` must be
+version-gated — current servers reject unknown fields rather than ignoring them.
+
 **Recommended order for the remainder.** First the criticals: S01 (subquery authz
 bypass) and S02 (managed-table write gate) — different repos, parallelizable. Then
 S04 (it unblocks typed errors for S03 and the staging-credentials endpoint for S06),

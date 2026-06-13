@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use deltalake::arrow::array::RecordBatch;
 use deltalake::protocol::SaveMode;
-use deltalake::{DeltaTableBuilder, ensure_table_uri};
+use deltalake::DeltaTableBuilder;
 use unitycatalog_object_store::{TableOperation, UnityObjectStoreFactory};
 use url::Url;
 
@@ -69,13 +69,14 @@ impl UnityExternalSink {
             return Ok(());
         }
         // Vend fresh ReadWrite credentials (they expire) and write via plain delta-rs with the
-        // credentialed store injected (ADR-0009 direct-commit path).
+        // credentialed store injected (ADR-0009 direct-commit path). `self.location` is already
+        // a parsed URL; don't round-trip it through `ensure_table_uri`, which would reject
+        // `s3://` because we never register delta-rs's own S3 factory (the store is injected).
         let store = self
             .factory
             .for_table(self.fqn.clone(), TableOperation::ReadWrite)
             .await?;
-        let url = ensure_table_uri(self.location.as_str())
-            .map_err(|e| UnitySinkError::Delta(e.to_string()))?;
+        let url = self.location.clone();
         let table = DeltaTableBuilder::from_url(url.clone())
             .map_err(|e| UnitySinkError::Delta(e.to_string()))?
             .with_storage_backend(store.root(), url)

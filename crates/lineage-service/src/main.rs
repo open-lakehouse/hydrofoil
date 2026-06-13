@@ -24,7 +24,9 @@ async fn main() -> anyhow::Result<()> {
     let sinks = build_sinks(&cfg).await?;
 
     let writer = BufferedWriter::spawn(sinks, writer_config(&cfg.writer));
-    let store = LineageStore::from_config(&cfg);
+    let store = LineageStore::from_config(&cfg)
+        .await
+        .context("failed to initialize the lineage read store")?;
     let app = http::router(AppState {
         writer: writer.handle(),
         store,

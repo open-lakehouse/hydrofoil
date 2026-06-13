@@ -15,6 +15,8 @@ uvx --directory notebooks/ marimo edit --sandbox <notebook>.py
 | `uc_duckdb.py` | **DuckDB** reads/appends a UC-managed table (created via Spark) | cross-engine; blocked by a DuckDB Content-Type bug |
 | `policy_demo.py` | **Cedar** governance over Flight SQL: row filters + column masks per principal | governance demo via hydrofoil |
 | `spark_lineage.py` | Spark emits **OpenLineage** to our lineage service; **SDP** spike | see below |
+| `lineage_metadata.py` | Client-forwarded **OpenLineage metadata** (job name/tags/owners, parent run, agent context) as Flight SQL call headers | ADR 0012; host hydrofoil on `:50052` |
+| `column_lineage.py` | **Column-level lineage**: `INSERT … SELECT` writes through hydrofoil, field-level graph read back from the lineage service | facet on outputs; host hydrofoil on `:50052` |
 | `client.py` | Minimal Flight SQL / ADBC client | |
 | `duckdb_flight.py` | **DuckDB** reaches hydrofoil's Flight SQL endpoint via the `adbc_scanner` extension | `SELECT 1` connectivity check; host-only (needs network to install the community extension) |
 

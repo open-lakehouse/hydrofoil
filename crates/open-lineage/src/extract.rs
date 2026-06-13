@@ -5,20 +5,24 @@
 //! integration uses. Run this on the *optimized* plan so projections/filters are
 //! pushed down to the scans.
 //!
-//! Column-level lineage is intentionally **not** extracted here — see the
-//! "Column lineage" section of `docs/open-lineage-design.md` for why the
-//! name-based approach was unsound and what a correct implementation requires.
+//! Column-level lineage is resolved separately by [`crate::column`] (a
+//! positional bottom-up walk) and attached to the output datasets here.
 
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::error::Result;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan, WriteOp};
 use datafusion::sql::TableReference;
 
+use crate::column::{ResolvedColumns, resolve_output_columns};
 use crate::config::OpenLineageConfig;
-use crate::facets::{BaseFacet, DatasetFacets, SchemaDatasetFacet, SchemaField};
+use crate::facets::{
+    BaseFacet, ColumnLineageDatasetFacet, DatasetFacets, FieldLineage, InputField,
+    SchemaDatasetFacet, SchemaField, Transformation, TransformationType,
+};
 use crate::naming::DatasetName;
 
 const SCHEMA_FACET: &str = "1-1-0/SchemaDatasetFacet.json";
+const COLUMN_LINEAGE_FACET: &str = "1-2-0/ColumnLineageDatasetFacet.json";
 
 /// What a query reads and writes.
 #[derive(Debug, Default)]
@@ -37,6 +41,8 @@ pub struct InputTable {
 #[derive(Debug)]
 pub struct OutputTable {
     pub name: DatasetName,
+    /// Output field name -> source columns, when soundly resolvable.
+    pub column_lineage: Option<ResolvedColumns>,
 }
 
 /// Extract [`QueryLineage`] from an (ideally optimized) logical plan.
@@ -49,11 +55,33 @@ pub fn extract(plan: &LogicalPlan, config: &OpenLineageConfig) -> QueryLineage {
     // The visitor never returns an error; ignore the traversal Result.
     let _ = plan.visit(&mut visitor);
 
+    let mut outputs = visitor.outputs;
+    if !outputs.is_empty()
+        && let Some(resolved) = resolve_output_columns(plan, config)
+    {
+        // A statement writes (at most) one dataset; the resolved root map
+        // describes exactly its fields.
+        for output in &mut outputs {
+            output.column_lineage = Some(resolved.clone());
+        }
+    }
+
     QueryLineage {
         inputs: visitor.inputs,
-        outputs: visitor.outputs,
+        outputs,
         sql: None,
     }
+}
+
+/// Map a table reference to its OpenLineage dataset name.
+///
+/// A bare TableScan carries only the qualified reference, not a storage
+/// location. Use the qualified name under the configured namespace; the host
+/// integration can enrich with a physical location + symlinks facet. Shared by
+/// the table-level visitor and the column resolver so the two can never
+/// disagree on dataset identity.
+pub(crate) fn dataset_for(table_ref: &TableReference, config: &OpenLineageConfig) -> DatasetName {
+    DatasetName::from_table_ref(&config.job_namespace, &table_ref.to_string())
 }
 
 struct LineageVisitor<'a> {
@@ -64,10 +92,7 @@ struct LineageVisitor<'a> {
 
 impl LineageVisitor<'_> {
     fn dataset_for(&self, table_ref: &TableReference) -> DatasetName {
-        // A bare TableScan carries only the qualified reference, not a storage
-        // location. Use the qualified name under the configured namespace; the
-        // host integration can enrich with a physical location + symlinks facet.
-        DatasetName::from_table_ref(&self.config.job_namespace, &table_ref.to_string())
+        dataset_for(table_ref, self.config)
     }
 }
 
@@ -120,6 +145,7 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 WriteOp::Insert(_) | WriteOp::Update | WriteOp::Delete | WriteOp::Ctas => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&dml.table_name),
+                        column_lineage: None,
                     });
                 }
                 WriteOp::Truncate => {}
@@ -128,6 +154,7 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 DdlStatement::CreateExternalTable(cmd) => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&cmd.name),
+                        column_lineage: None,
                     });
                 }
                 // `CREATE TABLE ... AS SELECT` lowers to CreateMemoryTable; the
@@ -136,6 +163,7 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 DdlStatement::CreateMemoryTable(cmd) => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&cmd.name),
+                        column_lineage: None,
                     });
                 }
                 _ => {}
@@ -156,8 +184,8 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
 
 /// Build the [`DatasetFacets`] for an input table: its schema facet.
 ///
-/// Column-level lineage is intentionally omitted (see the module docs and
-/// `docs/open-lineage-design.md`); inputs carry table-level schema only.
+/// Column lineage never appears on inputs — the spec defines the facet on
+/// output datasets, keyed by output field.
 pub fn input_dataset_facets(input: &InputTable, config: &OpenLineageConfig) -> DatasetFacets {
     let schema = SchemaDatasetFacet {
         base: BaseFacet::new(&config.producer, SCHEMA_FACET),
@@ -166,6 +194,83 @@ pub fn input_dataset_facets(input: &InputTable, config: &OpenLineageConfig) -> D
 
     DatasetFacets {
         schema: Some(schema),
+        ..Default::default()
+    }
+}
+
+/// Build the [`DatasetFacets`] for an output table: its column-lineage facet,
+/// when the resolution produced one.
+///
+/// Each output field lists its direct sources; the statement-wide indirect
+/// influences (filter/join/group/sort keys) are appended to every field's
+/// `inputFields`, matching how the OpenLineage Spark integration emits them.
+pub fn output_dataset_facets(output: &OutputTable, config: &OpenLineageConfig) -> DatasetFacets {
+    let Some(resolved) = &output.column_lineage else {
+        return DatasetFacets::default();
+    };
+    if resolved.fields.is_empty() {
+        // Nothing resolvable to a source column (e.g. all-literal INSERT):
+        // an empty facet carries no information.
+        return DatasetFacets::default();
+    }
+
+    let direct = |subtype: &str| Transformation {
+        type_: TransformationType::Direct,
+        subtype: Some(subtype.to_string()),
+        description: String::new(),
+        masking: false,
+    };
+    let indirect = |subtype: &str| Transformation {
+        type_: TransformationType::Indirect,
+        ..direct(subtype)
+    };
+
+    let fields = resolved
+        .fields
+        .iter()
+        .map(|(field, sources)| {
+            // One InputField per source, carrying its direct transformation
+            // plus any statement-wide indirect influences on the same source.
+            let mut input_fields: Vec<InputField> = sources
+                .direct
+                .iter()
+                .map(|(source, kind)| {
+                    let mut transformations = vec![direct(kind.subtype())];
+                    if let Some(kinds) = resolved.indirect.get(source) {
+                        transformations.extend(kinds.iter().map(|k| indirect(k.subtype())));
+                    }
+                    InputField {
+                        namespace: source.dataset.namespace.clone(),
+                        name: source.dataset.name.clone(),
+                        field: Some(source.column.clone()),
+                        transformations,
+                    }
+                })
+                .collect();
+            // Indirect-only sources (e.g. a filter column the output never
+            // carries) still influence every output field.
+            input_fields.extend(
+                resolved
+                    .indirect
+                    .iter()
+                    .filter(|(source, _)| !sources.direct.contains_key(source))
+                    .map(|(source, kinds)| InputField {
+                        namespace: source.dataset.namespace.clone(),
+                        name: source.dataset.name.clone(),
+                        field: Some(source.column.clone()),
+                        transformations: kinds.iter().map(|k| indirect(k.subtype())).collect(),
+                    }),
+            );
+            (field.clone(), FieldLineage { input_fields })
+        })
+        .collect();
+
+    DatasetFacets {
+        column_lineage: Some(ColumnLineageDatasetFacet {
+            base: BaseFacet::new(&config.producer, COLUMN_LINEAGE_FACET),
+            fields,
+            dataset: Vec::new(),
+        }),
         ..Default::default()
     }
 }

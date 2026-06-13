@@ -102,6 +102,74 @@ evolution on managed tables is not yet supported, and leave a doc comment pointi
 the spec requirement so the eventual implementation includes the metadata update
 actions in the same `updateTable` call.
 
+## Reference-implementation validation (2026-06-13)
+
+The findings above were validated against the UC OSS **Java server**
+(`~/code/unitycatalog`, HEAD `5a3b69dd`) and the **Delta reference clients**
+(`~/code/delta`: kernel `UCCatalogManagedCommitter`/`TransactionImpl`, legacy Spark
+`UCCommitCoordinatorClient`, `/delta/v1` `UCDeltaTokenBasedRestClient`). Where this
+section conflicts with details above, **this section wins**.
+
+**Confirmed:** publish/backfill is best-effort and never fails the ratified commit
+(legacy: async backfill after every commit; Flink: synchronous post-commit
+maintenance); the unbackfilled-commit limit is real — `MAX_NUM_COMMITS_PER_TABLE = 10`
+hardcoded (`DeltaCommitRepository.java:79`), the 11th unbackfilled commit gets 429
+`ResourceExhaustedException`; the legacy reference implements exactly the planned
+429 → full-backfill → notify → retry flow (`UCCommitCoordinatorClient.java:533-576`);
+ICT is mandatory on every catalog-managed commit; metadata/protocol updates riding the
+same `updateTable` as `add-commit` are fully supported server-side (one action per
+type).
+
+**Corrections (implement these, not the original sketch):**
+
+1. **Error dispatch must be by error *type*, not HTTP status.** The server emits two
+   distinct 409s: `CommitVersionConflictException` (only when
+   `newVersion <= lastCommitVersion` → rebuild snapshot, retry at exactly
+   `latest + 1`) and `UpdateRequirementConflictException` (assert-table-uuid/etag
+   mismatch, OR a pessimistic-lock "Concurrent update in progress" — the latter is
+   retryable **as-is**, no rebuild needed). A version **gap** (`newVersion > last+1`)
+   is a **400** `InvalidParameterValueException`, not 409 — treat 400 as
+   rebuild-or-fail, never blind-increment.
+2. **`CommitStateUnknownException` is never emitted by the server** (no `ErrorCode`
+   maps to it). Trigger verify-then-decide on *transport-level* ambiguity instead:
+   timeouts, connection resets, generic 5xx. And the tail-name check alone is
+   insufficient — after backfill the staged entry may be GC'd from the catalog tail.
+   Do what the reference does (`UCCommitCoordinatorClient.hasSameContent`,
+   `:744-814`): check the tail for our staged UUID, then fall back to comparing the
+   published `_delta_log/<v>.json` content against our staged file. Re-check for our
+   own staged UUID after **every** reload in the retry loop, not just on ambiguity
+   (post-rebase double-commit protection).
+3. **Backfill notification: piggyback, don't just notify.** The wire action is
+   `set-latest-backfilled-version` with field `latest-published-version`; the
+   reference sends the last-known-published version **on every `add-commit`**
+   (`UCDeltaTokenBasedRestClient.java:281-284`), with the standalone commit-less
+   `updateTable` form used in 429 recovery. Do both: piggyback per commit + standalone
+   after publish. **Only ever report versions you have verifiably published** — the
+   server prunes its commit rows on this value without checking storage
+   (`backfillCommits`, `DeltaCommitRepository.java:621-667`); over-reporting deletes
+   the catalog's only copy of those commits.
+4. **`reportMetrics` has no server handler today** — the route 404s (no Delta error
+   envelope) even though getConfig advertises it. No Spark reference client calls it
+   either (only Flink, against an older `/delta/preview` path). Keep it strictly
+   best-effort, tolerate 404 indefinitely, and don't assert delivery in integration
+   tests.
+
+**Additional obligations the reference implements (add to scope):**
+
+- **`assert-table-uuid` is mandatory on every `updateTable`** — 400 before any
+  conflict logic without it (`DeltaUpdateTableMapper.java:86-89`). Verify the
+  committer sends it; add it if not.
+- **`updateTable` returns a full refreshed `DeltaLoadTableResponse`** (new commit
+  tail, latest-table-version, etag) — consume it instead of a follow-up `loadTable`;
+  the ambiguity probe is just a tail inspection of this/`load_table`'s response.
+- **Retry mechanics:** fresh staged-commit UUID per attempt (never re-propose the same
+  staged file), and re-stamp ICT on rebase to
+  `max(attempt_ict, winning_commit_ict + 1)` (`TransactionImpl.java:739-747`).
+- **Version 0 must never go through `updateTable`/commit** (server rejects
+  `version <= 0`; both references hard-guard) — assert this in the committer.
+- Right after create the server reports `latest-table-version: 0` with an empty tail;
+  the first `add-commit` must be exactly v1.
+
 ## Constraints
 
 - Crates are unpublished: change APIs freely, no compatibility shims.

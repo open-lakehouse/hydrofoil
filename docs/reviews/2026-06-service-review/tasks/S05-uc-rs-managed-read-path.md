@@ -103,6 +103,70 @@ with a one-time-per-client `getConfig` probe if S04 has landed
    requested version ≤ resolved latest. Timestamp-based travel (must use ICT per
    ManagedTablesSpec line 152) may be left as a documented TODO.
 
+## Reference-implementation validation (2026-06-13)
+
+Validated against the UC OSS **Java server** (`~/code/unitycatalog`, HEAD `5a3b69dd`)
+and the **Delta reference clients** (`~/code/delta`: kernel
+`UCCatalogManagedClient`/`SnapshotBuilderImpl`/`SnapshotManager`, Spark
+`UCDeltaCatalogClientImpl`, legacy `SnapshotManagement`). Where this section conflicts
+with details above, **this section wins**.
+
+**Confirmed:** A5 is well-founded — *no* reference client ever substitutes
+`last-commit-version` for version resolution; the kernel hard-rejects a negative/
+missing max catalog version (`SnapshotBuilderImpl.java:111-114`). Time-travel
+semantics confirmed (version ≤ max ratified, tail must cover the version, timestamp
+travel is ICT-based).
+
+**Corrections to the `-1`/absence semantics (A5/A10):** the OSS server **never
+returns `-1`**. For MANAGED Delta tables, `latest-table-version` is *always* set
+(`0` right after create, with an empty tail — the create-time `0.json` is never
+registered as a commit) and the commit tail is always present (possibly empty). For
+EXTERNAL tables the field and `commits` are **omitted entirely**. So
+`resolve_managed_read_state` should key "not catalog-managed" off **field absence
+and/or `table-type != MANAGED`**, treating a literal `-1` as an equivalent legacy
+signal (it appears only in the older preview spec). "Missing for MANAGED = hard
+error" stands. Include the post-create state (`latest = 0`, empty tail → snapshot is
+the filesystem `0.json` only) in the resolution matrix and tests.
+
+**Corrections to the fallback triggers (A6):** `UnsupportedTableFormatException` is a
+**400** with that error type in the Delta envelope — not 404/501. In `/delta/v1`, a
+**404 means table-not-found**; do *not* blanket-fallback on 404 or you mask genuinely
+missing tables. The trigger set is: typed `UnsupportedTableFormatException` (primary,
+matches the Spark reference `UCDeltaCatalogClientImpl.scala:82-86`), plus
+route-entirely-missing (404 with **no Delta error envelope**) and 501 for older
+deployments. The `getConfig` probe has **zero reference callers** and its endpoint
+list is aspirational (it advertises the unimplemented metrics route) — keep the probe
+optional/deferred; the reactive typed-error path is the proven mechanism. (getConfig,
+if used: requires a `catalog` query param, ignores `protocol-versions` input, returns
+`protocol-version: "1.0"`.)
+
+**Additional snapshot-assembly rules the reference enforces (add to the helper):**
+
+- **The commit tail arrives newest-first** (descending) from loadTable/getCommits —
+  sort ascending by version defensively before assembly.
+- **Version-overlap rule:** when both a published `_delta_log/<v>.json` and a ratified
+  staged commit exist for the same version, the **staged commit wins**
+  (`SnapshotManager.java:653-689`).
+- **Tail-completeness invariants:** for latest reads a non-empty tail must end exactly
+  at the resolved latest version; an empty tail (fully backfilled) is valid but the
+  filesystem log must then reach the latest version — *error out* rather than silently
+  serving an older version (`SnapshotBuilderImpl.java:201-224`,
+  `SnapshotManager.java:505-508`). Encode these as assertions in
+  `resolve_managed_read_state`.
+- **Backfill race:** commits published between the filesystem listing and the catalog
+  call can create apparent gaps; the legacy reference re-lists to reconcile
+  (`SnapshotManagement.scala:229-261`). Handle or explicitly detect-and-retry.
+- **Table-identity check:** validate the loadTable response's table uuid against the
+  expected `io.unitycatalog.tableId` and fail typed
+  (`UCDeltaTokenBasedRestClient.java:338-349`).
+
+**Filename tolerance (A10) nuance:** the server stores and echoes `file_name`
+verbatim (validates non-empty only) — so accept *any* filename and key identity/
+ordering on `commit.version`, synthesizing the `<%020d>.<uuid>.json` staged path only
+when needed. Note in the PR that this is deliberately more tolerant than the kernel
+reference, whose regex (`FileNames.java:53`) would reject the spec's bare-uuid
+example.
+
 ## Constraints
 
 - Protocol logic lives in unitycatalog-rs; hydrofoil only consumes exported helpers —

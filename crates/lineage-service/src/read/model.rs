@@ -238,11 +238,37 @@ pub struct RunFacets {
 
 // --- /column-lineage ---
 
-/// `GET /api/v1/column-lineage` envelope. Column lineage is disabled (S10), so
-/// this is always an empty graph — but the endpoint must exist (200, not 404).
+/// `GET /api/v1/column-lineage` envelope: `DATASET_FIELD` nodes (one per
+/// output field of the addressed dataset plus one per referenced input field)
+/// with edges mirroring the stored facet's `inputFields`. Datasets without
+/// column lineage yield an empty graph (200, not 404) so the UI's column view
+/// renders empty.
 #[derive(Debug, Clone, Serialize)]
 pub struct ColumnLineageGraph {
-    pub graph: Vec<serde_json::Value>,
+    pub graph: Vec<LineageNode>,
+}
+
+/// Build the Marquez `nodeId` for a dataset field.
+pub fn dataset_field_node_id(namespace: &str, dataset: &str, field: &str) -> String {
+    format!("datasetField:{namespace}:{dataset}:{field}")
+}
+
+/// Parse the `nodeId` forms the column-lineage endpoint accepts:
+/// `dataset:<ns>:<name>` (all fields) or `datasetField:<ns>:<name>:<field>`
+/// (one field). Returns `(namespace, dataset, Some(field))` for the latter.
+pub fn parse_column_lineage_node_id(node_id: &str) -> Option<(String, String, Option<String>)> {
+    if let Some((NodeKind::Dataset, namespace, name)) = parse_node_id(node_id) {
+        return Some((namespace, name, None));
+    }
+    let rest = node_id.strip_prefix("datasetField:")?;
+    let (namespace, tail) = split_namespace_name(rest)?;
+    // The dataset name may itself contain `:`; the field is the last segment.
+    let (dataset, field) = tail.rsplit_once(':')?;
+    Some((
+        namespace.to_string(),
+        dataset.to_string(),
+        Some(field.to_string()),
+    ))
 }
 
 // --- /lineage ---

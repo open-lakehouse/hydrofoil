@@ -544,10 +544,120 @@ impl LineageStore {
     }
 
     /// `GET /api/v1/column-lineage?nodeId=` — the dataset column-lineage view.
-    /// Column lineage is disabled (S10), so this always returns an empty graph.
-    /// It exists so the UI's column view renders empty rather than 404ing.
-    pub async fn column_lineage(&self, _node_id: &str) -> Result<ColumnLineageGraph, ReadError> {
-        Ok(ColumnLineageGraph { graph: Vec::new() })
+    ///
+    /// Serves the *latest* stored `column_lineage_json` facet of the addressed
+    /// output dataset: one `DATASET_FIELD` node per output field plus one per
+    /// referenced input field, with edges mirroring the facet's `inputFields`
+    /// (single-hop upstream — what the UI's dataset column view renders; the
+    /// `depth`/`withDownstream` params are accepted and ignored). Unknown
+    /// datasets and datasets without column lineage return an empty graph
+    /// (200, not 404) so the column view renders empty.
+    pub async fn column_lineage(&self, node_id: &str) -> Result<ColumnLineageGraph, ReadError> {
+        let empty = ColumnLineageGraph { graph: Vec::new() };
+        let Some((namespace, dataset, field_filter)) = parse_column_lineage_node_id(node_id) else {
+            return Ok(empty);
+        };
+        let Some(ctx) = self.session().await? else {
+            return Ok(empty);
+        };
+
+        // Newest-first: the first event carrying a facet for this output
+        // dataset is its current column lineage.
+        let batches = ctx
+            .sql(&format!(
+                "SELECT {cl} FROM events WHERE {cl} IS NOT NULL \
+                 ORDER BY {etime} DESC NULLS LAST",
+                cl = col::COLUMN_LINEAGE_JSON,
+                etime = col::EVENT_TIME,
+            ))
+            .await?
+            .collect()
+            .await?;
+        let mut facet = None;
+        'rows: for batch in &batches {
+            let raw = str_col(batch, 0)?;
+            for row in 0..batch.num_rows() {
+                let Some(s) = value(&raw, row) else { continue };
+                let Ok(doc) = serde_json::from_str::<serde_json::Value>(s) else {
+                    continue;
+                };
+                let Some(outputs) = doc.get("outputs").and_then(|o| o.as_array()) else {
+                    continue;
+                };
+                for out in outputs {
+                    if out["namespace"] == namespace.as_str() && out["name"] == dataset.as_str() {
+                        facet = Some(out["columnLineage"].clone());
+                        break 'rows;
+                    }
+                }
+            }
+        }
+        let Some(facet) = facet else {
+            return Ok(empty);
+        };
+        let Some(fields) = facet["fields"].as_object() else {
+            return Ok(empty);
+        };
+
+        // Fold edges and per-node data, then materialize the nodes. Output
+        // fields carry their full `inputFields` payload; nodes that only
+        // appear as inputs get a bare (namespace, dataset, field) payload.
+        let mut data: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut in_edges: BTreeMap<String, Vec<LineageEdge>> = BTreeMap::new();
+        let mut out_edges: BTreeMap<String, Vec<LineageEdge>> = BTreeMap::new();
+        for (field, lineage) in fields {
+            if field_filter.as_deref().is_some_and(|f| f != field) {
+                continue;
+            }
+            let out_id = dataset_field_node_id(&namespace, &dataset, field);
+            for input in lineage["inputFields"].as_array().into_iter().flatten() {
+                let (Some(in_ns), Some(in_ds), Some(in_field)) = (
+                    input["namespace"].as_str(),
+                    input["name"].as_str(),
+                    input["field"].as_str(),
+                ) else {
+                    continue;
+                };
+                let in_id = dataset_field_node_id(in_ns, in_ds, in_field);
+                let edge = LineageEdge {
+                    origin: in_id.clone(),
+                    destination: out_id.clone(),
+                };
+                in_edges
+                    .entry(out_id.clone())
+                    .or_default()
+                    .push(edge.clone());
+                out_edges.entry(in_id.clone()).or_default().push(edge);
+                data.entry(in_id).or_insert_with(|| {
+                    json!({
+                        "namespace": in_ns,
+                        "dataset": in_ds,
+                        "field": in_field,
+                    })
+                });
+            }
+            data.insert(
+                out_id,
+                json!({
+                    "namespace": namespace,
+                    "dataset": dataset,
+                    "field": field,
+                    "inputFields": lineage["inputFields"],
+                }),
+            );
+        }
+
+        let graph = data
+            .into_iter()
+            .map(|(id, data)| LineageNode {
+                in_edges: in_edges.remove(&id).unwrap_or_default(),
+                out_edges: out_edges.remove(&id).unwrap_or_default(),
+                node_type: "DATASET_FIELD".to_string(),
+                data,
+                id,
+            })
+            .collect();
+        Ok(ColumnLineageGraph { graph })
     }
 }
 

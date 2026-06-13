@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::config::OpenLineageConfig;
 use crate::context::LineageContext;
 use crate::event::{Dataset, Job, RUN_EVENT_SCHEMA_URL, Run, RunEvent, RunEventType};
-use crate::extract::{QueryLineage, input_dataset_facets};
+use crate::extract::{QueryLineage, input_dataset_facets, output_dataset_facets};
 use crate::facets::{
     BaseFacet, ErrorMessageRunFacet, JobFacets, JobTypeJobFacet, ProcessingEngineRunFacet,
     RunFacets, SqlJobFacet,
@@ -115,7 +115,7 @@ fn base_event(
         .map(|output| Dataset {
             namespace: output.name.namespace.clone(),
             name: output.name.name.clone(),
-            facets: Default::default(),
+            facets: output_dataset_facets(output, config),
             input_facets: None,
             // Runtime statistics are filled in by OpenLineageExec at end of
             // execution, once the row count is known.

@@ -5,6 +5,11 @@
 use datafusion_unitycatalog::managed::CreateManagedTableError;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
+/// Ensure a table location URL ends with a trailing slash so it joins cleanly as a
+/// prefix. Re-exported from unitycatalog-rs (the single canonical implementation) so
+/// the existing `crate::writer::unity::ensure_trailing_slash` call sites are unchanged.
+pub(crate) use datafusion_unitycatalog::catalog::ensure_trailing_slash;
+
 /// Engine identifier recorded in commits written by this service.
 pub(crate) const ENGINE_INFO: &str = concat!("lineage-service/", env!("CARGO_PKG_VERSION"));
 
@@ -56,13 +61,4 @@ pub(crate) async fn build_factory(
 pub(crate) fn is_table_not_found(err: &unitycatalog_client::Error) -> bool {
     err.is_not_found()
         || matches!(err, unitycatalog_client::Error::Api(api) if api.http_status() == 404)
-}
-
-/// Ensure a table location URL ends with a trailing slash so it joins cleanly as a prefix.
-pub(crate) fn ensure_trailing_slash(s: &str) -> String {
-    if s.ends_with('/') {
-        s.to_string()
-    } else {
-        format!("{s}/")
-    }
 }

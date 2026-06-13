@@ -53,13 +53,16 @@ or lacks grants on the `demo` catalog — re-check with `just check-token`. If t
 fails with "address already in use", pick another port: `LINEAGE__PORT=8095 just
 lineage-deployed`.
 
-> **Read-API caveat:** in `unity-managed` mode the Marquez read API still reads the
-> *local* `delta.table_path` (the service warns about this at startup), so
-> `GET /api/v1/namespaces` renders empty. Verify writes through UC instead (below).
+The Marquez read API resolves the same Unity Catalog table the ingest side writes:
+for `unity-managed` it reads the catalog-ratified commit tail (so freshly ingested
+events are visible immediately, even before the writer backfills the published log);
+for `unity-external` it reads the published `_delta_log`. The startup line
+`lineage read API resolving … through Unity Catalog` confirms the read path is wired
+to the catalog rather than a local path.
 
 ### Smoke test
 
-Post a minimal OpenLineage run event:
+Post a minimal OpenLineage run event, then read it back through the Marquez API:
 
 ```bash
 curl -s -X POST http://localhost:8091/api/v1/lineage \
@@ -75,8 +78,15 @@ curl -s -X POST http://localhost:8091/api/v1/lineage \
   }'
 ```
 
-Expect `202 {"status":"accepted"}`. After the flush interval (~500ms) confirm the commit
-landed on the deployed server — `latest_table_version` increments with each flush:
+Expect `202 {"status":"accepted"}`. After the flush interval (~500ms) the event is
+readable through the Marquez API — its namespace shows up immediately:
+
+```bash
+curl -s http://localhost:8091/api/v1/namespaces | jq
+```
+
+You can also confirm the commit landed on the deployed server directly —
+`latest_table_version` increments with each flush:
 
 ```bash
 table=$(curl -s -H "Authorization: Bearer $UNITY_CATALOG_TOKEN" \

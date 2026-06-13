@@ -2525,7 +2525,7 @@ dependencies = [
 [[package]]
 name = "datafusion-unitycatalog"
 version = "0.1.0"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f49bb4c5a4cb0f295918f0c275689b5489d53361#f49bb4c5a4cb0f295918f0c275689b5489d53361"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=9fe020fe3f44163a4b052b5ba4af29d6647de5ff#9fe020fe3f44163a4b052b5ba4af29d6647de5ff"
 dependencies = [
  "async-trait",
  "buoyant_kernel",
@@ -7055,7 +7055,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unitycatalog-client"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f49bb4c5a4cb0f295918f0c275689b5489d53361#f49bb4c5a4cb0f295918f0c275689b5489d53361"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=9fe020fe3f44163a4b052b5ba4af29d6647de5ff#9fe020fe3f44163a4b052b5ba4af29d6647de5ff"
 dependencies = [
  "futures",
  "olai-http",
@@ -7073,7 +7073,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-common"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f49bb4c5a4cb0f295918f0c275689b5489d53361#f49bb4c5a4cb0f295918f0c275689b5489d53361"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=9fe020fe3f44163a4b052b5ba4af29d6647de5ff#9fe020fe3f44163a4b052b5ba4af29d6647de5ff"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -7103,7 +7103,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-object-store"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f49bb4c5a4cb0f295918f0c275689b5489d53361#f49bb4c5a4cb0f295918f0c275689b5489d53361"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=9fe020fe3f44163a4b052b5ba4af29d6647de5ff#9fe020fe3f44163a4b052b5ba4af29d6647de5ff"
 dependencies = [
  "async-trait",
  "chrono",

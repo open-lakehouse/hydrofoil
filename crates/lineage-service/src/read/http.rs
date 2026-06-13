@@ -3,9 +3,9 @@
 //! These are the GET routes the Marquez web UI calls to populate the namespace /
 //! job / dataset browse views, the lineage graph, the events feed, and the
 //! job/dataset detail drawers. They are backed by [`LineageStore`], which
-//! reconstructs Marquez's model from the events table. Runs and dataset versions
-//! are reconstructed from the event log; tags, column-lineage, and time-bucketed
-//! metrics remain stubbed (empty but non-404) — see [`super`].
+//! reconstructs Marquez's model from the events table. Runs, dataset versions,
+//! and column lineage are reconstructed from the event log; tags and
+//! time-bucketed metrics remain stubbed (empty but non-404) — see [`super`].
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -50,8 +50,9 @@ pub fn router(store: LineageStore) -> Router {
         .route("/api/v1/events/lineage", get(list_events))
         // Run-detail facets tab.
         .route("/api/v1/jobs/runs/:run_id/facets", get(get_run_facets))
-        // Dataset column-lineage view. Column lineage is disabled, so this
-        // returns an empty graph — but it must 200, not 404.
+        // Dataset column-lineage view, served from the latest stored
+        // column-lineage facet of the addressed dataset (empty graph, not
+        // 404, when there is none).
         .route("/api/v1/column-lineage", get(column_lineage))
         // Home-page activity charts. We don't compute time-bucketed metrics, so
         // these return an empty series — the charts render empty rather than
