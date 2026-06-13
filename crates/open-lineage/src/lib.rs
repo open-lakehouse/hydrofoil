@@ -28,6 +28,7 @@
 
 pub mod builder;
 pub mod client;
+pub mod column;
 pub mod config;
 pub mod context;
 pub mod event;

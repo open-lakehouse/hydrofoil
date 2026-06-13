@@ -682,18 +682,19 @@ async fn extract_ctas_has_output() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Column lineage is NOT emitted (the unsound extraction was removed)
+// 6. Column lineage is emitted on outputs only (full coverage in
+//    tests/column_lineage.rs)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn no_column_lineage_in_emitted_events() {
+async fn read_only_query_has_no_column_lineage() {
     let ctx = SessionContext::new();
     ctx.sql("CREATE TABLE t (a INT, b INT) AS VALUES (1, 2)")
         .await
         .unwrap();
-    // A computed projection is exactly the shape the old name-based extractor
-    // produced column lineage for. The event must now carry table-level
-    // lineage only: no `columnLineage` facet anywhere.
+    // The spec defines `columnLineage` on output datasets; a pure SELECT has
+    // none, so the event carries table-level lineage only — no `columnLineage`
+    // facet anywhere (in particular not on inputs).
     let plan = ctx
         .state()
         .create_logical_plan("SELECT a + b AS c FROM t")

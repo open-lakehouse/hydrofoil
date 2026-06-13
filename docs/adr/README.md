@@ -20,6 +20,7 @@ that it draws on or refines.
 | [0010](0010-catalog-managed-table-writes.md) | Unity Catalog catalog-managed Delta table writes via the kernel `Committer` | Accepted |
 | [0011](0011-uc-credential-vending-server-token.md) | UC credential vending with the server token; Cedar as the sole access control | Accepted |
 | [0012](0012-client-forwarded-lineage-metadata.md) | Client-forwarded lineage metadata over gRPC headers (Spark-parity job facets + `hydrofoil` run facet) | Accepted |
+| [0013](0013-column-level-lineage-positional-resolution.md) | Column-level lineage via positional plan resolution (facet on outputs, whole-facet degradation) | Accepted |
 
 Related design docs: [`session-management.md`](../session-management.md),
 [`open-lineage-design.md`](../open-lineage-design.md),

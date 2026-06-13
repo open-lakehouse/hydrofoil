@@ -198,8 +198,10 @@ pub struct DatasetFacets {
     pub schema: Option<SchemaDatasetFacet>,
     #[serde(rename = "dataSource", skip_serializing_if = "Option::is_none")]
     pub data_source: Option<DataSourceDatasetFacet>,
-    // Column-level lineage is intentionally not emitted; see `extract.rs` and
-    // `docs/open-lineage-design.md`. Events carry table-level lineage only.
+    /// Column-level lineage. Per spec this facet describes how an **output**
+    /// dataset's fields are derived, so it is only ever attached to outputs.
+    #[serde(rename = "columnLineage", skip_serializing_if = "Option::is_none")]
+    pub column_lineage: Option<ColumnLineageDatasetFacet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symlinks: Option<SymlinksDatasetFacet>,
     #[serde(flatten)]
@@ -301,8 +303,59 @@ pub struct SymlinkIdentifier {
     pub type_: String,
 }
 
-// Column-level lineage facet types (`ColumnLineageDatasetFacet`, `FieldLineage`,
-// `InputField`, `Transformation`) were removed: the name-based extraction that
-// fed them was unsound (see `extract.rs` / `docs/open-lineage-design.md`).
-// Events carry table-level lineage only until a sound, scope-aware extraction
-// exists.
+/// How an output dataset's fields derive from input dataset fields.
+///
+/// Keyed by output field name; the spec defines this facet on output datasets
+/// (consumers ignore it on inputs). Fed by the positional plan resolution in
+/// `crate::column`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnLineageDatasetFacet {
+    #[serde(flatten)]
+    pub base: BaseFacet,
+    /// Output field name -> the input fields it derives from.
+    pub fields: std::collections::BTreeMap<String, FieldLineage>,
+    /// Dataset-level (whole-row) influences not tied to a single output column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dataset: Vec<InputField>,
+}
+
+/// Provenance of a single output column.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldLineage {
+    #[serde(rename = "inputFields")]
+    pub input_fields: Vec<InputField>,
+}
+
+/// A source `(dataset, field)` an output column derives from, with how.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputField {
+    pub namespace: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transformations: Vec<Transformation>,
+}
+
+/// How an input influences an output: `DIRECT` (the source value flows into the
+/// output) or `INDIRECT` (influence via filter/group/join/sort). `subtype` is
+/// conventionally one of `IDENTITY`, `TRANSFORMATION`, `AGGREGATION`, `FILTER`,
+/// `JOIN`, `GROUP_BY`, `SORT`, `WINDOW`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transformation {
+    #[serde(rename = "type")]
+    pub type_: TransformationType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub masking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TransformationType {
+    Direct,
+    Indirect,
+}

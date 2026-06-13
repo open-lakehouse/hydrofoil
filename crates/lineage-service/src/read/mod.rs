@@ -44,6 +44,7 @@ pub mod columns {
     pub const DATASET_NAME: &str = "dataset_name";
     pub const INPUTS_JSON: &str = "inputs_json";
     pub const OUTPUTS_JSON: &str = "outputs_json";
+    pub const COLUMN_LINEAGE_JSON: &str = "column_lineage_json";
     pub const RAW_JSON: &str = "raw_json";
 }
 

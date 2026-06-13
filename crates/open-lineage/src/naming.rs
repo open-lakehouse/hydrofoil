@@ -6,7 +6,7 @@
 use url::Url;
 
 /// An OpenLineage dataset name: a `namespace` plus a `name` unique within it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DatasetName {
     pub namespace: String,
     pub name: String,

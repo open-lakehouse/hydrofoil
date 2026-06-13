@@ -99,11 +99,81 @@ this to be the **only** non-spec field sent.
    `/delta/v1` body, remove the field from the model and the `create.rs` call site.
    If it still does, keep it optional-with-comment and add a tracking note (issue or
    TODO) to remove it when the pin moves; consider reporting the spec/impl drift
-   upstream.
+   upstream. **Validation correction (2026-06-13):** the model comment's claim that
+   newer servers *ignore* the field is wrong — current server code (past unitycatalog
+   commit `09fa801d`, 2026-06-04, which removed the field from the spec and hardcoded
+   DELTA in `DeltaCreateTableMapper.java:89`) deserializes Delta requests with a
+   strict Jackson mapper (`DeltaApiMappers.java:29-34`, fail-on-unknown-properties),
+   so sending the field is expected to **400**, not be ignored. The field must be
+   version-gated on the pinned server, not sent unconditionally; fix the model
+   comment accordingly.
 2. **open-lakehouse doc fix:** `docs/adr/0010-catalog-managed-table-writes.md` line 56
    states createTable requests "must carry `data-source-format: \"DELTA\"`" — reword
    to attribute the requirement to the pinned server implementation, not the Delta
    API spec, citing the delta.yaml schema omission.
+
+## Reference-implementation validation (2026-06-13)
+
+Validated against the UC OSS **Java server** (`~/code/unitycatalog`, HEAD `5a3b69dd`)
+and the **Delta/Spark reference clients** (`~/code/delta`). Where this section
+conflicts with details above, **this section wins**.
+
+**A7 is mandatory, not hygiene:** the server *enforces* the staging contract at
+createTable for MANAGED tables (`UcManagedDeltaContract.validate`, invoked from
+`DeltaCreateTableMapper.java:68-71`): min reader 3 / writer 7, every required
+feature present, exact required-property values, reader ⊆ writer, and
+`io.unitycatalog.tableId` equal to the staging UUID. Ignoring `required-*` doesn't
+just risk drift — createTable **fails with 400**. The exact contract the OSS server
+returns today (`UcManagedDeltaContract.java:29-96`):
+
+- required-protocol: reader-features `catalogManaged, v2Checkpoint,
+  vacuumProtocolCheck, deletionVectors`; writer-features = those +
+  `inCommitTimestamp`.
+- required-properties: `delta.enableDeletionVectors=true`,
+  `delta.checkpointPolicy=v2`, `delta.enableInCommitTimestamps=true`,
+  `delta.checkpoint.writeStatsAsStruct=true`,
+  `delta.checkpoint.writeStatsAsJson=true`, `io.unitycatalog.tableId=<staging uuid>`.
+- suggested: columnMapping / domainMetadata / rowTracking features and related
+  properties; `null`-valued suggested/required properties are engine-substituted
+  sentinels — skip them, don't send `null`.
+
+This also settles the `checkpointPolicy` direction: it is a **required on-disk
+property**, so write it into the `0.json` metadata (the divergence above is a
+contract violation on disk, not just a catalog mismatch).
+
+**How the Spark reference applies the contract**
+(`UCDeltaCatalogClientImpl.scala:103-227`) — mirror this:
+required properties applied with conflict-throw (caller-supplied conflicting value is
+an error, not silently overridden); required features mapped to
+`delta.feature.<name>=supported`, unknown required feature → hard fail naming the
+feature; suggested via put-if-absent, unknown suggested silently skipped; required
+before suggested; **do not pin min-reader/writer versions from the contract** —
+derive them from the final feature set.
+
+**Disk↔catalog parity, reference pattern:** derive the UC createTable payload *from
+the committed `0.json`/post-create snapshot state*
+(`UnityCatalogUtils.getPropertiesForCreate`, kernel committer `finalizeTableInCatalog`)
+rather than composing disk and catalog payloads independently — adopt this in
+`create.rs`. Our put-if-absent `0.json` write is *safer* than the kernel reference
+(which uses overwrite=true in the staging location) — keep put-if-absent.
+
+**A8 nuances:** the staging-credentials refresh endpoint exists server-side
+(`GET /delta/v1/staging-tables/{id}/credentials`, staging-creator-only, always
+READ_WRITE) but even the `/delta/v1` reference client still vends staging creds via
+the *legacy* temporary-credentials endpoint — using the new endpoint is
+spec-correct but less battle-tested; keep the legacy path as fallback.
+`expiration-time-ms` is **not always set** (static-credential AWS deployments omit
+it) — treat missing as non-expiring, don't hard-require it. No region/endpoint key is
+ever vended (region must come from client config). Longest-prefix selection has a
+reference implementation to mirror
+(`unitycatalog/connectors/hadoop/.../DeltaStorageCredentialUtil.java:39-65`); today's
+server returns a single-element credential array whose prefix is the exact table
+location, so the rule is trivially satisfied but should still be implemented.
+
+**Also worth knowing:** staging finalization is creator-only and once-only (different
+principal → 403; re-finalize → 400), and a staging-table name colliding with an
+existing table 409s at createStagingTable — surface these as typed errors, not
+generic failures.
 
 ## Constraints
 

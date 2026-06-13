@@ -168,32 +168,50 @@ authorize, which keeps the two readable side by side.
 Inputs are deduped by `(namespace, name)`: a self-join scans one table twice but
 is a single input dataset.
 
-### Column lineage is deferred until a sound extraction exists
+### Column lineage: positional bottom-up resolution (`src/column.rs`)
 
-Events currently carry **table-level lineage only**. An earlier name-based
-column-lineage extraction was removed as unsound, and emitting it was actively
-misleading to consumers:
+Column-level lineage is resolved by a separate bottom-up walk of the optimized
+plan and attached to the **output** datasets, keyed by output field — the side
+the spec defines `ColumnLineageDatasetFacet` on. (An earlier name-based,
+top-down extraction was removed as unsound: aliases/CTEs fabricated datasets,
+same-named projections clobbered each other, and the facet sat on inputs where
+consumers never look. See ADR 0013 for the full decision record.)
 
-- It mapped column qualifiers to datasets *by name*, so aliases/CTEs
-  (`SubqueryAlias`) fabricated datasets that don't exist, and unqualified column
-  refs were silently dropped.
-- The output→inputs map was keyed by bare output-column name with top-down
-  visitation, so a deeper same-named projection overwrote the real top-level
-  mapping; there was no transitive resolution through intermediate projections.
-- The facet was attached to **input** datasets, but the OpenLineage
-  `ColumnLineageDatasetFacet` is defined on **outputs**, keyed by output field —
-  so consumers saw no column lineage at all.
+The soundness keystone is **positional indexing**: every node's map is one
+entry per output-schema field (*position → set of physical `(dataset, column)`
+sources*), never keyed by name. Column refs in expressions resolve to child
+positions via `DFSchema::maybe_index_of_column`, so qualifiers participate
+exactly as DataFusion's own scoping does — aliases/CTEs/self-joins can neither
+collide nor fabricate datasets, and identity provenance survives stacked
+projections. Only the **root** map is published; for DML the SQL planner's
+positional alignment of the input with the target schema keys the facet by the
+target table's field names.
 
-**The sound approach (future work).** Walk the optimized plan **bottom-up**
-(`f_up`), maintaining a per-node map of *output column → set of physical
-`(dataset, column)`*. Resolve that map through the relational operators —
-`SubqueryAlias` (rename, don't fabricate), `Projection` (rewrite via each
-expression's `column_refs`), `Aggregate` (group/agg inputs), `Join` (union of
-sides, with the join predicate's columns as `INDIRECT` influences). Only the
-**root** node's map is published, and the facet is attached to the **output**
-datasets, keyed by output field. Identity vs. computed maps to
-`DIRECT/IDENTITY` vs. `DIRECT/TRANSFORMATION` as before. Until that exists we
-ship correct table-level lineage rather than a misleading column-level facet.
+How sources are classified:
+
+- `DIRECT/IDENTITY` — a bare column chain (through aliases) end to end;
+  `DIRECT/TRANSFORMATION` — any other expression; `DIRECT/AGGREGATION` —
+  aggregate and window-function arguments. Kinds max-merge along the plan.
+- `INDIRECT/{FILTER, JOIN, GROUP_BY, SORT, WINDOW}` — predicate, join-key,
+  group-key, sort-key, and window-key columns shape the output rows without
+  flowing into them. They union upward and are appended to **every** output
+  field's `inputFields` (matching the Spark integration's emission).
+- `masking` is always `false` — masking detection is out of scope.
+
+**Degradation policy.** Any unhandled node (`Extension`, surviving `Subquery`,
+recursive CTEs), arity mismatch, unresolvable column ref, or expression
+embedding a subquery drops the **whole facet** for the statement, with a
+`tracing::debug!` line. A partially-correct per-column facet is
+indistinguishable from a complete one, so whole-facet drop is the only honest
+partial failure; there is deliberately no name-based fallback. Table-level
+lineage is unaffected.
+
+Known gaps (acceptable, recorded): `COPY TO` emits no lineage at all (also at
+table level); recursive CTEs degrade (their work-table scan would fabricate a
+dataset — the table-level extraction shares this latent issue); pure SELECTs
+carry no column lineage because there is no output dataset to attach it to (a
+synthetic "query result" dataset would pollute the graph and break the
+no-inputs/no-outputs suppression).
 
 ### No silent truncation
 
@@ -210,10 +228,10 @@ object spec precisely with `serde` types rather than approximating it:
 - Every facet embeds a `BaseFacet { _producer, _schemaURL }` (the underscore
   prefix is mandated to avoid collisions) pointing at versioned spec URLs.
 - The facets a query engine is expected to populate: `processing_engine` (engine
-  name/version), `schema`, `dataSource`, `sql`, `jobType`, plus `parent` and
-  `errorMessage`. (`columnLineage` is deferred — see *Column lineage is deferred*
-  above.) `processing_engine.version` reports the **DataFusion** version (the
-  engine), while `openlineageAdapterVersion` reports this crate's version.
+  name/version), `schema`, `dataSource`, `sql`, `jobType`, `columnLineage` (on
+  outputs — see *Column lineage* above), plus `parent` and `errorMessage`.
+  `processing_engine.version` reports the **DataFusion** version (the engine),
+  while `openlineageAdapterVersion` reports this crate's version.
 
 Two `serde` details that bit us and are worth calling out:
 

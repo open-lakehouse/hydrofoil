@@ -439,10 +439,140 @@ async fn http_run_facets_unknown_run_is_404() {
 
 #[tokio::test]
 async fn http_column_lineage_returns_empty_graph_not_404() {
+    // A dataset with no stored column lineage renders an empty column view.
     let (_tmp, store) = seeded_store().await;
     let (status, body) = get(store, "/api/v1/column-lineage?nodeId=dataset:raw:orders").await;
     assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
     assert!(body.contains("\"graph\""), "envelope: {body}");
+}
+
+/// One row with a populated `column_lineage_json`, the shape the writer
+/// persists (`run_column_lineage_to_json`): per-dataset entries wrapping the
+/// OpenLineage `columnLineage` facet.
+fn column_lineage_row(event_time: i64, run_id: &str, column_lineage: &str) -> RecordBatch {
+    RecordBatch::try_new(
+        arrow_schema(),
+        vec![
+            Arc::new(StringArray::from(vec!["run"])),
+            Arc::new(StringArray::from(vec![Some("COMPLETE")])),
+            Arc::new(TimestampMicrosecondArray::from(vec![event_time]).with_timezone("UTC")),
+            Arc::new(StringArray::from(vec!["test-producer"])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![Some(run_id.to_string())])),
+            Arc::new(StringArray::from(vec![Some("etl")])),
+            Arc::new(StringArray::from(vec![Some("build_silver")])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![Some(
+                r#"[{"namespace":"raw","name":"customers"}]"#.to_string(),
+            )])),
+            Arc::new(StringArray::from(vec![Some(
+                r#"[{"namespace":"warehouse","name":"silver.customers"}]"#.to_string(),
+            )])),
+            Arc::new(StringArray::from(vec![Some(column_lineage.to_string())])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+        ],
+    )
+    .unwrap()
+}
+
+/// Two runs writing `warehouse:silver.customers` with column lineage; the
+/// newer one maps `id` to `raw:customers.customer_key` (not `.id`), proving
+/// the latest facet wins.
+async fn column_lineage_seeded_store() -> (tempfile::TempDir, LineageStore) {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = local_config(tmp.path().to_str().unwrap());
+    let writer = DeltaWriter::new(&cfg);
+    let older = r#"{"outputs":[{"namespace":"warehouse","name":"silver.customers","columnLineage":{"fields":{"id":{"inputFields":[{"namespace":"raw","name":"customers","field":"id","transformations":[{"type":"DIRECT","subtype":"IDENTITY","description":"","masking":false}]}]}}}}]}"#;
+    let newer = r#"{"outputs":[{"namespace":"warehouse","name":"silver.customers","columnLineage":{"fields":{"id":{"inputFields":[{"namespace":"raw","name":"customers","field":"customer_key","transformations":[{"type":"DIRECT","subtype":"IDENTITY","description":"","masking":false}]}]},"email_hash":{"inputFields":[{"namespace":"raw","name":"customers","field":"email","transformations":[{"type":"DIRECT","subtype":"TRANSFORMATION","description":"","masking":false}]}]}}}}]}"#;
+    writer
+        .append(column_lineage_row(1_700_000_000_000_000, "r1", older))
+        .await
+        .unwrap();
+    writer
+        .append(column_lineage_row(1_700_000_005_000_000, "r2", newer))
+        .await
+        .unwrap();
+    let store = LineageStore::from_config(&cfg);
+    (tmp, store)
+}
+
+#[tokio::test]
+async fn column_lineage_serves_latest_facet_as_field_graph() {
+    let (_tmp, store) = column_lineage_seeded_store().await;
+    let graph = store
+        .column_lineage("dataset:warehouse:silver.customers")
+        .await
+        .unwrap()
+        .graph;
+
+    let ids: Vec<&str> = graph.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        ids.contains(&"datasetField:warehouse:silver.customers:id")
+            && ids.contains(&"datasetField:warehouse:silver.customers:email_hash")
+            && ids.contains(&"datasetField:raw:customers:customer_key")
+            && ids.contains(&"datasetField:raw:customers:email"),
+        "output + input field nodes present: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"datasetField:raw:customers:id"),
+        "the older facet's mapping must not leak in: {ids:?}"
+    );
+    assert!(graph.iter().all(|n| n.node_type == "DATASET_FIELD"));
+
+    let id_node = graph
+        .iter()
+        .find(|n| n.id == "datasetField:warehouse:silver.customers:id")
+        .unwrap();
+    assert_eq!(
+        id_node.in_edges[0].origin, "datasetField:raw:customers:customer_key",
+        "edge mirrors the latest inputFields"
+    );
+    let input_node = graph
+        .iter()
+        .find(|n| n.id == "datasetField:raw:customers:customer_key")
+        .unwrap();
+    assert_eq!(
+        input_node.out_edges[0].destination,
+        "datasetField:warehouse:silver.customers:id"
+    );
+}
+
+#[tokio::test]
+async fn column_lineage_dataset_field_node_id_filters_to_one_field() {
+    let (_tmp, store) = column_lineage_seeded_store().await;
+    let graph = store
+        .column_lineage("datasetField:warehouse:silver.customers:email_hash")
+        .await
+        .unwrap()
+        .graph;
+    let ids: Vec<&str> = graph.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        ids.contains(&"datasetField:warehouse:silver.customers:email_hash")
+            && ids.contains(&"datasetField:raw:customers:email"),
+        "addressed field + its inputs: {ids:?}"
+    );
+    assert!(
+        !ids.iter()
+            .any(|id| id.ends_with(":id") || id.ends_with(":customer_key")),
+        "other fields filtered out: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn http_column_lineage_serves_stored_facet() {
+    let (_tmp, store) = column_lineage_seeded_store().await;
+    let (status, body) = get(
+        store,
+        "/api/v1/column-lineage?nodeId=dataset:warehouse:silver.customers&depth=20&withDownstream=false",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
+    assert!(body.contains("DATASET_FIELD"), "body: {body}");
+    // camelCase envelope for the UI's graph layout.
+    assert!(body.contains("\"inEdges\""), "body: {body}");
+    assert!(body.contains("\"inputFields\""), "body: {body}");
 }
 
 // --- C9.2: search totalCount counts all matches, not the page -----------------

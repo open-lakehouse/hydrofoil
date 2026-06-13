@@ -285,15 +285,17 @@ impl FlightSqlServiceImpl {
         session: Arc<dyn datafusion::catalog::Session>,
         plan: LogicalPlan,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        // Reject DataFusion-native DDL/DML (e.g. `CREATE TABLE`, `INSERT`).
-        // Unity Catalog DDL (`CREATE`/`DROP CATALOG`/`SCHEMA`) is planned as an
-        // `Extension` node, which `verify_plan` does not classify as DDL — that
-        // is intentional, not a bypass: such DDL is authorized by the Cedar gate
-        // in `LakehouseSession::create_physical_plan` (the node lowers to a real
+        // Reject DataFusion-native DDL (e.g. `CREATE TABLE`). Unity Catalog DDL
+        // (`CREATE`/`DROP CATALOG`/`SCHEMA`) is planned as an `Extension` node,
+        // which `verify_plan` does not classify as DDL — that is intentional,
+        // not a bypass: such DDL is authorized by the Cedar gate in
+        // `LakehouseSession::create_physical_plan` (the node lowers to a real
         // `create_catalog`/… action, default-deny if no policy permits it).
-        let options = SQLOptions::new()
-            .with_allow_ddl(false)
-            .with_allow_dml(false);
+        // DML (`INSERT`/`UPDATE`/`DELETE`) is allowed through for the same
+        // reason: the Cedar gate authorizes it as `write_table` per target
+        // table (default-deny), so this pre-filter would only hide the real
+        // authorization decision.
+        let options = SQLOptions::new().with_allow_ddl(false).with_allow_dml(true);
 
         options
             .verify_plan(&plan)
@@ -560,12 +562,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
             }
         };
 
-        // See `do_get_handle`: this blocks DataFusion-native DDL/DML; Unity
-        // Catalog DDL rides through as an `Extension` node and is authorized by
-        // the Cedar gate in `create_physical_plan`, not here.
-        let options = SQLOptions::new()
-            .with_allow_ddl(false)
-            .with_allow_dml(false);
+        // See `do_get_handle`: this blocks DataFusion-native DDL; Unity Catalog
+        // DDL rides through as an `Extension` node, and DML is allowed because
+        // both are authorized by the Cedar gate in `create_physical_plan`
+        // (default-deny), not here.
+        let options = SQLOptions::new().with_allow_ddl(false).with_allow_dml(true);
         options
             .verify_plan(&plan)
             .map_err(|e| Status::internal(format!("{e:?}")))?;
