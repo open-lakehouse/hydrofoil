@@ -66,7 +66,7 @@ async fn seeded_store() -> (tempfile::TempDir, LineageStore) {
         .append(run_event_batch())
         .await
         .unwrap();
-    let store = LineageStore::from_config(&cfg);
+    let store = LineageStore::from_config(&cfg).await.unwrap();
     (tmp, store)
 }
 
@@ -142,7 +142,7 @@ async fn uri_seeded_store() -> (tempfile::TempDir, LineageStore) {
         ))
         .await
         .unwrap();
-    let store = LineageStore::from_config(&cfg);
+    let store = LineageStore::from_config(&cfg).await.unwrap();
     (tmp, store)
 }
 
@@ -231,7 +231,7 @@ async fn empty_table_yields_empty_results() {
     // Point at a path with no table — should be empty, not an error.
     let tmp = tempfile::tempdir().unwrap();
     let cfg = local_config(tmp.path().join("nonexistent").to_str().unwrap());
-    let store = LineageStore::from_config(&cfg);
+    let store = LineageStore::from_config(&cfg).await.unwrap();
     let ns = store.namespaces().await.unwrap();
     assert!(ns.namespaces.is_empty());
 }
@@ -494,7 +494,7 @@ async fn column_lineage_seeded_store() -> (tempfile::TempDir, LineageStore) {
         .append(column_lineage_row(1_700_000_005_000_000, "r2", newer))
         .await
         .unwrap();
-    let store = LineageStore::from_config(&cfg);
+    let store = LineageStore::from_config(&cfg).await.unwrap();
     (tmp, store)
 }
 
