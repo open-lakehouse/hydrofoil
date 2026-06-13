@@ -150,7 +150,10 @@ pub fn context_from_metadata(meta: &MetadataMap, config: &OpenLineageConfig) -> 
 /// (see the module docs for the header grammar). Returns the facet map merged
 /// into the emitted event's job facets; malformed entries are skipped — bad
 /// metadata must never fail the query.
-pub fn job_facets_from_metadata(meta: &MetadataMap, config: &OpenLineageConfig) -> Map<String, Value> {
+pub fn job_facets_from_metadata(
+    meta: &MetadataMap,
+    config: &OpenLineageConfig,
+) -> Map<String, Value> {
     let get = |key: &str| {
         meta.get(key)
             .and_then(|v| v.to_str().ok())
@@ -248,7 +251,10 @@ pub fn hydrofoil_run_facet(
     // A custom facet, so the schema lives under our producer, not openlineage.io.
     let base = BaseFacet {
         producer: config.producer.clone(),
-        schema_url: format!("{}/spec/facets/1-0-0/HydrofoilRunFacet.json", config.producer),
+        schema_url: format!(
+            "{}/spec/facets/1-0-0/HydrofoilRunFacet.json",
+            config.producer
+        ),
     };
 
     let mut facet = serde_json::to_value(base).ok()?;
@@ -477,7 +483,10 @@ mod tests {
         let mut meta = MetadataMap::new();
         meta.insert(headers::JOB_NAME, "dbt.orders".parse().unwrap());
         let name = job_name_from_metadata(&meta, "SELECT id FROM t");
-        assert_eq!(name, "dbt.orders", "client-supplied header is used verbatim");
+        assert_eq!(
+            name, "dbt.orders",
+            "client-supplied header is used verbatim"
+        );
     }
 
     #[test]
@@ -509,7 +518,10 @@ mod tests {
         let exec2 = execution_context(&planning, &cfg);
 
         // Two executions -> two distinct run ids, neither equal to the planning id.
-        assert_ne!(exec1.run_id, exec2.run_id, "each execution is a distinct run");
+        assert_ne!(
+            exec1.run_id, exec2.run_id,
+            "each execution is a distinct run"
+        );
         assert_ne!(exec1.run_id, Some(planning_run));
         assert_ne!(exec2.run_id, Some(planning_run));
 
@@ -531,10 +543,7 @@ mod tests {
     fn parses_namespace_override_and_job_facets() {
         let mut meta = MetadataMap::new();
         meta.insert(headers::JOB_NAMESPACE, "demo-pipeline".parse().unwrap());
-        meta.insert(
-            headers::JOB_DESCRIPTION,
-            "Daily rollup.".parse().unwrap(),
-        );
+        meta.insert(headers::JOB_DESCRIPTION, "Daily rollup.".parse().unwrap());
         meta.insert(
             headers::JOB_TAGS,
             "tier:bronze;adhoc;domain:ops:catalog".parse().unwrap(),
@@ -549,7 +558,12 @@ mod tests {
 
         let doc = &cx.job_facets["documentation"];
         assert_eq!(doc["description"], "Daily rollup.");
-        assert!(doc["_schemaURL"].as_str().unwrap().contains("Documentation"));
+        assert!(
+            doc["_schemaURL"]
+                .as_str()
+                .unwrap()
+                .contains("Documentation")
+        );
 
         let tags = cx.job_facets["tags"]["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 3);
@@ -592,8 +606,8 @@ mod tests {
             ..Default::default()
         };
 
-        let facet = hydrofoil_run_facet(Some(&principal), Some(&agent), &config())
-            .expect("facet present");
+        let facet =
+            hydrofoil_run_facet(Some(&principal), Some(&agent), &config()).expect("facet present");
         assert_eq!(facet["principal"], "User::\"alice\"");
         assert_eq!(facet["agent"]["id"], "assistant-7");
         assert_eq!(facet["agent"]["task"], "verify-volume");

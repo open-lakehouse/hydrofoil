@@ -712,9 +712,11 @@ mod tests {
         use datafusion::datasource::MemTable;
 
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])
-                .unwrap();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
         session
             .ctx
             .register_table(
@@ -826,7 +828,10 @@ mod tests {
         let events = recorder.events.lock().unwrap();
         assert!(!events.is_empty());
         for e in events.iter() {
-            assert_eq!(e.job.namespace, "demo-pipeline", "namespace override applies");
+            assert_eq!(
+                e.job.namespace, "demo-pipeline",
+                "namespace override applies"
+            );
             assert_eq!(e.job.name, "events_summary");
             assert_eq!(
                 e.job.facets.extra["documentation"]["description"],

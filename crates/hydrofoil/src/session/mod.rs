@@ -1194,7 +1194,12 @@ mod integration_tests {
             }
         }
 
-        let engine = Engine::new(Arc::new(Guardrail), None, None, OpenLineageConfig::default());
+        let engine = Engine::new(
+            Arc::new(Guardrail),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        );
         let session = engine.new_session(principal("alice")).expect("session");
 
         // Clean session: the tool call is permitted.

@@ -545,7 +545,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
         );
         let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
-        let plan = match self.executor.create_logical_plan(lh, query.query.clone()).await {
+        let plan = match self
+            .executor
+            .create_logical_plan(lh, query.query.clone())
+            .await
+        {
             Ok(plan) => plan,
             Err(e) => {
                 // Logical planning (parse / resolution) failed: no physical plan

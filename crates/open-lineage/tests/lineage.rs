@@ -235,9 +235,8 @@ async fn failing_transport_does_not_panic() {
 async fn try_new_errors_outside_tokio_runtime() {
     // Spawn a plain OS thread with no Tokio runtime; constructing there must
     // return an error rather than panic.
-    let handle = std::thread::spawn(|| {
-        OpenLineageClient::try_new(Arc::new(NoopTransport)).is_err()
-    });
+    let handle =
+        std::thread::spawn(|| OpenLineageClient::try_new(Arc::new(NoopTransport)).is_err());
     assert!(
         handle.join().unwrap(),
         "try_new must error when no Tokio runtime is present"
@@ -1057,7 +1056,12 @@ async fn execute_error_emits_fail_exactly_once() {
     let client = OpenLineageClient::new(Arc::new(transport.clone()));
     let cfg = config();
     let run_id = Uuid::now_v7();
-    let complete = complete_event(run_id, &Default::default(), &LineageContext::default(), &cfg);
+    let complete = complete_event(
+        run_id,
+        &Default::default(),
+        &LineageContext::default(),
+        &cfg,
+    );
 
     let inner: Arc<dyn datafusion::physical_plan::ExecutionPlan> = Arc::new(ExecErrorExec::new(2));
     let exec = OpenLineageExec::new(inner, client, complete, cfg.producer.clone());
@@ -1087,15 +1091,20 @@ async fn execute_error_emits_fail_exactly_once() {
 
 #[tokio::test]
 async fn partition_count_change_emits_one_terminal() {
+    use datafusion::physical_plan::ExecutionPlan;
     use datafusion_open_lineage::OpenLineageExec;
     use datafusion_open_lineage::builder::complete_event;
-    use datafusion::physical_plan::ExecutionPlan;
 
     let transport = RecordingTransport::default();
     let client = OpenLineageClient::new(Arc::new(transport.clone()));
     let cfg = config();
     let run_id = Uuid::now_v7();
-    let complete = complete_event(run_id, &Default::default(), &LineageContext::default(), &cfg);
+    let complete = complete_event(
+        run_id,
+        &Default::default(),
+        &LineageContext::default(),
+        &cfg,
+    );
 
     // Wrap a 1-partition plan, then rewrite the child to a 3-partition plan via
     // `with_new_children`. The terminal-event counter must follow the node that
