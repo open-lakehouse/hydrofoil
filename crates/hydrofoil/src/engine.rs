@@ -533,7 +533,11 @@ impl SessionStore {
         principal: PrincipalIdentity,
         uc_token: Option<&str>,
     ) -> Result<Arc<Session>> {
-        let key = format!("ephemeral:{}:{}", principal.uid, uc_token_fingerprint(uc_token));
+        let key = format!(
+            "ephemeral:{}:{}",
+            principal.uid,
+            uc_token_fingerprint(uc_token)
+        );
         if let Some(session) = self.get(&key) {
             return Ok(session);
         }

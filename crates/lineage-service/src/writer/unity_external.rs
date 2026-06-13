@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use deltalake::DeltaTableBuilder;
 use deltalake::arrow::array::RecordBatch;
 use deltalake::protocol::SaveMode;
-use deltalake::DeltaTableBuilder;
 use unitycatalog_object_store::{TableOperation, UnityObjectStoreFactory};
 use url::Url;
 
