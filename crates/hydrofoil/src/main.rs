@@ -89,7 +89,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let factory = builder.build().await?;
             tracing::info!("Unity Catalog integration enabled");
-            service = service.with_unity(Arc::new(factory));
+            // The shared factory carries the server-wide `unity.token` (the
+            // fallback). Pass the endpoint/region too so the engine can build a
+            // per-user factory from a request-supplied UC token, forwarding the
+            // caller's identity to UC (per-user permissions).
+            service = service.with_unity(
+                Arc::new(factory),
+                Some(uri.to_string()),
+                cfg.unity.region.clone().filter(|r| !r.is_empty()),
+            );
         }
         _ => {
             tracing::info!("Unity Catalog integration disabled (set unity.endpoint to enable)");

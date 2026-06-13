@@ -1102,7 +1102,10 @@ mod integration_tests {
             None,
             OpenLineageConfig::default(),
         );
-        let session = engine.new_session(principal("alice")).expect("session");
+        let session = engine
+            .new_session(principal("alice"), None)
+            .await
+            .expect("session");
 
         // Register table `t` on the session context.
         let schema = Arc::new(Schema::new(vec![
@@ -1200,7 +1203,10 @@ mod integration_tests {
             None,
             OpenLineageConfig::default(),
         );
-        let session = engine.new_session(principal("alice")).expect("session");
+        let session = engine
+            .new_session(principal("alice"), None)
+            .await
+            .expect("session");
 
         // Clean session: the tool call is permitted.
         assert_eq!(

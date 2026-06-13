@@ -93,6 +93,11 @@ pub struct FlightSqlServiceImpl {
     // Builder-stage inputs, assembled into the `Engine` by [`Self::build`].
     policy: Arc<dyn Policy>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+    /// UC REST endpoint + AWS region, threaded to the [`Engine`] so it can build
+    /// a *per-user* factory from a request-supplied UC token (see
+    /// [`Engine::unity_factory_for`]).
+    unity_endpoint: Option<String>,
+    unity_region: Option<String>,
     lineage: Option<OpenLineageClient>,
     /// Static OpenLineage config (job namespace, producer, engine identity),
     /// built once at startup from the hydrofoil config and threaded through the
@@ -113,6 +118,8 @@ impl FlightSqlServiceImpl {
             executor: CpuRuntime::try_new()?,
             policy,
             unity_factory: None,
+            unity_endpoint: None,
+            unity_region: None,
             lineage: None,
             lineage_config: OpenLineageConfig::default(),
             identity: Some(crate::identity::default_identity_provider()),
@@ -136,8 +143,19 @@ impl FlightSqlServiceImpl {
 
     /// Attach a Unity Catalog object store factory so that sessions resolve
     /// qualified table references against Unity Catalog with vended credentials.
-    pub fn with_unity(mut self, factory: Arc<UnityObjectStoreFactory>) -> Self {
+    ///
+    /// `factory` is the shared, server-wide-token factory (the fallback when a
+    /// request carries no per-user UC token). `endpoint`/`region` are retained so
+    /// the engine can build a *per-user* factory from a request-supplied token.
+    pub fn with_unity(
+        mut self,
+        factory: Arc<UnityObjectStoreFactory>,
+        endpoint: Option<String>,
+        region: Option<String>,
+    ) -> Self {
         self.unity_factory = Some(factory);
+        self.unity_endpoint = endpoint;
+        self.unity_region = region;
         self
     }
 
@@ -166,6 +184,7 @@ impl FlightSqlServiceImpl {
             self.lineage.clone(),
             self.lineage_config.clone(),
         );
+        engine = engine.with_unity_config(self.unity_endpoint.clone(), self.unity_region.clone());
         if let Some(identity) = self.identity.clone() {
             engine = engine.with_identity_provider(identity);
         }
@@ -187,9 +206,13 @@ impl FlightSqlServiceImpl {
             return Ok(session);
         }
         // No session id, or a known-shaped but unknown/expired one: fall through
-        // to the principal's ephemeral session rather than hard-failing.
+        // to the principal's ephemeral session rather than hard-failing. A
+        // per-user UC token (no-handshake clients) selects that user's UC
+        // factory; absent it, the shared server-wide token is used.
         let principal = crate::identity::principal_from_metadata(req.metadata())?;
-        self.session_for_principal(principal).await
+        let uc_token = crate::identity::uc_token_from_metadata(req.metadata());
+        self.session_for_principal(principal, uc_token.as_deref())
+            .await
     }
 
     /// Resolve the stable ephemeral session for an already-parsed principal,
@@ -204,6 +227,7 @@ impl FlightSqlServiceImpl {
     pub(crate) async fn session_for_principal(
         &self,
         principal: datafusion_cedar::PrincipalIdentity,
+        uc_token: Option<&str>,
     ) -> Result<Arc<Session>, Status> {
         let principal = self
             .sessions
@@ -211,7 +235,8 @@ impl FlightSqlServiceImpl {
             .await
             .map_err(|e| status!("Failed to resolve identity", e))?;
         self.sessions
-            .ephemeral_for(principal)
+            .ephemeral_for(principal, uc_token)
+            .await
             .map_err(|e| status!("Failed to resolve session", e))
     }
 
@@ -342,9 +367,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .enrich(principal)
             .await
             .map_err(|e| status!("Failed to resolve identity", e))?;
+        // A per-user UC token (a distinct `x-hydrofoil-uc-token` key, not the
+        // `authorization` session-id channel) binds that user's UC factory into
+        // the session for the connection's lifetime; absent it, the shared
+        // server-wide token is used.
+        let uc_token = crate::identity::uc_token_from_metadata(request.metadata());
         let (session_id, _session) = self
             .sessions
-            .create(principal)
+            .create(principal, uc_token.as_deref())
+            .await
             .map_err(|e| status!("Failed to create session", e))?;
 
         let payload = Bytes::from(session_id.clone());

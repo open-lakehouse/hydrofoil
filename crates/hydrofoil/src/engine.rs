@@ -69,7 +69,16 @@ pub struct StoredStatement {
 /// principals (see module docs).
 pub struct Engine {
     policy: Arc<dyn Policy>,
+    /// The server-wide UC factory built at startup from `unity.token`. Used as
+    /// the fallback when a request carries no per-user UC token.
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+    /// UC REST base URL and AWS region, retained so [`Engine::unity_factory_for`]
+    /// can build a *per-user* factory with a request-supplied bearer token (the
+    /// factory bakes its token at build time, so a different token needs a fresh
+    /// factory — cheap, as `build()` does no network I/O). `None` disables the
+    /// per-user path and only the shared `unity_factory` (if any) is used.
+    unity_endpoint: Option<String>,
+    unity_region: Option<String>,
     lineage: Option<OpenLineageClient>,
     /// Static OpenLineage config (job namespace, producer, engine identity),
     /// built once at startup and used when instrumenting each session's planner.
@@ -101,6 +110,8 @@ impl Engine {
         Arc::new(Self {
             policy,
             unity_factory,
+            unity_endpoint: None,
+            unity_region: None,
             lineage,
             lineage_config,
             identity: Arc::new(NoopIdentityProvider),
@@ -108,6 +119,22 @@ impl Engine {
             #[cfg(feature = "governance")]
             fact_store: Arc::new(datafusion_cedar::InMemoryFactStore::new()),
         })
+    }
+
+    /// Record the UC REST endpoint + AWS region so the engine can build a
+    /// *per-user* [`UnityObjectStoreFactory`] (with a request-supplied bearer
+    /// token) in [`Self::unity_factory_for`]. Without this, only the shared
+    /// startup factory is ever used. Called once at wiring time, before the
+    /// `Engine` `Arc` is shared.
+    pub fn with_unity_config(
+        mut self: Arc<Self>,
+        endpoint: Option<String>,
+        region: Option<String>,
+    ) -> Arc<Self> {
+        let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
+        engine.unity_endpoint = endpoint.filter(|e| !e.is_empty());
+        engine.unity_region = region.filter(|r| !r.is_empty());
+        self
     }
 
     /// The process-wide session fact store (taint ledger). The agent-tool PEP
@@ -154,6 +181,38 @@ impl Engine {
         Ok(principal.enriched(enrichment))
     }
 
+    /// Resolve the [`UnityObjectStoreFactory`] for a session, given an optional
+    /// per-user UC bearer token.
+    ///
+    /// `None` → the shared startup factory (today's behavior; non-UC-auth demos
+    /// keep working). `Some(token)` with a configured UC endpoint → a fresh
+    /// factory built with *that* token, so UC resolves tables and vends
+    /// credentials as the requesting user. The build does no network I/O (only
+    /// URI parsing + client construction), so a per-session factory is cheap.
+    /// `Some(token)` without a configured endpoint falls back to the shared
+    /// factory.
+    async fn unity_factory_for(
+        &self,
+        uc_token: Option<&str>,
+    ) -> Result<Option<Arc<UnityObjectStoreFactory>>> {
+        let (Some(token), Some(endpoint)) = (uc_token, self.unity_endpoint.as_deref()) else {
+            return Ok(self.unity_factory.clone());
+        };
+        let mut builder = UnityObjectStoreFactory::builder()
+            .with_uri(endpoint.to_string())
+            .with_io_runtime(tokio::runtime::Handle::current())
+            .with_token(token.to_string());
+        if let Some(region) = self.unity_region.as_deref() {
+            builder = builder.with_aws_region(region.to_string());
+        }
+        let factory = builder.build().await.map_err(|e| {
+            datafusion::error::DataFusionError::External(Box::new(std::io::Error::other(
+                e.to_string(),
+            )))
+        })?;
+        Ok(Some(Arc::new(factory)))
+    }
+
     /// Build a fresh, principal-scoped [`Session`].
     ///
     /// Each session gets its own `SessionContext` (and therefore its own
@@ -161,19 +220,24 @@ impl Engine {
     /// principal into the session config, and attaches a Unity Catalog resolver
     /// bound to *this* session's runtime — so vended credentials land on this
     /// session's registry and nowhere else.
-    pub fn new_session(&self, principal: PrincipalIdentity) -> Result<Arc<Session>> {
+    ///
+    /// `uc_token`, when present, selects a per-user UC factory (see
+    /// [`Self::unity_factory_for`]) so UC enforces *that* user's permissions.
+    pub async fn new_session(
+        &self,
+        principal: PrincipalIdentity,
+        uc_token: Option<&str>,
+    ) -> Result<Arc<Session>> {
+        let unity_factory = self.unity_factory_for(uc_token).await?;
         let ctx = create_session_for(
             Uuid::new_v4(),
             self.lineage.clone(),
             self.lineage_config.clone(),
             Some(principal.clone()),
-            self.unity_factory.clone(),
+            unity_factory.clone(),
         )?;
 
-        let unity = self
-            .unity_factory
-            .clone()
-            .map(|factory| build_unity_resolver(&ctx, factory));
+        let unity = unity_factory.map(|factory| build_unity_resolver(&ctx, factory));
 
         Ok(Arc::new(Session {
             ctx,
@@ -390,6 +454,21 @@ impl Session {
     }
 }
 
+/// A short, non-reversible fingerprint of a UC token for use in a session
+/// cache key — `"shared"` when absent, else a hex hash. Never the token itself
+/// (it's a bearer JWT), so the key is safe to log.
+fn uc_token_fingerprint(uc_token: Option<&str>) -> String {
+    use std::hash::{Hash, Hasher};
+    match uc_token {
+        None => "shared".to_string(),
+        Some(token) => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            token.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        }
+    }
+}
+
 /// Owns the set of live [`Session`]s, keyed by session id, with idle-TTL
 /// eviction.
 pub struct SessionStore {
@@ -416,9 +495,17 @@ impl SessionStore {
     }
 
     /// Mint a brand-new session for a connection, returning its id and handle.
-    pub fn create(&self, principal: PrincipalIdentity) -> Result<(String, Arc<Session>)> {
+    ///
+    /// `uc_token`, when present, binds a per-user UC factory into the session so
+    /// UC enforces that user's permissions; it lives on the session reused by id
+    /// for the connection's lifetime.
+    pub async fn create(
+        &self,
+        principal: PrincipalIdentity,
+        uc_token: Option<&str>,
+    ) -> Result<(String, Arc<Session>)> {
         let id = Uuid::new_v4().to_string();
-        let session = self.engine.new_session(principal)?;
+        let session = self.engine.new_session(principal, uc_token).await?;
         self.sessions.insert(id.clone(), session.clone());
         Ok((id, session))
     }
@@ -433,16 +520,24 @@ impl SessionStore {
     /// Resolve (or create) the stable ephemeral session for a principal that did
     /// not establish a session via handshake.
     ///
-    /// Keyed by `ephemeral:{principal_uid}` so the two RPCs of one logical query
-    /// (`get_flight_info_*` then `do_get_*`) share a statement store even without
-    /// a client-provided session id. This preserves today's no-handshake demo
-    /// behaviour (DuckDB, plain pyarrow) under the new model.
-    pub fn ephemeral_for(&self, principal: PrincipalIdentity) -> Result<Arc<Session>> {
-        let key = format!("ephemeral:{}", principal.uid);
+    /// Keyed by `ephemeral:{principal_uid}:{token_fp}` so the two RPCs of one
+    /// logical query (`get_flight_info_*` then `do_get_*`) share a statement
+    /// store even without a client-provided session id. This preserves today's
+    /// no-handshake demo behaviour (DuckDB, plain pyarrow) under the new model.
+    ///
+    /// The token fingerprint (`"shared"` for no token, else a hash of it — never
+    /// the token itself) keeps a user's queries on one cached per-user UC factory
+    /// while isolating distinct tokens. The TTL sweeper reaps stale ones.
+    pub async fn ephemeral_for(
+        &self,
+        principal: PrincipalIdentity,
+        uc_token: Option<&str>,
+    ) -> Result<Arc<Session>> {
+        let key = format!("ephemeral:{}:{}", principal.uid, uc_token_fingerprint(uc_token));
         if let Some(session) = self.get(&key) {
             return Ok(session);
         }
-        let session = self.engine.new_session(principal)?;
+        let session = self.engine.new_session(principal, uc_token).await?;
         // `entry` guards against a concurrent insert racing between the `get`
         // above and here.
         let session = self.sessions.entry(key).or_insert(session).clone();
@@ -532,7 +627,7 @@ mod tests {
     #[tokio::test]
     async fn store_create_and_resolve() {
         let store = SessionStore::new(engine(), Duration::from_secs(60));
-        let (id, session) = store.create(principal("alice")).unwrap();
+        let (id, session) = store.create(principal("alice"), None).await.unwrap();
 
         let resolved = store.get(&id).expect("session resolves by id");
         assert!(
@@ -546,7 +641,7 @@ mod tests {
     async fn ttl_evicts_idle_sessions() {
         // Zero TTL: any positive idle time evicts on the next sweep.
         let store = SessionStore::new(engine(), Duration::ZERO);
-        let (id, session) = store.create(principal("alice")).unwrap();
+        let (id, session) = store.create(principal("alice"), None).await.unwrap();
         // Back-date last-used so idle() is clearly positive without sleeping.
         session.last_used_ms.store(0, Ordering::Relaxed);
         // created_at is ~now, so idle() ~= 0; force a measurable gap.
@@ -558,9 +653,9 @@ mod tests {
     #[tokio::test]
     async fn ephemeral_is_stable_per_principal() {
         let store = SessionStore::new(engine(), Duration::from_secs(60));
-        let a = store.ephemeral_for(principal("alice")).unwrap();
-        let a2 = store.ephemeral_for(principal("alice")).unwrap();
-        let b = store.ephemeral_for(principal("bob")).unwrap();
+        let a = store.ephemeral_for(principal("alice"), None).await.unwrap();
+        let a2 = store.ephemeral_for(principal("alice"), None).await.unwrap();
+        let b = store.ephemeral_for(principal("bob"), None).await.unwrap();
 
         assert!(
             Arc::ptr_eq(&a, &a2),
@@ -572,13 +667,47 @@ mod tests {
         );
     }
 
+    /// The UC token is part of the ephemeral cache key: the same (principal,
+    /// token) reuses one session (and its per-user UC factory), while a distinct
+    /// token for the same principal gets a distinct session.
+    #[tokio::test]
+    async fn ephemeral_keys_on_uc_token() {
+        let store = SessionStore::new(engine(), Duration::from_secs(60));
+        let shared = store.ephemeral_for(principal("alice"), None).await.unwrap();
+        let tok_a = store
+            .ephemeral_for(principal("alice"), Some("jwt-a"))
+            .await
+            .unwrap();
+        let tok_a2 = store
+            .ephemeral_for(principal("alice"), Some("jwt-a"))
+            .await
+            .unwrap();
+        let tok_b = store
+            .ephemeral_for(principal("alice"), Some("jwt-b"))
+            .await
+            .unwrap();
+
+        assert!(
+            Arc::ptr_eq(&tok_a, &tok_a2),
+            "same principal + same token -> same session"
+        );
+        assert!(
+            !Arc::ptr_eq(&tok_a, &shared),
+            "token vs no-token -> distinct sessions"
+        );
+        assert!(
+            !Arc::ptr_eq(&tok_a, &tok_b),
+            "distinct tokens -> distinct sessions"
+        );
+    }
+
     /// Credential isolation: distinct sessions must own distinct RuntimeEnvs so
     /// vended UC object stores cannot cross principals.
     #[tokio::test]
     async fn sessions_have_isolated_runtimes() {
         let store = SessionStore::new(engine(), Duration::from_secs(60));
-        let (_, a) = store.create(principal("alice")).unwrap();
-        let (_, b) = store.create(principal("bob")).unwrap();
+        let (_, a) = store.create(principal("alice"), None).await.unwrap();
+        let (_, b) = store.create(principal("bob"), None).await.unwrap();
         assert!(
             !Arc::ptr_eq(&a.runtime_env(), &b.runtime_env()),
             "each session must own its own RuntimeEnv / object-store registry"
@@ -593,7 +722,8 @@ mod tests {
         use datafusion::catalog::Session as _;
 
         let (_, session) = SessionStore::new(engine(), Duration::from_secs(60))
-            .create(principal("alice"))
+            .create(principal("alice"), None)
+            .await
             .unwrap();
         let agent = AgentContext {
             agent_id: Some("agent-7".into()),
@@ -648,7 +778,8 @@ mod tests {
             OpenLineageConfig::default(),
         );
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
-            .create(principal("alice"))
+            .create(principal("alice"), None)
+            .await
             .unwrap();
 
         // A tiny table to scan.
@@ -746,7 +877,8 @@ mod tests {
     async fn prepared_statement_reexecution_uses_distinct_run_ids() {
         let (eng, recorder) = recording_engine();
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
-            .create(principal("alice"))
+            .create(principal("alice"), None)
+            .await
             .unwrap();
         register_tiny_table(&session);
 
@@ -802,7 +934,8 @@ mod tests {
     async fn client_metadata_facets_land_in_events() {
         let (eng, recorder) = recording_engine();
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
-            .create(principal("alice"))
+            .create(principal("alice"), None)
+            .await
             .unwrap();
         register_tiny_table(&session);
 
@@ -851,7 +984,8 @@ mod tests {
     async fn dataset_less_query_emits_no_events() {
         let (eng, recorder) = recording_engine();
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
-            .create(principal("alice"))
+            .create(principal("alice"), None)
+            .await
             .unwrap();
         register_tiny_table(&session);
 
