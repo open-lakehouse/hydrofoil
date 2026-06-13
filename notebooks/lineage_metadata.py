@@ -30,9 +30,14 @@
 # policy_demo.py uses for the principal.
 #
 # ── Prerequisites ───────────────────────────────────────────────────────────
-#   1. The live stack up, and hydrofoil running with lineage wired:
+#   1. The live stack up, and hydrofoil running ON THE HOST with lineage wired:
 #          just env-up       # lineage-service on :8091, Marquez web on :3000
-#          just hydro        # hydrofoil Flight SQL on :50051
+#          just hydro        # host hydrofoil Flight SQL on :50052 (the recipe
+#                            # overrides lineage.url to the host-published
+#                            # http://localhost:8091 — the in-config
+#                            # lineage-service hostname only resolves in-compose)
+#      The containerized hydrofoil on :50051 runs the released image, which
+#      predates these metadata headers — don't point this notebook at it.
 #   2. The S3-backed demo table demo.managed_demo.events resolvable via Unity
 #      Catalog (the same table duckdb_flight.py queries).
 #
@@ -55,8 +60,11 @@ def _():
 
     import marimo as mo
 
-    # Hydrofoil's Flight SQL endpoint and the lineage read API (Marquez-compatible).
-    ENDPOINT = "grpc://localhost:50051"
+    # Hydrofoil's Flight SQL endpoint: the HOST-run server (`just hydro`,
+    # port 50052 per environments/config/live/hydrofoil.toml) — NOT the
+    # containerized hydrofoil on :50051, whose image predates the metadata
+    # headers. The lineage read API is the compose-published lineage-service.
+    ENDPOINT = "grpc://localhost:50052"
     LINEAGE_API = "http://localhost:8091/api/v1"
 
     # The S3-backed demo table (Unity Catalog managed).

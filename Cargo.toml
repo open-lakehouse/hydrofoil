@@ -62,9 +62,9 @@ uuid = { version = "1", features = ["v4"] }
 # sibling checkouts. To iterate against in-progress fork changes locally, swap
 # these for the `path = "../delta-rs/..."` / `../unitycatalog-rs/...` overrides
 # (and bump the delta-rs rev here once the changes are pushed).
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "03820dcf22f235c07e07b65e6caa3a1d36a5987f", features = ["rest-client", "axum"] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "03820dcf22f235c07e07b65e6caa3a1d36a5987f" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "03820dcf22f235c07e07b65e6caa3a1d36a5987f" }
-datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "03820dcf22f235c07e07b65e6caa3a1d36a5987f" }
+unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "f49bb4c5a4cb0f295918f0c275689b5489d53361", features = ["rest-client", "axum"] }
+unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "f49bb4c5a4cb0f295918f0c275689b5489d53361" }
+unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "f49bb4c5a4cb0f295918f0c275689b5489d53361" }
+datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "f49bb4c5a4cb0f295918f0c275689b5489d53361" }
 deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion", "cloud"] }
 deltalake = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion"] }
