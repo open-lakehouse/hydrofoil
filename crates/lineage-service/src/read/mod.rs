@@ -40,9 +40,9 @@ use deltalake::datafusion::datasource::TableProvider;
 #[cfg(feature = "unity")]
 use deltalake::delta_datafusion::DeltaScanNext;
 #[cfg(feature = "unity")]
-use deltalake::delta_datafusion::engine::DataFusionEngine;
-#[cfg(feature = "unity")]
 use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
+#[cfg(feature = "unity")]
+use deltalake::delta_datafusion::engine::DataFusionEngine;
 #[cfg(feature = "unity")]
 use deltalake::logstore::{StorageConfig, default_logstore};
 #[cfg(feature = "unity")]
@@ -203,17 +203,16 @@ impl LineageStore {
                 table_uri,
                 storage_options,
             } => {
-                let url = ensure_table_uri(table_uri)
-                    .map_err(|e| ReadError::OpenTable(e.to_string()))?;
-                let table = match open_table_with_storage_options(url, storage_options.clone())
-                    .await
-                {
-                    Ok(t) => t,
-                    // Table not created yet — treat as empty rather than an error.
-                    Err(DeltaTableError::NotATable(_))
-                    | Err(DeltaTableError::InvalidTableLocation(_)) => return Ok(None),
-                    Err(e) => return Err(ReadError::OpenTable(e.to_string())),
-                };
+                let url =
+                    ensure_table_uri(table_uri).map_err(|e| ReadError::OpenTable(e.to_string()))?;
+                let table =
+                    match open_table_with_storage_options(url, storage_options.clone()).await {
+                        Ok(t) => t,
+                        // Table not created yet — treat as empty rather than an error.
+                        Err(DeltaTableError::NotATable(_))
+                        | Err(DeltaTableError::InvalidTableLocation(_)) => return Ok(None),
+                        Err(e) => return Err(ReadError::OpenTable(e.to_string())),
+                    };
                 let ctx = SessionContext::new();
                 table
                     .update_datafusion_session(&ctx.state())

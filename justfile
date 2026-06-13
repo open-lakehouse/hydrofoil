@@ -8,14 +8,57 @@ _default:
 # vars. Telemetry endpoints stay env-driven (see below); secrets go via UC_TOKEN
 # / OPENLINEAGE_API_KEY.
 hydro:
-    RUST_LOG="hydrofoil=debug" \
-    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://localhost:10120/v1/traces}" \
-    MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-0}" \
-    cargo run --bin hydrofoil -- "${HYDROFOIL_CONFIG:-environments/config/local/hydrofoil.toml}"
+    RUST_LOG="hydrofoil=debug,deltalake=debug,deltalake_core=debug,buoyant_kernel=debug" \
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-https://mlflow.openlakehousedemos.dev/v1/traces}" \
+    MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-2}" \
+    HYDROFOIL__LINEAGE__URL="${HYDROFOIL__LINEAGE__URL:-https://lineage.openlakehousedemos.dev}" \
+    cargo run --bin hydrofoil -- "${HYDROFOIL_CONFIG:-environments/config/live/hydrofoil.toml}"
+
+# run the lineage-service on the host against the DEPLOYED UC (the
+# unitycatalog-quickstart ECS stack). Requires UNITY_CATALOG_URL +
+# UNITY_CATALOG_TOKEN (and AWS_REGION) in the env — see
+# environments/config/deployed/README.md. Override the config path with
+# `LINEAGE_CONFIG=…`, or individual fields with `LINEAGE__*` env vars.
+lineage-deployed:
+    @: "${UNITY_CATALOG_URL:?not set — see environments/config/deployed/README.md}" \
+       "${UNITY_CATALOG_TOKEN:?not set — see environments/config/deployed/README.md}"
+    RUST_LOG="${RUST_LOG:-lineage_service=debug}" \
+    cargo run -p lineage-service -- "${LINEAGE_CONFIG:-environments/config/deployed/lineage-service.toml}"
 
 # run marimo notebook server
 scratch:
-    uvx --directory notebooks/ marimo edit --sandbox client.py
+    uvx --directory notebooks/ marimo edit --sandbox duckdb_flight.py
+
+# mint per-user UC tokens for the demo notebooks and write notebooks/.env.
+# For each email in UC_DEMO_USERS (default alice@example.com,bob@example.com),
+# calls the sibling unitycatalog-quickstart minter and writes UC_TOKEN_<USER>=…
+# (the env-var name _demo_auth.py derives from the email's local-part). Requires
+# the quickstart's create-user-jwt.sh and a reachable UC server with those users
+# (its UC_USERS bootstrap). Override the repo path with UC_QUICKSTART; the minter
+# reads UC_SERVER/UC_ADMIN_TOKEN from that repo's .env (source it first, e.g.
+# `set -a; source ~/code/unitycatalog-quickstart/.env; set +a`).
+mint-demo-tokens:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    quickstart="${UC_QUICKSTART:-$HOME/code/unitycatalog-quickstart}"
+    minter="$quickstart/scripts/create-user-jwt.sh"
+    [[ -x "$minter" ]] || { echo "minter not found: $minter (set UC_QUICKSTART)" >&2; exit 1; }
+    IFS=',' read -ra users <<< "${UC_DEMO_USERS:-alice@example.com,bob@example.com}"
+    out="notebooks/.env"
+    echo "# Minted by 'just mint-demo-tokens' — do not commit (gitignored)." > "$out"
+    echo "UC_DEMO_USERS=${UC_DEMO_USERS:-alice@example.com,bob@example.com}" >> "$out"
+    for email in "${users[@]}"; do
+      email="$(echo "$email" | xargs)"  # trim
+      [[ -n "$email" ]] || continue
+      local_part="${email%@*}"
+      # Match _demo_auth._env_var_name: non-alphanumerics -> '_', uppercased.
+      slug="$(echo "$local_part" | sed 's/[^[:alnum:]]/_/g' | tr 'a-z' 'A-Z')"
+      var="UC_TOKEN_${slug}"
+      echo "minting token for $email -> $var" >&2
+      token="$("$minter" "$email")"
+      echo "${var}=${token}" >> "$out"
+    done
+    echo "wrote $out" >&2
 
 env-up env_name="live" *args:
     docker compose -f environments/{{ env_name }}.compose.yaml up -d {{ args }}

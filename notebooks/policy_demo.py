@@ -91,23 +91,28 @@ def _(mo):
 
 @app.cell
 def _(ENDPOINT):
-    from adbc_driver_flightsql import DatabaseOptions
     from adbc_driver_flightsql.dbapi import connect
+
+    import _demo_auth
 
     def run_as(principal: str, query: str, region: str | None = None):
         """Execute `query` as `principal`, sending the hydrofoil principal/region
-        metadata headers. Returns (arrow_table, error_string)."""
-        headers = {"x-hydrofoil-principal": principal}
-        if region is not None:
-            headers["x-hydrofoil-region"] = region
+        metadata headers — and, when the principal's email has a UC token
+        configured, the `x-hydrofoil-uc-token` so UC enforces that user's
+        permissions too. Returns (arrow_table, error_string).
 
-        db_kwargs = {
-            DatabaseOptions.TLS_SKIP_VERIFY.value: "true",
-            **{
-                f"{DatabaseOptions.RPC_CALL_HEADER_PREFIX.value}{k}": v
-                for k, v in headers.items()
-            },
-        }
+        `principal` is the full Cedar UID (e.g. `User::"alice@example.com"`); the
+        email inside the quotes is what `_demo_auth` keys the UC token on.
+        """
+        email = principal.split('"')[1] if '"' in principal else principal
+        # _demo_auth.db_kwargs attaches the principal + (if present) the UC token;
+        # we pass the principal header explicitly here to keep the *raw* Cedar UID
+        # (the Cedar-gate demo uses short names like User::"alice", which may not
+        # be emails), and only borrow the token lookup.
+        db_kwargs = _demo_auth.db_kwargs(email, region=region)
+        db_kwargs[f"{_demo_auth.RPC_CALL_HEADER_PREFIX}{_demo_auth.PRINCIPAL_HEADER}"] = (
+            principal
+        )
         try:
             with connect(ENDPOINT, db_kwargs=db_kwargs) as conn:
                 cur = conn.cursor()
@@ -216,6 +221,50 @@ def _(alice_table, bob_table, mo):
         "(the per-principal row filter), while `ssn` is **masked for both** (the "
         "per-table column mask) — all from Cedar governance applied at plan time."
     )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        """
+        ## Interactive — Unity Catalog per-user permissions
+
+        The cells above demonstrate hydrofoil's **Cedar** layer. This one adds the
+        **Unity Catalog** layer: pick a user and the notebook forwards *their* UC
+        token (`x-hydrofoil-uc-token`) alongside the principal, so UC resolves
+        tables and vends credentials as that user — different users see different
+        results per their UC grants.
+
+        Tokens come from `notebooks/.env` (`just mint-demo-tokens`); they are
+        never shown here — only the user's email. A user with no token configured
+        falls back to hydrofoil's shared token.
+        """
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    import _demo_auth
+
+    user = _demo_auth.user_dropdown(mo)
+    user
+    return (user,)
+
+
+@app.cell
+def _(QUERY, mo, run_as, user):
+    # Run the same SELECT as the chosen UC user. Their UC token (if configured)
+    # is forwarded so UC enforces their grants; the Cedar principal is the
+    # email-encoded UID.
+    _principal = f'User::"{user.value}"'
+    _table, _err = run_as(_principal, QUERY)
+    mo.md(
+        f"**{user.value} → error**\n\n```\n{_err}\n```"
+        if _err is not None
+        else f"**{user.value}** sees **{_table.num_rows} rows**."
+    ) if _err is not None else _table
     return
 
 

@@ -50,6 +50,13 @@ pub mod headers {
     pub const ROLE: &str = "x-hydrofoil-role";
     /// The principal's region (folded into `principal.region`).
     pub const REGION: &str = "x-hydrofoil-region";
+    /// The caller's Unity Catalog bearer token, forwarded verbatim to UC so it
+    /// resolves tables and vends credentials as *that* user (demo per-user
+    /// permissions). A distinct key from `authorization`, which the Flight path
+    /// already uses as the session-id channel (see `crate::server`). On the HTTP
+    /// surface the token rides the standard `Authorization: Bearer` header
+    /// instead (see [`uc_token_from_http_headers`]).
+    pub const UC_TOKEN: &str = "x-hydrofoil-uc-token";
 }
 
 /// The default principal used when a request carries no principal metadata.
@@ -98,6 +105,35 @@ pub fn principal_from_http_headers(
             .map(str::to_string)
     };
     principal_from_headers(get)
+}
+
+/// Extract the caller's Unity Catalog bearer token from gRPC metadata.
+///
+/// Read from the dedicated [`headers::UC_TOKEN`] (`x-hydrofoil-uc-token`) key —
+/// *not* `authorization`, which the Flight path overloads as the session-id
+/// channel ([`crate::server::session_id_from_metadata`]). `None` when absent, in
+/// which case the session falls back to the server-wide UC token. Never logged
+/// (it's a bearer JWT).
+pub fn uc_token_from_metadata(meta: &MetadataMap) -> Option<String> {
+    meta.get(headers::UC_TOKEN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .filter(|t| !t.is_empty())
+}
+
+/// Extract the caller's Unity Catalog bearer token from HTTP headers.
+///
+/// Reads the standard `Authorization: Bearer <uc-jwt>` header (the HTTP `/query`
+/// surface has no session-id overload, unlike the Flight path). `None` when
+/// absent or not a bearer token, in which case the session falls back to the
+/// server-wide UC token. Never logged (it's a bearer JWT).
+pub fn uc_token_from_http_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|auth| auth.strip_prefix("Bearer "))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 /// A failure to parse a principal from request headers — the supplied uid was
@@ -380,5 +416,49 @@ mod tests {
         let mut meta = MetadataMap::new();
         meta.insert(headers::PRINCIPAL, "not a valid uid".parse().unwrap());
         assert!(principal_from_metadata(&meta).is_err());
+    }
+
+    /// The email-encoded principal UID parses unchanged (Cedar quoted EIDs allow
+    /// `@`/`.`), so the client can carry the UC identity directly in the UID.
+    #[test]
+    fn parses_email_encoded_principal_uid() {
+        let mut meta = MetadataMap::new();
+        meta.insert(
+            headers::PRINCIPAL,
+            "User::\"alice@example.com\"".parse().unwrap(),
+        );
+        let id = principal_from_metadata(&meta).unwrap();
+        assert_eq!(id.uid.to_string(), "User::\"alice@example.com\"");
+    }
+
+    #[test]
+    fn uc_token_from_metadata_reads_dedicated_key() {
+        let mut meta = MetadataMap::new();
+        meta.insert(headers::UC_TOKEN, "jwt-abc".parse().unwrap());
+        assert_eq!(uc_token_from_metadata(&meta).as_deref(), Some("jwt-abc"));
+        // Falls back to None — not the `authorization` session-id channel.
+        meta.insert("authorization", "Bearer session-id".parse().unwrap());
+        let mut only_auth = MetadataMap::new();
+        only_auth.insert("authorization", "Bearer session-id".parse().unwrap());
+        assert!(uc_token_from_metadata(&only_auth).is_none());
+    }
+
+    #[test]
+    fn uc_token_from_metadata_absent_is_none() {
+        assert!(uc_token_from_metadata(&MetadataMap::new()).is_none());
+    }
+
+    #[test]
+    fn uc_token_from_http_headers_strips_bearer() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer jwt-xyz".parse().unwrap(),
+        );
+        assert_eq!(
+            uc_token_from_http_headers(&headers).as_deref(),
+            Some("jwt-xyz")
+        );
+        assert!(uc_token_from_http_headers(&axum::http::HeaderMap::new()).is_none());
     }
 }

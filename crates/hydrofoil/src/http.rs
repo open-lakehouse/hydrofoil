@@ -146,9 +146,13 @@ async fn execute(
     // (UC factory + Cedar policy) the Flight path uses. UC table resolution and
     // per-session credential vending happen inside planning/execution.
     let principal = crate::identity::principal_from_http_headers(headers).map_err(|e| e.message)?;
+    // A per-user UC token (`Authorization: Bearer <uc-jwt>`) selects that user's
+    // UC factory so UC enforces their permissions; absent it, the shared
+    // server-wide token is used.
+    let uc_token = crate::identity::uc_token_from_http_headers(headers);
     let session = state
         .service
-        .session_for_principal(principal)
+        .session_for_principal(principal, uc_token.as_deref())
         .await
         .map_err(|s| s.message().to_string())?;
 

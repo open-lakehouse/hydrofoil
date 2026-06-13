@@ -1,0 +1,13 @@
+# Marker project for the demo notebooks. Its sole purpose is the [tool.marimo]
+# block below: marimo auto-loads a sibling `.env` only when a `pyproject.toml`
+# with a `[tool.marimo]` section sits next to it (marimo issue #5702). That makes
+# `notebooks/.env` (per-user UC tokens — see `_demo_auth.py`, `just
+# mint-demo-tokens`) available to the notebooks as ordinary environment variables.
+#
+# Notebook *dependencies* are NOT declared here — each notebook carries its own
+# PEP 723 inline `# /// script` block for `uvx --sandbox` runs.
+
+[tool.marimo.runtime]
+# Load notebooks/.env (gitignored; holds UC_TOKEN_<USER> secrets). .env.example
+# is the committed template.
+dotenv = [".env"]
