@@ -36,6 +36,15 @@ services:
     environment:
       UC_URI: http://unity-catalog:8081
       UC_ENDPOINT: http://unity-catalog:8081/api/2.1/unity-catalog/
+    # Per-user UC tokens for the demo notebooks (UC_TOKEN_<USER>, optional
+    # UC_DEMO_USERS). Mint with `just mint-demo-tokens` (writes notebooks/.env);
+    # `required: false` so the stack still comes up without it (notebooks then use
+    # hydrofoil's shared UC token). marimo also auto-loads this file in-container
+    # via notebooks/pyproject.toml's [tool.marimo] block; injecting it here too
+    # makes the tokens available as process env regardless.
+    env_file:
+      - path: ../notebooks/.env
+        required: false
     volumes:
       # Bind-mount the repo-root notebooks/ dir RW so edits land on the host.
       - ../notebooks:/notebooks

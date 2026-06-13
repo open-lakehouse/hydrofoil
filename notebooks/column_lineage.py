@@ -111,17 +111,29 @@ def _(SOURCE, TARGET, mo):
 
 
 @app.cell
-def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID):
-    from adbc_driver_flightsql import ConnectionOptions, DatabaseOptions
+def _(mo):
+    # Pick the UC user this pipeline runs as; their token (notebooks/.env) is
+    # forwarded so UC enforces their permissions. Only the email is shown.
+    import _demo_auth
+
+    user = _demo_auth.user_dropdown(mo)
+    user
+    return (user,)
+
+
+@app.cell
+def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID, user):
+    from adbc_driver_flightsql import ConnectionOptions
     from adbc_driver_flightsql.dbapi import connect
 
-    HEADER_PREFIX = DatabaseOptions.RPC_CALL_HEADER_PREFIX.value
+    import _demo_auth
 
     # Pipeline-scoped context (see lineage_metadata.py for the full header
-    # walkthrough): the principal authorizes the Cedar `write_table` check;
-    # the parent facet groups every step under one orchestrator run.
-    pipeline_headers = {
-        "x-hydrofoil-principal": 'User::"robert.pack"',
+    # walkthrough): the selected user's principal authorizes the Cedar
+    # `write_table` check and their UC token (forwarded, never rendered) lets UC
+    # enforce their permissions; the parent facet groups every step under one
+    # orchestrator run.
+    lineage_headers = {
         "x-openlineage-job-namespace": NAMESPACE,
         "x-openlineage-parent-run-id": PARENT_RUN_ID,
         "x-openlineage-parent-job-namespace": NAMESPACE,
@@ -130,10 +142,7 @@ def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID):
 
     conn = connect(
         ENDPOINT,
-        db_kwargs={
-            DatabaseOptions.TLS_SKIP_VERIFY.value: "true",
-            **{f"{HEADER_PREFIX}{k}": v for k, v in pipeline_headers.items()},
-        },
+        db_kwargs=_demo_auth.db_kwargs(user.value, extra=lineage_headers),
     )
     return ConnectionOptions, conn
 

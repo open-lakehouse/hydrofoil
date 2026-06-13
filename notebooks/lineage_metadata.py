@@ -50,7 +50,7 @@
 
 import marimo
 
-__generated_with = "0.23.8"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -65,17 +65,25 @@ def _():
     # containerized hydrofoil on :50051, whose image predates the metadata
     # headers. The lineage read API is the compose-published lineage-service.
     ENDPOINT = "grpc://localhost:50052"
-    LINEAGE_API = "http://localhost:8091/api/v1"
+    LINEAGE_API = "https://lineage.openlakehousedemos.dev/api/v1"
 
     # The S3-backed demo table (Unity Catalog managed).
-    TABLE = "demo.managed_demo.events"
+    TABLE = "demo.lineage.events"
 
     # The "orchestrator" identity for this notebook session: every step's lineage
     # run will parent to this run id under the demo-pipeline namespace.
     NAMESPACE = "demo-pipeline"
     PARENT_JOB = "nightly_refresh"
     PARENT_RUN_ID = str(uuid.uuid4())
-    return ENDPOINT, LINEAGE_API, NAMESPACE, PARENT_JOB, PARENT_RUN_ID, TABLE, mo
+    return (
+        ENDPOINT,
+        LINEAGE_API,
+        NAMESPACE,
+        PARENT_JOB,
+        PARENT_RUN_ID,
+        TABLE,
+        mo,
+    )
 
 
 @app.cell(hide_code=True)
@@ -99,17 +107,29 @@ def _(NAMESPACE, PARENT_RUN_ID, mo):
 
 
 @app.cell
-def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID):
-    from adbc_driver_flightsql import ConnectionOptions, DatabaseOptions
+def _(mo):
+    # Pick the UC user this pipeline runs as; their token (notebooks/.env) is
+    # forwarded so UC enforces their permissions. Only the email is shown.
+    import _demo_auth
+
+    user = _demo_auth.user_dropdown(mo)
+    user
+    return (user,)
+
+
+@app.cell
+def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID, user):
+    from adbc_driver_flightsql import ConnectionOptions
     from adbc_driver_flightsql.dbapi import connect
 
-    HEADER_PREFIX = DatabaseOptions.RPC_CALL_HEADER_PREFIX.value
+    import _demo_auth
 
     # Pipeline-scoped context, fixed for the lifetime of the connection. The
     # parent facet needs all three parent fields (run id, job namespace, job
-    # name) — hydrofoil ignores a partial set.
-    pipeline_headers = {
-        "x-hydrofoil-principal": 'User::"robert.pack"',
+    # name) — hydrofoil ignores a partial set. The selected user's principal and
+    # UC token come from _demo_auth (the token is forwarded so UC enforces that
+    # user's permissions; it is never rendered).
+    lineage_headers = {
         "x-openlineage-job-namespace": NAMESPACE,
         "x-openlineage-parent-run-id": PARENT_RUN_ID,
         "x-openlineage-parent-job-namespace": NAMESPACE,
@@ -118,12 +138,9 @@ def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID):
 
     conn = connect(
         ENDPOINT,
-        db_kwargs={
-            DatabaseOptions.TLS_SKIP_VERIFY.value: "true",
-            **{f"{HEADER_PREFIX}{k}": v for k, v in pipeline_headers.items()},
-        },
+        db_kwargs=_demo_auth.db_kwargs(user.value, extra=lineage_headers),
     )
-    return ConnectionOptions, HEADER_PREFIX, conn
+    return ConnectionOptions, conn
 
 
 @app.cell
@@ -194,7 +211,7 @@ def _(mo):
 @app.cell
 def _(TABLE, run_step):
     summary = run_step(
-        f"SELECT event, COUNT(*) AS occurrences FROM {TABLE} GROUP BY event ORDER BY occurrences DESC",
+        f"SELECT event_kind, COUNT(*) AS occurrences FROM {TABLE} GROUP BY event_kind ORDER BY occurrences DESC",
         job_name="events_summary",
         description="Daily rollup of event volume per event type.",
         tags="tier:bronze;domain:ops;pii:false",

@@ -4,6 +4,7 @@
 #     "duckdb>=1.5.0",
 #     "adbc-driver-flightsql>=1.9.0",
 #     "marimo",
+#     "pyarrow==24.0.0",
 # ]
 # ///
 
@@ -86,34 +87,51 @@ def _():
 
 
 @app.cell
-def _(ENDPOINT, driver_path):
+def _(mo):
+    # Pick the UC user to connect as; their token (if configured in notebooks/.env)
+    # is forwarded so UC enforces their permissions. Only the email is shown.
+    import _demo_auth
+
+    user = _demo_auth.user_dropdown(mo)
+    user
+    return _demo_auth, user
+
+
+@app.cell
+def _(ENDPOINT, _demo_auth, driver_path, user):
     # Install/load adbc_scanner, then open an ADBC Flight SQL connection to hydrofoil. The
     # connection handle is a BIGINT we stash in a DuckDB variable for the scan cell.
     #
-    # The x-hydrofoil-principal RPC call header mirrors policy_demo.py, so hydrofoil resolves a
-    # real principal (without it the default is User::"anonymous"). It's not required for
-    # SELECT 1 to succeed — and whether adbc_scanner forwards unrecognized option keys to the
-    # driver is undocumented, so don't treat the header arriving as load-bearing for this test.
+    # The x-hydrofoil-principal / x-hydrofoil-uc-token RPC call headers carry the selected
+    # user's identity and UC token, so hydrofoil resolves a real principal and (when a token
+    # is configured) UC enforces that user's permissions. Whether adbc_scanner forwards
+    # unrecognized option keys to the driver is undocumented, so don't treat the headers
+    # arriving as load-bearing for a bare SELECT.
     import duckdb
 
     con = duckdb.connect()
     con.execute("INSTALL adbc_scanner FROM community; LOAD adbc_scanner;")
     con.execute("SET VARIABLE flightsql_driver = ?;", [driver_path])
-    con.execute(
-        f"""
-        SET VARIABLE conn = (SELECT adbc_connect({{
-            'driver': getvariable('flightsql_driver'),
-            'uri': '{ENDPOINT}',
-            'adbc.flight.sql.rpc.call_header.x-hydrofoil-principal': 'User::"robert.pack"'
-        }}));
-        """
+
+    # Build the adbc_connect option struct: driver + uri + the user's call headers
+    # (already prefixed with adbc.flight.sql.rpc.call_header.*). DuckDB struct keys are
+    # SQL string literals, so render them; the token value never appears in notebook
+    # *output*, only inside this connect call.
+    _opts = {"driver": "getvariable('flightsql_driver')", "uri": f"'{ENDPOINT}'"}
+    for _k, _v in _demo_auth.db_kwargs(user.value).items():
+        if _k.startswith(_demo_auth.RPC_CALL_HEADER_PREFIX):
+            _opts[_k] = f"'{_v}'"
+    _struct = ", ".join(
+        # 'driver'/'uri' values are expressions; header values are quoted literals.
+        f"'{_k}': {_v}" for _k, _v in _opts.items()
     )
+    con.execute(f"SET VARIABLE conn = (SELECT adbc_connect({{{_struct}}}));")
     return (con,)
 
 
 @app.cell
 def _(con):
-    query = "SELECT * FROM demo.managed_demo.events WHERE id > 1"
+    query = "SELECT id, event FROM demo.managed_demo.events WHERE id > 1"
     con.execute(f"SELECT * FROM adbc_scan(getvariable('conn')::BIGINT, '{query}')").to_arrow_table()
     return
 
