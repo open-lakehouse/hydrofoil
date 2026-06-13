@@ -70,6 +70,82 @@ async fn seeded_store() -> (tempfile::TempDir, LineageStore) {
     (tmp, store)
 }
 
+/// Build one `run` event row. Every field threads through so tests can vary the
+/// event_type, run_id, dataset namespaces, and raw_json.
+#[allow(clippy::too_many_arguments)]
+fn run_row(
+    event_type: &str,
+    event_time: i64,
+    run_id: &str,
+    job_ns: &str,
+    job_name: &str,
+    inputs_json: Option<&str>,
+    outputs_json: Option<&str>,
+    raw_json: Option<&str>,
+) -> RecordBatch {
+    RecordBatch::try_new(
+        arrow_schema(),
+        vec![
+            Arc::new(StringArray::from(vec!["run"])),
+            Arc::new(StringArray::from(vec![Some(event_type.to_string())])),
+            Arc::new(TimestampMicrosecondArray::from(vec![event_time]).with_timezone("UTC")),
+            Arc::new(StringArray::from(vec!["test-producer"])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![Some(run_id.to_string())])),
+            Arc::new(StringArray::from(vec![Some(job_ns.to_string())])),
+            Arc::new(StringArray::from(vec![Some(job_name.to_string())])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![inputs_json.map(str::to_string)])),
+            Arc::new(StringArray::from(vec![outputs_json.map(str::to_string)])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![raw_json.map(str::to_string)])),
+        ],
+    )
+    .unwrap()
+}
+
+/// A job writing a dataset with a URI-style namespace (`s3://bucket`), seeded via
+/// START (carries edges) + COMPLETE (drops them). Exercises C3 (URI nodeId) and
+/// C7 (edge union + run state) together.
+async fn uri_seeded_store() -> (tempfile::TempDir, LineageStore) {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = local_config(tmp.path().to_str().unwrap());
+    let writer = DeltaWriter::new(&cfg);
+    let outputs = r#"[{"namespace":"s3://bucket","name":"warehouse/t1"}]"#;
+    let raw_start = r#"{"eventType":"START","eventTime":"2023-11-14T22:13:20Z","run":{"runId":"r1","facets":{"nominalTime":{"x":1}}},"job":{"namespace":"etl","name":"export"},"producer":"p"}"#;
+    writer
+        .append(run_row(
+            "START",
+            1_700_000_000_000_000,
+            "r1",
+            "etl",
+            "export",
+            None,
+            Some(outputs),
+            Some(raw_start),
+        ))
+        .await
+        .unwrap();
+    // COMPLETE with no datasets — must NOT erase the edge from the START.
+    writer
+        .append(run_row(
+            "COMPLETE",
+            1_700_000_005_000_000,
+            "r1",
+            "etl",
+            "export",
+            None,
+            None,
+            Some(r#"{"eventType":"COMPLETE","eventTime":"2023-11-14T22:13:25Z","run":{"runId":"r1"},"job":{"namespace":"etl","name":"export"},"producer":"p"}"#),
+        ))
+        .await
+        .unwrap();
+    let store = LineageStore::from_config(&cfg);
+    (tmp, store)
+}
+
 #[tokio::test]
 async fn namespaces_lists_job_and_dataset_namespaces() {
     let (_tmp, store) = seeded_store().await;
@@ -97,9 +173,10 @@ async fn jobs_returns_job_with_inputs_and_outputs() {
     assert_eq!(job.inputs[0].namespace, "raw");
     assert_eq!(job.inputs[0].name, "orders");
     assert_eq!(job.outputs[0].name, "daily_orders");
-    // The dashboard's JobRunItem reduces over latestRuns without an initial
-    // value, so it must never be empty.
-    assert_eq!(job.latest_runs.len(), 1, "exactly one synthetic run");
+    // One reconstructed run from the COMPLETE event, with its real state.
+    assert_eq!(job.latest_runs.len(), 1);
+    assert_eq!(job.latest_runs[0].id, "run-1");
+    assert_eq!(job.latest_runs[0].state, "COMPLETED");
 }
 
 #[tokio::test]
@@ -207,7 +284,7 @@ async fn http_global_jobs_route_resolves() {
 }
 
 #[tokio::test]
-async fn http_job_runs_returns_synthetic_run() {
+async fn http_job_runs_returns_real_run_state() {
     let (_tmp, store) = seeded_store().await;
     let (status, body) = get(
         store,
@@ -218,6 +295,7 @@ async fn http_job_runs_returns_synthetic_run() {
     assert!(body.contains("\"runs\""), "body: {body}");
     assert!(body.contains("\"totalCount\""), "body: {body}");
     assert!(body.contains("COMPLETED"), "body: {body}");
+    assert!(body.contains("run-1"), "real runId surfaced: {body}");
 }
 
 #[tokio::test]
@@ -239,4 +317,146 @@ async fn http_search_envelope_is_camel_case() {
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(body.contains("\"totalCount\""), "body: {body}");
     assert!(body.contains("\"nodeId\""), "body: {body}");
+}
+
+// --- C3: URI-namespace nodeIds round-trip through lineage ---------------------
+
+#[tokio::test]
+async fn lineage_resolves_uri_namespace_dataset() {
+    // C3 regression: dataset:s3://bucket:warehouse/t1 must resolve to the real
+    // dataset (namespace s3://bucket), not a synthetic node from a mangled parse.
+    let (_tmp, store) = uri_seeded_store().await;
+    let node = "dataset:s3://bucket:warehouse/t1";
+    let graph = store.lineage(node, 2).await.unwrap();
+    let ids: Vec<&str> = graph.graph.iter().map(|n| n.id.as_str()).collect();
+    assert!(ids.contains(&node), "uri dataset present: {ids:?}");
+    assert!(
+        ids.contains(&"job:etl:export"),
+        "connected job present: {ids:?}"
+    );
+    // The dataset node must carry its real timestamps, not the 1970 epoch a
+    // synthetic empty payload would have.
+    let ds = graph.graph.iter().find(|n| n.id == node).unwrap();
+    assert_eq!(ds.node_type, "DATASET");
+    let updated = ds.data.get("updatedAt").and_then(|v| v.as_str()).unwrap();
+    assert!(!updated.starts_with("1970"), "real timestamp: {updated}");
+}
+
+// --- C7.1: edge union (START carries edges, COMPLETE drops them) --------------
+
+#[tokio::test]
+async fn complete_without_datasets_does_not_erase_edges() {
+    let (_tmp, store) = uri_seeded_store().await;
+    let job = store.job("etl", "export").await.unwrap();
+    assert_eq!(job.outputs.len(), 1, "START's output survives the COMPLETE");
+    assert_eq!(job.outputs[0].namespace, "s3://bucket");
+    assert_eq!(job.outputs[0].name, "warehouse/t1");
+}
+
+// --- C7.2: real run state from START->COMPLETE --------------------------------
+
+#[tokio::test]
+async fn run_state_reflects_terminal_event() {
+    let (_tmp, store) = uri_seeded_store().await;
+    let runs = store.job_runs("etl", "export").await.unwrap();
+    assert_eq!(runs.total_count, 1);
+    assert_eq!(runs.runs[0].id, "r1");
+    assert_eq!(runs.runs[0].state, "COMPLETED");
+    // START(1_700_000_000)->COMPLETE(1_700_000_005) = 5s.
+    assert_eq!(runs.runs[0].duration_ms, 5_000);
+}
+
+// --- C9.1: unknown lineage seed -> 404 ----------------------------------------
+
+#[tokio::test]
+async fn lineage_unknown_seed_is_not_found() {
+    let (_tmp, store) = seeded_store().await;
+    let err = store.lineage("dataset:nope:missing", 2).await.unwrap_err();
+    assert!(
+        matches!(err, lineage_service::read::ReadError::NotFound(_)),
+        "unknown seed should 404, got {err:?}"
+    );
+}
+
+// --- C8: the four endpoints marquez-web calls ---------------------------------
+
+#[tokio::test]
+async fn http_events_lineage_returns_raw_events() {
+    let (_tmp, store) = uri_seeded_store().await;
+    let (status, body) = get(store, "/api/v1/events/lineage?limit=10&offset=0").await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"events\""), "envelope: {body}");
+    assert!(body.contains("\"totalCount\""), "envelope: {body}");
+    // The raw OpenLineage eventType must come through for the UI's badge.
+    assert!(
+        body.contains("START") || body.contains("COMPLETE"),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn http_dataset_versions_returns_a_version() {
+    let (_tmp, store) = seeded_store().await;
+    let (status, body) = get(
+        store,
+        "/api/v1/namespaces/raw/datasets/orders/versions?limit=10&offset=0",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"versions\""), "envelope: {body}");
+    assert!(body.contains("\"totalCount\""), "envelope: {body}");
+    assert!(body.contains("\"version\""), "version id: {body}");
+}
+
+#[tokio::test]
+async fn http_dataset_versions_unknown_is_404() {
+    let (_tmp, store) = seeded_store().await;
+    let (status, _body) = get(
+        store,
+        "/api/v1/namespaces/raw/datasets/nope/versions?limit=10&offset=0",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn http_run_facets_returns_run_facets() {
+    let (_tmp, store) = uri_seeded_store().await;
+    let (status, body) = get(store, "/api/v1/jobs/runs/r1/facets").await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"runId\""), "envelope: {body}");
+    assert!(body.contains("\"facets\""), "envelope: {body}");
+    // The nominalTime facet from the START event's raw_json should be merged in.
+    assert!(body.contains("nominalTime"), "facet merged: {body}");
+}
+
+#[tokio::test]
+async fn http_run_facets_unknown_run_is_404() {
+    let (_tmp, store) = seeded_store().await;
+    let (status, _body) = get(store, "/api/v1/jobs/runs/no-such-run/facets").await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn http_column_lineage_returns_empty_graph_not_404() {
+    let (_tmp, store) = seeded_store().await;
+    let (status, body) = get(store, "/api/v1/column-lineage?nodeId=dataset:raw:orders").await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"graph\""), "envelope: {body}");
+}
+
+// --- C9.2: search totalCount counts all matches, not the page -----------------
+
+#[tokio::test]
+async fn search_total_count_is_full_match_count() {
+    let (_tmp, store) = seeded_store().await;
+    // Both "raw.orders" and "marts.daily_orders" match "orders"; limit 1 returns
+    // one result but totalCount must still report both.
+    let hits = store.search("orders", 1).await.unwrap();
+    assert_eq!(hits.results.len(), 1, "page is truncated to limit");
+    assert!(
+        hits.total_count >= 2,
+        "totalCount counts all matches: {}",
+        hits.total_count
+    );
 }

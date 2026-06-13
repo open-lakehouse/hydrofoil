@@ -33,6 +33,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_cedar::{IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity};
 use datafusion_open_lineage::OpenLineageClient;
+use datafusion_open_lineage::config::OpenLineageConfig;
 use datafusion_open_lineage::context::LineageContext;
 use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
@@ -70,6 +71,9 @@ pub struct Engine {
     policy: Arc<dyn Policy>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
     lineage: Option<OpenLineageClient>,
+    /// Static OpenLineage config (job namespace, producer, engine identity),
+    /// built once at startup and used when instrumenting each session's planner.
+    lineage_config: OpenLineageConfig,
     /// The principal/identity PIP: resolves a principal's attributes + group
     /// membership from external systems (`docs/adr/0008-...`). Defaults to a
     /// no-op provider (empty enrichment) so an unconfigured server / the
@@ -92,11 +96,13 @@ impl Engine {
         policy: Arc<dyn Policy>,
         unity_factory: Option<Arc<UnityObjectStoreFactory>>,
         lineage: Option<OpenLineageClient>,
+        lineage_config: OpenLineageConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
             policy,
             unity_factory,
             lineage,
+            lineage_config,
             identity: Arc::new(NoopIdentityProvider),
             enrichment_cache: DashMap::new(),
             #[cfg(feature = "governance")]
@@ -159,6 +165,7 @@ impl Engine {
         let ctx = create_session_for(
             Uuid::new_v4(),
             self.lineage.clone(),
+            self.lineage_config.clone(),
             Some(principal.clone()),
             self.unity_factory.clone(),
         )?;
@@ -237,10 +244,9 @@ impl Session {
             .saturating_sub(Duration::from_millis(last))
     }
 
-    /// The principal this session runs as. Retained as part of the session
-    /// surface; the policy gate reads the principal off the per-query
-    /// `LakehouseSession`.
-    #[allow(dead_code)]
+    /// The principal this session runs as. The policy gate reads the principal
+    /// off the per-query `LakehouseSession`; the server reads it here to stamp
+    /// lineage provenance (the `hydrofoil` run facet).
     pub fn principal(&self) -> &PrincipalIdentity {
         &self.principal
     }
@@ -483,8 +489,44 @@ mod tests {
         PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
     }
 
+    /// A `Transport` that records every emitted event, for asserting on lineage
+    /// emission in tests.
+    #[derive(Debug, Default, Clone)]
+    struct Recorder {
+        events: Arc<std::sync::Mutex<Vec<datafusion_open_lineage::event::RunEvent>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl datafusion_open_lineage::transport::Transport for Recorder {
+        async fn emit(
+            &self,
+            event: &datafusion_open_lineage::event::RunEvent,
+        ) -> std::result::Result<(), datafusion_open_lineage::transport::TransportError> {
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
+
+    /// A lineage-instrumented engine + a recorder capturing its events.
+    fn recording_engine() -> (Arc<Engine>, Recorder) {
+        let recorder = Recorder::default();
+        let client = OpenLineageClient::new(Arc::new(recorder.clone()));
+        let engine = Engine::new(
+            Arc::new(StaticPolicy::new(Decision::Allow)),
+            None,
+            Some(client),
+            OpenLineageConfig::default(),
+        );
+        (engine, recorder)
+    }
+
     fn engine() -> Arc<Engine> {
-        Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, None)
+        Engine::new(
+            Arc::new(StaticPolicy::new(Decision::Allow)),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        )
     }
 
     #[tokio::test]
@@ -603,6 +645,7 @@ mod tests {
             Arc::new(StaticPolicy::new(Decision::Allow)),
             None,
             Some(client),
+            OpenLineageConfig::default(),
         );
         let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
             .create(principal("alice"))
@@ -658,6 +701,177 @@ mod tests {
                 .iter()
                 .any(|e| e.event_type == RunEventType::Complete),
             "a COMPLETE event was emitted"
+        );
+    }
+
+    /// Register a tiny single-column `MemTable` named `t` on the session.
+    fn register_tiny_table(session: &Session) {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::datasource::MemTable;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        session
+            .ctx
+            .register_table(
+                "t",
+                Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+            )
+            .unwrap();
+    }
+
+    /// Run `sql` to completion through a per-query session decorated with `lineage`.
+    async fn run_query(session: &Session, lineage: LineageContext, sql: &'static str) {
+        use datafusion::catalog::Session as _;
+        let lh = session.lakehouse_for_query(lineage, None);
+        let plan = lh.create_logical_plan(sql).await.unwrap();
+        let physical = lh.create_physical_plan(&plan).await.unwrap();
+        let _ = datafusion::physical_plan::collect(physical, session.ctx.task_ctx())
+            .await
+            .unwrap();
+    }
+
+    /// C5: re-executing one stored statement mints a fresh run id per execution,
+    /// each parented to the planning run — so two executions never share a runId
+    /// (which would let one's FAIL clobber the other's COMPLETE). Mirrors what
+    /// the server's `do_get_prepared_statement` does via
+    /// `crate::lineage::execution_context`.
+    #[tokio::test]
+    async fn prepared_statement_reexecution_uses_distinct_run_ids() {
+        let (eng, recorder) = recording_engine();
+        let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+        register_tiny_table(&session);
+
+        // The context pinned at prepared-statement creation.
+        let planning_run = Uuid::now_v7();
+        let stored = LineageContext {
+            run_id: Some(planning_run),
+            job_name: Some(crate::lineage::job_name_from_sql("SELECT id FROM t")),
+            sql: Some("SELECT id FROM t".into()),
+            ..Default::default()
+        };
+        let config = OpenLineageConfig::default();
+
+        // Two executions of the same stored statement.
+        run_query(
+            &session,
+            crate::lineage::execution_context(&stored, &config),
+            "SELECT id FROM t",
+        )
+        .await;
+        run_query(
+            &session,
+            crate::lineage::execution_context(&stored, &config),
+            "SELECT id FROM t",
+        )
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events = recorder.events.lock().unwrap();
+
+        let run_ids: std::collections::HashSet<_> = events.iter().map(|e| e.run.run_id).collect();
+        assert_eq!(
+            run_ids.len(),
+            2,
+            "two executions -> two distinct run ids (got {run_ids:?})"
+        );
+        assert!(
+            !run_ids.contains(&planning_run),
+            "neither execution reuses the planning run id"
+        );
+        // Every event parents to the planning run, under one stable job name.
+        for e in events.iter() {
+            let parent = e.run.facets.parent.as_ref().expect("parent facet present");
+            assert_eq!(parent.run.run_id, planning_run.to_string());
+            assert_eq!(e.job.name, stored.job_name.clone().unwrap());
+        }
+    }
+
+    /// ADR 0012: client-forwarded job metadata (documentation/tags facets via
+    /// `LineageContext.job_facets`) and the `hydrofoil` provenance run facet
+    /// (`run_facets`) ride through planning into every emitted event.
+    #[tokio::test]
+    async fn client_metadata_facets_land_in_events() {
+        let (eng, recorder) = recording_engine();
+        let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+        register_tiny_table(&session);
+
+        let mut lineage = LineageContext {
+            run_id: Some(Uuid::now_v7()),
+            job_namespace: Some("demo-pipeline".into()),
+            job_name: Some("events_summary".into()),
+            sql: Some("SELECT id FROM t".into()),
+            ..Default::default()
+        };
+        lineage.job_facets.insert(
+            "documentation".into(),
+            serde_json::json!({"description": "Daily rollup."}),
+        );
+        lineage.run_facets.insert(
+            "hydrofoil".into(),
+            serde_json::json!({"principal": "User::\"alice\""}),
+        );
+
+        run_query(&session, lineage, "SELECT id FROM t").await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let events = recorder.events.lock().unwrap();
+        assert!(!events.is_empty());
+        for e in events.iter() {
+            assert_eq!(
+                e.job.namespace, "demo-pipeline",
+                "namespace override applies"
+            );
+            assert_eq!(e.job.name, "events_summary");
+            assert_eq!(
+                e.job.facets.extra["documentation"]["description"],
+                "Daily rollup."
+            );
+            assert_eq!(
+                e.run.facets.extra["hydrofoil"]["principal"],
+                "User::\"alice\""
+            );
+        }
+    }
+
+    /// C9.2: a query that reads and writes nothing (`information_schema`
+    /// introspection here) emits no lineage events — the dataset-less job node
+    /// would only add noise.
+    #[tokio::test]
+    async fn dataset_less_query_emits_no_events() {
+        let (eng, recorder) = recording_engine();
+        let (_, session) = SessionStore::new(eng, Duration::from_secs(60))
+            .create(principal("alice"))
+            .unwrap();
+        register_tiny_table(&session);
+
+        let lineage = LineageContext {
+            run_id: Some(Uuid::now_v7()),
+            job_name: Some("query-meta".into()),
+            sql: Some("SELECT table_name FROM information_schema.tables".into()),
+            ..Default::default()
+        };
+        run_query(
+            &session,
+            lineage,
+            "SELECT table_name FROM information_schema.tables",
+        )
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            recorder.events.lock().unwrap().is_empty(),
+            "information_schema query touches no datasets -> no lineage events"
         );
     }
 }

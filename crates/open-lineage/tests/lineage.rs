@@ -10,7 +10,7 @@ use datafusion_open_lineage::config::OpenLineageConfig;
 use datafusion_open_lineage::context::LineageContext;
 use datafusion_open_lineage::event::{RunEvent, RunEventType};
 use datafusion_open_lineage::extract::extract;
-use datafusion_open_lineage::transport::{Transport, TransportError};
+use datafusion_open_lineage::transport::{NoopTransport, Transport, TransportError};
 use datafusion_open_lineage::{
     LineageContextProvider, OpenLineageClient, instrument_session_state,
     instrument_session_state_simple,
@@ -112,10 +112,60 @@ async fn extract_simple_projection() {
     let lineage = extract(&optimized, &config());
     assert_eq!(lineage.inputs.len(), 1, "one input table");
     assert_eq!(lineage.inputs[0].fields.len(), 2, "two schema fields");
-    // Identity columns map back to the source.
-    assert!(lineage.column_lineage.contains_key("a"));
-    let a = &lineage.column_lineage["a"];
-    assert_eq!(a[0].field.as_deref(), Some("a"));
+}
+
+#[tokio::test]
+async fn schema_facet_uses_full_table_schema() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t (a INT, b INT, c INT) AS VALUES (1, 2, 3)")
+        .await
+        .unwrap();
+    // Projection pushdown reduces the scan to column `a`, but the input
+    // dataset's schema facet must still report the full table schema (a, b, c)
+    // so the dataset's schema version doesn't flap across queries.
+    let plan = ctx
+        .state()
+        .create_logical_plan("SELECT a FROM t")
+        .await
+        .unwrap();
+    let optimized = ctx.state().optimize(&plan).unwrap();
+
+    let lineage = extract(&optimized, &config());
+    assert_eq!(lineage.inputs.len(), 1, "one input table");
+    let mut names: Vec<&str> = lineage.inputs[0]
+        .fields
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["a", "b", "c"],
+        "schema facet reports the full table schema, not the projected scan"
+    );
+}
+
+#[tokio::test]
+async fn self_join_dedupes_input() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t (a INT, b INT) AS VALUES (1, 2)")
+        .await
+        .unwrap();
+    // A self-join scans `t` twice but it is a single input dataset.
+    let plan = ctx
+        .state()
+        .create_logical_plan("SELECT l.a FROM t l JOIN t r ON l.a = r.a")
+        .await
+        .unwrap();
+    let optimized = ctx.state().optimize(&plan).unwrap();
+
+    let lineage = extract(&optimized, &config());
+    assert_eq!(
+        lineage.inputs.len(),
+        1,
+        "self-join is one deduped input: {:?}",
+        lineage.inputs
+    );
 }
 
 #[tokio::test]
@@ -179,6 +229,76 @@ async fn failing_transport_does_not_panic() {
     ));
     // Give the worker a moment to process; the failing emit must be swallowed.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+}
+
+#[tokio::test]
+async fn try_new_errors_outside_tokio_runtime() {
+    // Spawn a plain OS thread with no Tokio runtime; constructing there must
+    // return an error rather than panic.
+    let handle =
+        std::thread::spawn(|| OpenLineageClient::try_new(Arc::new(NoopTransport)).is_err());
+    assert!(
+        handle.join().unwrap(),
+        "try_new must error when no Tokio runtime is present"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_drains_queued_events() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    for _ in 0..5 {
+        client.emit(start_event(
+            Uuid::now_v7(),
+            &Default::default(),
+            &LineageContext::default(),
+            &config(),
+        ));
+    }
+    // shutdown() awaits the drain task to completion, so all queued events are
+    // delivered before it returns — no post-shutdown sleep needed.
+    client.shutdown().await;
+
+    assert_eq!(
+        transport.events.lock().unwrap().len(),
+        5,
+        "all queued events delivered before shutdown returns"
+    );
+}
+
+#[tokio::test]
+async fn dropped_count_tracks_full_queue() {
+    // A tiny queue and a transport that blocks forever so nothing drains: every
+    // emit past the buffer is dropped and counted.
+    #[derive(Debug)]
+    struct BlockingTransport;
+    #[async_trait]
+    impl Transport for BlockingTransport {
+        async fn emit(&self, _event: &RunEvent) -> Result<(), TransportError> {
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+
+    let client = OpenLineageClient::builder()
+        .transport(Arc::new(BlockingTransport))
+        .queue_size(1)
+        .build();
+    // Far more than capacity (1 buffered + 1 in-flight); the rest are dropped.
+    for _ in 0..20 {
+        client.emit(start_event(
+            Uuid::now_v7(),
+            &Default::default(),
+            &LineageContext::default(),
+            &config(),
+        ));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        client.dropped_count() > 0,
+        "a saturated queue must register dropped events"
+    );
 }
 
 #[tokio::test]
@@ -562,16 +682,18 @@ async fn extract_ctas_has_output() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Transformation (non-identity) column lineage
+// 6. Column lineage is NOT emitted (the unsound extraction was removed)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn extract_transformation_column_lineage() {
+async fn no_column_lineage_in_emitted_events() {
     let ctx = SessionContext::new();
     ctx.sql("CREATE TABLE t (a INT, b INT) AS VALUES (1, 2)")
         .await
         .unwrap();
-    // `a + b AS c` derives c from BOTH a and b, as a TRANSFORMATION (not IDENTITY).
+    // A computed projection is exactly the shape the old name-based extractor
+    // produced column lineage for. The event must now carry table-level
+    // lineage only: no `columnLineage` facet anywhere.
     let plan = ctx
         .state()
         .create_logical_plan("SELECT a + b AS c FROM t")
@@ -580,20 +702,23 @@ async fn extract_transformation_column_lineage() {
     let optimized = ctx.state().optimize(&plan).unwrap();
     let lineage = extract(&optimized, &config());
 
-    let c = lineage
-        .column_lineage
-        .get("c")
-        .expect("column lineage for c");
-    let mut sources: Vec<&str> = c.iter().filter_map(|f| f.field.as_deref()).collect();
-    sources.sort();
-    assert_eq!(sources, vec!["a", "b"], "c derives from a and b");
-    // The transformation type is DIRECT/TRANSFORMATION (not IDENTITY).
+    let event = start_event(
+        Uuid::now_v7(),
+        &lineage,
+        &LineageContext::default(),
+        &config(),
+    );
+    let json = serde_json::to_string(&event).unwrap();
     assert!(
-        c.iter().all(|f| f
-            .transformations
-            .iter()
-            .any(|t| t.subtype.as_deref() == Some("TRANSFORMATION"))),
-        "computed column must be a TRANSFORMATION"
+        !json.contains("columnLineage"),
+        "no columnLineage key in emitted events: {json}"
+    );
+    // Table-level lineage is still present (the input dataset + its schema).
+    assert_eq!(lineage.inputs.len(), 1, "input dataset present");
+    let value: Value = serde_json::from_str(&json).unwrap();
+    assert!(
+        value["inputs"][0]["facets"]["schema"].is_object(),
+        "schema facet present on input"
     );
 }
 
@@ -721,4 +846,301 @@ async fn dropped_stream_emits_fail() {
         !for_run.contains(&RunEventType::Complete),
         "a dropped stream must not report COMPLETE: {for_run:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 9. Terminal eventTime is refreshed at end of execution (not plan time)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn terminal_event_time_is_after_start() {
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+
+    let base = SessionContext::new();
+    let state = instrument_session_state_simple(base.state(), client, config());
+    let instrumented = SessionContext::new_with_state(state);
+    instrumented
+        .sql("CREATE TABLE t (a INT) AS VALUES (1), (2), (3)")
+        .await
+        .unwrap();
+
+    let df = instrumented.sql("SELECT a FROM t").await.unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    // Capture the START, then delay before executing so a plan-time terminal
+    // timestamp would be measurably earlier than the real completion time.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let (run_id, start_time) = {
+        let events = transport.events.lock().unwrap();
+        let start = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == RunEventType::Start)
+            .expect("a START for the select");
+        (start.run.run_id, start.event_time.clone())
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    let task_ctx = instrumented.task_ctx();
+    let partitions = plan.output_partitioning().partition_count();
+    for p in 0..partitions {
+        let mut stream = plan.execute(p, task_ctx.clone()).unwrap();
+        use futures::StreamExt;
+        while stream.next().await.is_some() {}
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let events = transport.events.lock().unwrap();
+    let complete = events
+        .iter()
+        .find(|e| e.run.run_id == run_id && e.event_type == RunEventType::Complete)
+        .expect("a COMPLETE for the select");
+
+    // Both are RFC3339; parse and compare. The terminal event must be strictly
+    // later than START — a plan-time timestamp would make them ~equal.
+    let start_ts = chrono::DateTime::parse_from_rfc3339(&start_time).unwrap();
+    let complete_ts = chrono::DateTime::parse_from_rfc3339(&complete.event_time).unwrap();
+    assert!(
+        complete_ts > start_ts,
+        "terminal eventTime ({}) must be after START eventTime ({})",
+        complete.event_time,
+        start_time
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. An execute()-time error emits FAIL exactly once
+// ---------------------------------------------------------------------------
+
+/// A physical plan whose `execute()` always errors before producing a stream —
+/// models an object-store auth / credential-vending failure at execution start.
+#[derive(Debug)]
+struct ExecErrorExec {
+    properties: Arc<datafusion::physical_plan::PlanProperties>,
+}
+
+impl ExecErrorExec {
+    fn new(partitions: usize) -> Self {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+        use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let properties = Arc::new(datafusion::physical_plan::PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Self { properties }
+    }
+}
+
+impl datafusion::physical_plan::DisplayAs for ExecErrorExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "ExecErrorExec")
+    }
+}
+
+impl datafusion::physical_plan::ExecutionPlan for ExecErrorExec {
+    fn name(&self) -> &str {
+        "ExecErrorExec"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+        &self.properties
+    }
+    fn children(&self) -> Vec<&Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        vec![]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        Ok(self)
+    }
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
+        Err(datafusion::error::DataFusionError::Execution(
+            "object store auth failed".to_string(),
+        ))
+    }
+}
+
+/// A trivial single-batch source with a configurable partition count, used to
+/// prove the partition counter tracks `with_new_children` rewrites.
+#[derive(Debug)]
+struct OkExec {
+    properties: Arc<datafusion::physical_plan::PlanProperties>,
+    schema: datafusion::arrow::datatypes::SchemaRef,
+}
+
+impl OkExec {
+    fn new(partitions: usize) -> Self {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+        use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+
+        let schema: datafusion::arrow::datatypes::SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let properties = Arc::new(datafusion::physical_plan::PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Self { properties, schema }
+    }
+}
+
+impl datafusion::physical_plan::DisplayAs for OkExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "OkExec")
+    }
+}
+
+impl datafusion::physical_plan::ExecutionPlan for OkExec {
+    fn name(&self) -> &str {
+        "OkExec"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+        &self.properties
+    }
+    fn children(&self) -> Vec<&Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        vec![]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        Ok(self)
+    }
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
+        // An empty stream: completes immediately with no batches.
+        Ok(Box::pin(
+            datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
+                self.schema.clone(),
+                futures::stream::empty(),
+            ),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn execute_error_emits_fail_exactly_once() {
+    use datafusion_open_lineage::OpenLineageExec;
+    use datafusion_open_lineage::builder::complete_event;
+
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+    let cfg = config();
+    let run_id = Uuid::now_v7();
+    let complete = complete_event(
+        run_id,
+        &Default::default(),
+        &LineageContext::default(),
+        &cfg,
+    );
+
+    let inner: Arc<dyn datafusion::physical_plan::ExecutionPlan> = Arc::new(ExecErrorExec::new(2));
+    let exec = OpenLineageExec::new(inner, client, complete, cfg.producer.clone());
+
+    // Drive every partition; each `execute()` errors before yielding a stream.
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    use datafusion::physical_plan::ExecutionPlan;
+    for p in 0..2 {
+        let res = exec.execute(p, task_ctx.clone());
+        assert!(res.is_err(), "execute must propagate the error");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let fails = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id && e.event_type == RunEventType::Fail)
+        .count();
+    let completes = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id && e.event_type == RunEventType::Complete)
+        .count();
+    assert_eq!(fails, 1, "exactly one FAIL on execute()-time error");
+    assert_eq!(completes, 0, "no COMPLETE on execute()-time error");
+}
+
+#[tokio::test]
+async fn partition_count_change_emits_one_terminal() {
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion_open_lineage::OpenLineageExec;
+    use datafusion_open_lineage::builder::complete_event;
+
+    let transport = RecordingTransport::default();
+    let client = OpenLineageClient::new(Arc::new(transport.clone()));
+    let cfg = config();
+    let run_id = Uuid::now_v7();
+    let complete = complete_event(
+        run_id,
+        &Default::default(),
+        &LineageContext::default(),
+        &cfg,
+    );
+
+    // Wrap a 1-partition plan, then rewrite the child to a 3-partition plan via
+    // `with_new_children`. The terminal-event counter must follow the node that
+    // actually executes (3 partitions), emitting exactly one COMPLETE.
+    let inner: Arc<dyn ExecutionPlan> = Arc::new(OkExec::new(1));
+    let exec = OpenLineageExec::new(inner, client, complete, cfg.producer.clone());
+    let rewritten = Arc::clone(&exec)
+        .with_new_children(vec![Arc::new(OkExec::new(3))])
+        .unwrap();
+    assert_eq!(
+        rewritten.output_partitioning().partition_count(),
+        3,
+        "rewritten node reports the new partition count"
+    );
+
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    for p in 0..3 {
+        let mut stream = rewritten.execute(p, task_ctx.clone()).unwrap();
+        use futures::StreamExt;
+        while stream.next().await.is_some() {}
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let events = transport.events.lock().unwrap();
+    let completes = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id && e.event_type == RunEventType::Complete)
+        .count();
+    let fails = events
+        .iter()
+        .filter(|e| e.run.run_id == run_id && e.event_type == RunEventType::Fail)
+        .count();
+    assert_eq!(
+        completes, 1,
+        "exactly one COMPLETE after a partition-count-changing rewrite"
+    );
+    assert_eq!(fails, 0, "no spurious FAIL");
 }

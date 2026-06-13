@@ -27,7 +27,9 @@ impl Default for OpenLineageConfig {
             job_namespace: std::env::var("OPENLINEAGE_NAMESPACE")
                 .unwrap_or_else(|_| "default".to_string()),
             engine_name: "DataFusion".to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            // The processing engine is DataFusion, so report DataFusion's
+            // version here; this crate's own version is the adapter version.
+            engine_version: datafusion::DATAFUSION_VERSION.to_string(),
             adapter_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }

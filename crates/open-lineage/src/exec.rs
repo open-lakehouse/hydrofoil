@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
+use chrono::Utc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::Result;
@@ -54,12 +55,23 @@ struct RunState {
     /// through `with_new_children` rewrites so metrics come from the node that
     /// actually executed.
     inner: std::sync::Mutex<Arc<dyn ExecutionPlan>>,
-    /// Outstanding partitions yet to finish.
+    /// Outstanding partitions yet to finish. Initialized lazily from the
+    /// executing node's partition count on the first `execute()` (see
+    /// [`RunState::init_partitions`]) so it stays correct across
+    /// `with_new_children` rewrites that change the partitioning.
     remaining: AtomicUsize,
+    /// Guards one-time initialization of `remaining`.
+    init: std::sync::Once,
     /// Set if any partition observed an error or was dropped early.
     failed: AtomicBool,
     /// First error message observed, for the FAIL facet.
     error: std::sync::Mutex<Option<String>>,
+    /// Whether this run has an output dataset. The write-result `count`-batch
+    /// sniffing in [`TrackedStream`] only applies to writes, so it is gated on
+    /// this: a read whose result happens to be a single `UInt64` `count` column
+    /// must not be mistaken for a rows-written signal. Mirrors the
+    /// `outputs`-non-empty guard in [`RunState::attach_output_statistics`].
+    has_outputs: bool,
     /// Rows written, summed from DataFusion's write-result `count` batches
     /// (`Some` once any write count is observed).
     rows_written: std::sync::Mutex<Option<u64>>,
@@ -68,6 +80,18 @@ struct RunState {
 }
 
 impl RunState {
+    /// Initialize the outstanding-partition counter from the count of
+    /// partitions that will actually execute. Called on every `execute()`;
+    /// the `Once` ensures only the first call wins, so concurrent partition
+    /// executes observe a stable total. `count` is the executing node's
+    /// `output_partitioning().partition_count()`.
+    fn init_partitions(&self, count: usize) {
+        self.init.call_once(|| {
+            // A plan may report zero partitions; guard so we still emit once.
+            self.remaining.store(count.max(1), Ordering::SeqCst);
+        });
+    }
+
     fn record_error(&self, message: String) {
         self.failed.store(true, Ordering::SeqCst);
         let mut slot = self.error.lock().unwrap();
@@ -100,6 +124,9 @@ impl RunState {
         if self.failed.load(Ordering::SeqCst) {
             let mut event = self.complete.clone();
             event.event_type = RunEventType::Fail;
+            // The template's `eventTime` was set at plan time; refresh it to the
+            // moment execution actually ended so run duration is meaningful.
+            event.event_time = Utc::now().to_rfc3339();
             let message = self
                 .error
                 .lock()
@@ -115,6 +142,9 @@ impl RunState {
             self.client.emit(event);
         } else {
             let mut event = self.complete.clone();
+            // The template's `eventTime` was set at plan time; refresh it to the
+            // moment execution actually ended so run duration is meaningful.
+            event.event_time = Utc::now().to_rfc3339();
             self.attach_output_statistics(&mut event);
             self.attach_input_statistics(&mut event);
             self.client.emit(event);
@@ -249,14 +279,18 @@ impl OpenLineageExec {
         complete: RunEvent,
         producer: String,
     ) -> Arc<Self> {
-        let partitions = inner.properties().output_partitioning().partition_count();
+        let has_outputs = !complete.outputs.is_empty();
         let state = Arc::new(RunState {
             client,
             complete,
             producer,
+            has_outputs,
             inner: std::sync::Mutex::new(inner.clone()),
-            // A plan may have zero partitions; guard so we still emit once.
-            remaining: AtomicUsize::new(partitions.max(1)),
+            // Initialized lazily on the first `execute()` from the partition
+            // count of the node that actually runs (which may differ from
+            // `inner` here after a `with_new_children` rewrite).
+            remaining: AtomicUsize::new(0),
+            init: std::sync::Once::new(),
             failed: AtomicBool::new(false),
             error: std::sync::Mutex::new(None),
             rows_written: std::sync::Mutex::new(None),
@@ -299,8 +333,11 @@ impl ExecutionPlan for OpenLineageExec {
     }
 
     fn as_any(&self) -> &dyn Any {
-        // Transparent downcasting: callers see the inner plan's type.
-        self.inner.as_any()
+        // Return *this* wrapper, per the `ExecutionPlan::as_any` contract.
+        // Returning the inner plan's `as_any` let visitors downcast the wrapper
+        // to the inner type and rewrite its children directly, silently
+        // dropping this lineage node from the plan.
+        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -330,7 +367,30 @@ impl ExecutionPlan for OpenLineageExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let inner = self.inner.execute(partition, context)?;
+        // Lazily fix the outstanding-partition count from the node that is
+        // actually executing, so `with_new_children` rewrites that change the
+        // partitioning don't desync the counter (reading `self.properties()`,
+        // which delegates to `inner`, rather than the count captured at
+        // construction). `init_partitions` floors the count at 1 so that if a
+        // plan reporting zero partitions is nonetheless executed, the terminal
+        // event still fires exactly once. (A zero-partition plan that is never
+        // executed emits nothing — correctly, there was no execution.)
+        self.state
+            .init_partitions(self.properties().output_partitioning().partition_count());
+
+        // An execute-time error (e.g. object-store auth / credential vending)
+        // means this partition's stream never exists, so its `TrackedStream`
+        // would never run its terminal path. Record the failure and settle the
+        // partition here before propagating, or the run is stuck RUNNING with
+        // no COMPLETE/FAIL ever emitted.
+        let inner = match self.inner.execute(partition, context) {
+            Ok(inner) => inner,
+            Err(err) => {
+                self.state.record_error(err.to_string());
+                self.state.partition_finished();
+                return Err(err);
+            }
+        };
         Ok(Box::pin(TrackedStream {
             schema: inner.schema(),
             inner,
@@ -364,7 +424,13 @@ impl Stream for TrackedStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
-                if let Some(rows) = write_count(&batch) {
+                // Only sniff for a write-result `count` batch when this run
+                // actually writes (has an output dataset); otherwise a read
+                // returning a lone `UInt64 count` column would be misread as
+                // rows-written.
+                if self.state.has_outputs
+                    && let Some(rows) = write_count(&batch)
+                {
                     self.state.record_rows_written(rows);
                 }
                 Poll::Ready(Some(Ok(batch)))

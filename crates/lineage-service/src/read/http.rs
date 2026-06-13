@@ -1,10 +1,11 @@
 //! Marquez-compatible read endpoints, served under `/api/v1`.
 //!
 //! These are the GET routes the Marquez web UI calls to populate the namespace /
-//! job / dataset browse views and the lineage graph. They are backed by
-//! [`LineageStore`], which reconstructs Marquez's model from the events table.
-//! Only the subset needed for the graph view is implemented; runs, versions,
-//! tags, column-lineage, and metrics are out of scope (see [`super`]).
+//! job / dataset browse views, the lineage graph, the events feed, and the
+//! job/dataset detail drawers. They are backed by [`LineageStore`], which
+//! reconstructs Marquez's model from the events table. Runs and dataset versions
+//! are reconstructed from the event log; tags, column-lineage, and time-bucketed
+//! metrics remain stubbed (empty but non-404) — see [`super`].
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -39,8 +40,19 @@ pub fn router(store: LineageStore) -> Router {
             "/api/v1/namespaces/:namespace/datasets/:dataset",
             get(get_dataset),
         )
+        .route(
+            "/api/v1/namespaces/:namespace/datasets/:dataset/versions",
+            get(get_dataset_versions),
+        )
         .route("/api/v1/search", get(search))
         .route("/api/v1/lineage", get(lineage))
+        // Events page: a paginated scan of the raw OpenLineage event log.
+        .route("/api/v1/events/lineage", get(list_events))
+        // Run-detail facets tab.
+        .route("/api/v1/jobs/runs/:run_id/facets", get(get_run_facets))
+        // Dataset column-lineage view. Column lineage is disabled, so this
+        // returns an empty graph — but it must 200, not 404.
+        .route("/api/v1/column-lineage", get(column_lineage))
         // Home-page activity charts. We don't compute time-bucketed metrics, so
         // these return an empty series — the charts render empty rather than
         // erroring on a 404. The UI expects a JSON array for each.
@@ -189,4 +201,43 @@ async fn lineage(
     Query(params): Query<LineageParams>,
 ) -> Result<impl IntoResponse, ReadError> {
     Ok(Json(store.lineage(&params.node_id, params.depth).await?))
+}
+
+async fn get_dataset_versions(
+    State(store): State<LineageStore>,
+    Path((namespace, dataset)): Path<(String, String)>,
+    Query(page): Query<Pagination>,
+) -> Result<impl IntoResponse, ReadError> {
+    Ok(Json(
+        store
+            .dataset_versions(&namespace, &dataset, page.limit, page.offset)
+            .await?,
+    ))
+}
+
+async fn list_events(
+    State(store): State<LineageStore>,
+    Query(page): Query<Pagination>,
+) -> Result<impl IntoResponse, ReadError> {
+    Ok(Json(store.events(page.limit, page.offset).await?))
+}
+
+async fn get_run_facets(
+    State(store): State<LineageStore>,
+    Path(run_id): Path<String>,
+) -> Result<impl IntoResponse, ReadError> {
+    Ok(Json(store.run_facets(&run_id).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct ColumnLineageParams {
+    #[serde(rename = "nodeId", default)]
+    node_id: String,
+}
+
+async fn column_lineage(
+    State(store): State<LineageStore>,
+    Query(params): Query<ColumnLineageParams>,
+) -> Result<impl IntoResponse, ReadError> {
+    Ok(Json(store.column_lineage(&params.node_id).await?))
 }

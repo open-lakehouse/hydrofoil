@@ -10,7 +10,14 @@
 //!
 //! The store re-opens the Delta table on every query so freshly ingested events
 //! are visible without a restart. Query volume for a lineage UI is low, so the
-//! per-request `open_table` cost is acceptable; caching is a later optimization.
+//! per-request `open_table` cost is acceptable. The queries push their column
+//! projection (and, for the events/run-facets endpoints, row filters and
+//! pagination) down into DataFusion so we don't materialize the whole log per
+//! request. The model-folding endpoints still scan every event row each call;
+//! that grows unbounded with the log. FOLLOW-UP: maintain a materialized model
+//! (incremental fold on ingest, or a periodic snapshot) and/or partition/index
+//! the events table so reads don't re-fold history. Deferred — out of scope for
+//! the read-correctness pass.
 
 pub mod http;
 pub mod model;
@@ -28,13 +35,16 @@ use crate::config::Config;
 /// [`queries`].
 pub mod columns {
     pub const EVENT_KIND: &str = "event_kind";
+    pub const EVENT_TYPE: &str = "event_type";
     pub const EVENT_TIME: &str = "event_time";
+    pub const RUN_ID: &str = "run_id";
     pub const JOB_NAMESPACE: &str = "job_namespace";
     pub const JOB_NAME: &str = "job_name";
     pub const DATASET_NAMESPACE: &str = "dataset_namespace";
     pub const DATASET_NAME: &str = "dataset_name";
     pub const INPUTS_JSON: &str = "inputs_json";
     pub const OUTPUTS_JSON: &str = "outputs_json";
+    pub const RAW_JSON: &str = "raw_json";
 }
 
 /// Table name the events table is registered under inside the per-query
@@ -86,8 +96,21 @@ impl LineageStore {
     /// Note: for the Unity Catalog delta modes the writer resolves the location
     /// through the catalog; the read path here only supports the local /
     /// object-store URI in `delta.table_path`. The Marquez UI is a local-stack
-    /// demo concern, so this is sufficient for now.
+    /// demo concern, so this is sufficient for now. We emit a loud startup
+    /// warning when the mode is not `local`, because the read path then reads
+    /// `delta.table_path` (likely empty) while ingest writes to the catalog —
+    /// silently rendering an empty UI is the trap this warning prevents.
     pub fn from_config(cfg: &Config) -> Self {
+        let mode = cfg.delta.mode.as_str();
+        if !matches!(mode, "local" | "raw") {
+            tracing::warn!(
+                delta.mode = mode,
+                table_path = %cfg.delta.table_path,
+                "lineage read API reads the local delta.table_path, but delta.mode is not `local`; \
+                 ingest writes through Unity Catalog, so the Marquez UI will likely render empty. \
+                 Point the read path at the catalog-resolved location or switch to `local` mode."
+            );
+        }
         Self {
             table_uri: cfg.delta.table_path.clone(),
             storage_options: cfg.storage_options.clone(),

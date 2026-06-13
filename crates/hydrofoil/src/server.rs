@@ -24,6 +24,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
 use datafusion_open_lineage::OpenLineageClient;
+use datafusion_open_lineage::config::OpenLineageConfig;
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
@@ -93,6 +94,10 @@ pub struct FlightSqlServiceImpl {
     policy: Arc<dyn Policy>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
     lineage: Option<OpenLineageClient>,
+    /// Static OpenLineage config (job namespace, producer, engine identity),
+    /// built once at startup from the hydrofoil config and threaded through the
+    /// engine + the per-request lineage context. Default until [`Self::with_lineage`].
+    lineage_config: OpenLineageConfig,
     identity: Option<Arc<dyn datafusion_cedar::IdentityProvider>>,
 }
 
@@ -101,7 +106,7 @@ impl FlightSqlServiceImpl {
         let policy: Arc<dyn Policy> = Arc::new(StaticPolicy::new(Decision::Allow));
         // A placeholder store; replaced by `build()` once the optional
         // components (lineage/policy/unity) are configured.
-        let engine = Engine::new(policy.clone(), None, None);
+        let engine = Engine::new(policy.clone(), None, None, OpenLineageConfig::default());
         let ttl = Duration::from_secs(DEFAULT_SESSION_TTL_SECS);
         Ok(Self {
             sessions: SessionStore::new(engine, ttl),
@@ -109,14 +114,17 @@ impl FlightSqlServiceImpl {
             policy,
             unity_factory: None,
             lineage: None,
+            lineage_config: OpenLineageConfig::default(),
             identity: Some(crate::identity::default_identity_provider()),
         })
     }
 
-    /// Attach an OpenLineage client so sessions emit lineage events around
-    /// query planning.
-    pub fn with_lineage(mut self, lineage: OpenLineageClient) -> Self {
+    /// Attach an OpenLineage client (and its static config) so sessions emit
+    /// lineage events around query planning. The config carries the job
+    /// namespace, producer, and engine identity built once at startup.
+    pub fn with_lineage(mut self, lineage: OpenLineageClient, config: OpenLineageConfig) -> Self {
         self.lineage = Some(lineage);
+        self.lineage_config = config;
         self
     }
 
@@ -156,6 +164,7 @@ impl FlightSqlServiceImpl {
             self.policy.clone(),
             self.unity_factory.clone(),
             self.lineage.clone(),
+            self.lineage_config.clone(),
         );
         if let Some(identity) = self.identity.clone() {
             engine = engine.with_identity_provider(identity);
@@ -213,21 +222,62 @@ impl FlightSqlServiceImpl {
         &self.executor
     }
 
-    /// Build the per-request lineage context: parent-run facet parsed from
-    /// metadata, the pinned `run_id`, and the statement's SQL text.
+    /// Build the per-request lineage context: parent-run facet, job-metadata
+    /// facets (description/tags/owners), and namespace override parsed from
+    /// metadata; the pinned `run_id`; the derived job name; the statement's SQL
+    /// text; and the governance provenance (principal + agent context) as the
+    /// custom `hydrofoil` run facet. The job namespace falls back to the
+    /// engine's `OpenLineageConfig` at emit time when no header overrides it;
+    /// the job *name* is derived per statement so distinct queries are distinct
+    /// Marquez jobs — see [`crate::lineage::job_name_from_metadata`] and the
+    /// `crate::lineage` module docs for the full header reference.
     fn lineage_context<T>(
         &self,
         req: &Request<T>,
         run_id: Uuid,
-        sql: Option<String>,
+        sql: Option<&str>,
+        principal: &datafusion_cedar::PrincipalIdentity,
+        agent: Option<&crate::agent::AgentContext>,
     ) -> datafusion_open_lineage::context::LineageContext {
-        let mut ctx = crate::lineage::context_from_metadata(
-            req.metadata(),
-            &datafusion_open_lineage::config::OpenLineageConfig::default(),
-        );
+        let mut ctx = crate::lineage::context_from_metadata(req.metadata(), &self.lineage_config);
         ctx.run_id = Some(run_id);
-        ctx.sql = sql;
+        ctx.job_name = sql.map(|s| crate::lineage::job_name_from_metadata(req.metadata(), s));
+        ctx.sql = sql.map(str::to_string);
+        if let Some(facet) =
+            crate::lineage::hydrofoil_run_facet(Some(principal), agent, &self.lineage_config)
+        {
+            ctx.run_facets.insert("hydrofoil".to_string(), facet);
+        }
         ctx
+    }
+
+    /// Emit a standalone FAIL event for a query that errored during *logical*
+    /// planning (parse / name resolution), before any physical plan — and thus
+    /// any `OpenLineageExec` — exists. Without this such failures are invisible
+    /// to lineage (the planner only emits inside `create_physical_plan`). The
+    /// FAIL carries the same run/job identity the START would have used; inputs
+    /// and outputs are unknown (the plan never resolved), so only the SQL +
+    /// error facets are populated. No-op when lineage is not wired.
+    fn emit_planning_failure(
+        &self,
+        lineage: &datafusion_open_lineage::context::LineageContext,
+        error: &str,
+    ) {
+        let Some(client) = self.lineage.as_ref() else {
+            return;
+        };
+        let run_id = lineage.run_id.unwrap_or_else(Uuid::now_v7);
+        let query = datafusion_open_lineage::QueryLineage {
+            sql: lineage.sql.clone(),
+            ..Default::default()
+        };
+        client.emit(datafusion_open_lineage::builder::fail_event(
+            run_id,
+            &query,
+            lineage,
+            &self.lineage_config,
+            error,
+        ));
     }
 
     fn do_get_handle(
@@ -485,15 +535,30 @@ impl FlightSqlService for FlightSqlServiceImpl {
         // later do_get reuses the same snapshot so COMPLETE/FAIL correlate. See
         // docs/adr/0003-per-statement-run-id-correlation.md.
         let run_id = Uuid::now_v7();
-        let lineage = self.lineage_context(&request, run_id, Some(query.query.clone()));
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lineage = self.lineage_context(
+            &request,
+            run_id,
+            Some(&query.query),
+            session.principal(),
+            agent.as_ref(),
+        );
         let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
-        let plan = self
+        let plan = match self
             .executor
             .create_logical_plan(lh, query.query.clone())
             .await
-            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
+        {
+            Ok(plan) => plan,
+            Err(e) => {
+                // Logical planning (parse / resolution) failed: no physical plan
+                // is built, so the OpenLineageExec path never runs. Emit a FAIL
+                // here under the same run/job identity so the failure is visible.
+                self.emit_planning_failure(&lineage, &e.to_string());
+                return Err(Status::internal(format!("Error building plan: {e}")));
+            }
+        };
 
         // See `do_get_handle`: this blocks DataFusion-native DDL/DML; Unity
         // Catalog DDL rides through as an `Extension` node and is authorized by
@@ -646,10 +711,26 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map(|s| s.clone())
             .ok_or_else(|| Status::internal(format!("Plan handle not found: {handle}")))?;
 
-        // Reuse the run_id + lineage snapshot from planning so START and
-        // COMPLETE/FAIL share one runId; layer this request's agent context on top.
+        // Mint a fresh run id for this execution, with the planning run folded
+        // in as the parent facet (see crate::lineage::execution_context and ADR
+        // 0003): START and COMPLETE/FAIL emitted by the OpenLineageExec share
+        // this execution's run id, while the parent chain ties it back to the
+        // statement it was planned from. Layer this request's agent context on top.
+        let mut lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
-        let lh = session.lakehouse_for_query(stored.lineage.clone(), agent);
+        // This request may carry its own agent context (it can differ from
+        // planning's); refresh the provenance facet then — otherwise the
+        // planning-time snapshot carried by `execution_context` stands.
+        if agent.is_some()
+            && let Some(facet) = crate::lineage::hydrofoil_run_facet(
+                Some(session.principal()),
+                agent.as_ref(),
+                &self.lineage_config,
+            )
+        {
+            lineage.run_facets.insert("hydrofoil".to_string(), facet);
+        }
+        let lh = session.lakehouse_for_query(lineage, agent);
         let result = self.do_get_handle(Arc::new(lh), stored.plan.clone());
         session.statements().remove(&handle);
         result
@@ -676,9 +757,25 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .get(&handle)
             .map(|s| s.clone())
             .ok_or_else(|| Status::internal(format!("Plan handle not found: {handle}")))?;
-        // Prepared statements are removed on ClosePreparedStatement, not here.
+        // Prepared statements are removed on ClosePreparedStatement, not here, so
+        // one handle may be executed many times. Mint a fresh run id per
+        // execution (parented to the planning run) so re-executions don't share
+        // a runId and clobber one another's terminal event — see
+        // crate::lineage::execution_context and ADR 0003.
+        let mut lineage = crate::lineage::execution_context(&stored.lineage, &self.lineage_config);
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
-        let lh = session.lakehouse_for_query(stored.lineage.clone(), agent);
+        // Per-execution agent context wins over the creation-time snapshot (one
+        // prepared handle may serve many distinct agent tasks).
+        if agent.is_some()
+            && let Some(facet) = crate::lineage::hydrofoil_run_facet(
+                Some(session.principal()),
+                agent.as_ref(),
+                &self.lineage_config,
+            )
+        {
+            lineage.run_facets.insert("hydrofoil".to_string(), facet);
+        }
+        let lh = session.lakehouse_for_query(lineage, agent);
         self.do_get_handle(Arc::new(lh), stored.plan.clone())
     }
 
@@ -851,15 +948,23 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let plan_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
-        let lineage = self.lineage_context(&request, run_id, Some(query.query.clone()));
         let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lineage = self.lineage_context(
+            &request,
+            run_id,
+            Some(&query.query),
+            session.principal(),
+            agent.as_ref(),
+        );
         let lh = session.lakehouse_for_query(lineage.clone(), agent);
 
-        let plan = self
-            .executor
-            .create_logical_plan(lh, query.query)
-            .await
-            .map_err(|e| status!("Error building plan", e))?;
+        let plan = match self.executor.create_logical_plan(lh, query.query).await {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.emit_planning_failure(&lineage, &e.to_string());
+                return Err(status!("Error building plan", e));
+            }
+        };
 
         session.statements().insert(
             plan_id,
@@ -903,4 +1008,81 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use datafusion_open_lineage::OpenLineageClient;
+    use datafusion_open_lineage::context::LineageContext;
+    use datafusion_open_lineage::event::{RunEvent, RunEventType};
+    use datafusion_open_lineage::transport::{Transport, TransportError};
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[derive(Debug, Default, Clone)]
+    struct Recorder {
+        events: Arc<Mutex<Vec<RunEvent>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for Recorder {
+        async fn emit(&self, event: &RunEvent) -> std::result::Result<(), TransportError> {
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
+
+    /// C9.1: a query that fails during *logical* planning (before any physical
+    /// plan / OpenLineageExec exists) still surfaces to lineage as a single FAIL
+    /// carrying the statement's run/job identity and the error message.
+    #[tokio::test]
+    async fn logical_planning_failure_emits_fail_event() {
+        let recorder = Recorder::default();
+        let client = OpenLineageClient::new(Arc::new(recorder.clone()));
+        let service = FlightSqlServiceImpl::try_new()
+            .unwrap()
+            .with_lineage(client, OpenLineageConfig::default());
+
+        let run_id = Uuid::now_v7();
+        let lineage = LineageContext {
+            run_id: Some(run_id),
+            job_name: Some("query-bad".into()),
+            sql: Some("SELECT * FROM nonexistent".into()),
+            ..Default::default()
+        };
+
+        service.emit_planning_failure(&lineage, "table 'nonexistent' not found");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = recorder.events.lock().unwrap();
+        assert_eq!(events.len(), 1, "exactly one FAIL event");
+        let e = &events[0];
+        assert_eq!(e.event_type, RunEventType::Fail);
+        assert_eq!(e.run.run_id, run_id, "FAIL carries the statement run id");
+        assert_eq!(e.job.name, "query-bad", "FAIL carries the derived job name");
+        let err = e
+            .run
+            .facets
+            .error_message
+            .as_ref()
+            .expect("error facet present");
+        assert!(err.message.contains("nonexistent"));
+        // No plan resolved, so no input/output datasets are reported.
+        assert!(e.inputs.is_empty() && e.outputs.is_empty());
+    }
+
+    /// Without a lineage client wired, the planning-failure path is a no-op (it
+    /// must not panic).
+    #[tokio::test]
+    async fn planning_failure_without_lineage_is_noop() {
+        let service = FlightSqlServiceImpl::try_new().unwrap();
+        let lineage = LineageContext {
+            run_id: Some(Uuid::now_v7()),
+            ..Default::default()
+        };
+        service.emit_planning_failure(&lineage, "boom");
+    }
 }

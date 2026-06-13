@@ -670,8 +670,9 @@ impl datafusion::execution::context::QueryPlanner for UnityQueryPlanner {
 pub fn create_session(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
+    lineage_config: OpenLineageConfig,
 ) -> Result<SessionContext> {
-    create_session_for(session_id, lineage, None, None)
+    create_session_for(session_id, lineage, lineage_config, None, None)
 }
 
 /// Build a session context, optionally binding a [`PrincipalIdentity`] into the
@@ -684,6 +685,7 @@ pub fn create_session(
 pub fn create_session_for(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
+    lineage_config: OpenLineageConfig,
     principal: Option<PrincipalIdentity>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
 ) -> Result<SessionContext> {
@@ -751,7 +753,7 @@ pub fn create_session_for(
             session_state,
             client,
             Arc::new(crate::lineage::HydrofoilContextProvider),
-            OpenLineageConfig::default(),
+            lineage_config,
         );
     }
 
@@ -843,7 +845,7 @@ mod integration_tests {
         policy: Arc<dyn Policy>,
         lineage: Option<OpenLineageClient>,
     ) -> LakehouseCtx {
-        let session = create_session(None, lineage).unwrap();
+        let session = create_session(None, lineage, OpenLineageConfig::default()).unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
             Field::new("region", DataType::Utf8, true),
@@ -868,7 +870,7 @@ mod integration_tests {
         // `create_session_for` attaches a `CatalogFactSinkExt` so `build_delta`
         // (during resolution) and the policy layer share one sink. Assert it is
         // present on the session state and round-trips facts.
-        let session = create_session(None, None).unwrap();
+        let session = create_session(None, None, OpenLineageConfig::default()).unwrap();
         let ext = session
             .state()
             .config()
@@ -1094,7 +1096,12 @@ mod integration_tests {
         use crate::engine::Engine;
         use crate::policy::StaticPolicy;
 
-        let engine = Engine::new(Arc::new(StaticPolicy::new(Decision::Allow)), None, None);
+        let engine = Engine::new(
+            Arc::new(StaticPolicy::new(Decision::Allow)),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        );
         let session = engine.new_session(principal("alice")).expect("session");
 
         // Register table `t` on the session context.
@@ -1187,7 +1194,12 @@ mod integration_tests {
             }
         }
 
-        let engine = Engine::new(Arc::new(Guardrail), None, None);
+        let engine = Engine::new(
+            Arc::new(Guardrail),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        );
         let session = engine.new_session(principal("alice")).expect("session");
 
         // Clean session: the tool call is permitted.
