@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
-#     "delta-spark==4.0.1",
-#     "pyspark==4.0.1",
+#     "delta-spark==4.1.0",
+#     "pyspark==4.1.2",
 #     "requests",
 #     "marimo",
 # ]
@@ -53,10 +53,12 @@ def _():
 
 @app.cell
 def _(ACCESS_KEY, CATALOG, S3_ENDPOINT, SECRET_KEY, UC_URI):
-    from delta import configure_spark_with_delta_pip
     import pyspark
 
-    builder = (
+    # Spark jars (UC 0.5 connector from branch-0.5 + delta-spark + hadoop-aws) are baked
+    # onto the classpath in the marimo image — no runtime Ivy resolution / no
+    # configure_spark_with_delta_pip.
+    spark = (
         pyspark.sql.SparkSession.builder.appName("uc-crud")
         # Delta + UC single-catalog connector
         .config(
@@ -88,16 +90,8 @@ def _(ACCESS_KEY, CATALOG, S3_ENDPOINT, SECRET_KEY, UC_URI):
             "spark.hadoop.fs.s3a.aws.credentials.provider",
             "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
         )
+        .getOrCreate()
     )
-
-    extra_packages = [
-        "io.unitycatalog:unitycatalog-spark_2.13:0.4.0",
-        "org.apache.hadoop:hadoop-aws:3.4.0",
-    ]
-
-    spark = configure_spark_with_delta_pip(
-        builder, extra_packages=extra_packages
-    ).getOrCreate()
     return (spark,)
 
 

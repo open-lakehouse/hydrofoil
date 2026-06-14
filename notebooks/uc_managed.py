@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
-#     "delta-spark==4.0.1",
-#     "pyspark==4.0.1",
+#     "delta-spark==4.1.0",
+#     "pyspark==4.1.2",
 #     "requests",
 #     "marimo",
 # ]
@@ -71,10 +71,12 @@ def _(CATALOG, SCHEMA, STORAGE_ROOT, UC_URI):
 
 @app.cell
 def _(AWS_REGION, CATALOG, UC_URI):
-    from delta import configure_spark_with_delta_pip
     import pyspark
 
-    builder = (
+    # Spark jars (UC 0.5 connector from branch-0.5 + delta-spark + hadoop-aws) are baked
+    # onto the classpath in the marimo image — no runtime Ivy resolution / no
+    # configure_spark_with_delta_pip.
+    spark = (
         pyspark.sql.SparkSession.builder.appName("uc-managed")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog")
@@ -87,16 +89,8 @@ def _(AWS_REGION, CATALOG, UC_URI):
         # injects them into the s3a client per table.
         .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config("spark.hadoop.fs.s3a.endpoint.region", AWS_REGION)
+        .getOrCreate()
     )
-
-    extra_packages = [
-        "io.unitycatalog:unitycatalog-spark_2.13:0.4.0",
-        "org.apache.hadoop:hadoop-aws:3.4.0",
-    ]
-
-    spark = configure_spark_with_delta_pip(
-        builder, extra_packages=extra_packages
-    ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return (spark,)
 

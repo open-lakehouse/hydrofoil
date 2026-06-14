@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
-#     "delta-spark==4.0.1",
-#     "pyspark==4.0.1",
+#     "delta-spark==4.1.0",
+#     "pyspark==4.1.2",
 #     "requests",
 #     "marimo",
 # ]
@@ -24,9 +24,9 @@
 # at POST /api/v1/lineage and writes events to a Delta "events" table under
 # ./.data/lineage (see environments/services/lineage-service.yaml).
 #
-# Maven packages (openlineage-spark, the UC connector, hadoop-aws) resolve through
-# the Databricks Maven proxy via Ivy — the marimo image bakes an ivysettings.xml and
-# exports SPARK_IVY_SETTINGS; on the host we fall back to spark.jars.repositories.
+# Spark jars (openlineage-spark 1.48.0, the UC 0.5 connector built from branch-0.5 —
+# which carries the UC Delta /delta/v1 APIs, hadoop-aws) are baked onto the classpath
+# in the marimo image at build time (spark-defaults.conf). No runtime Ivy resolution.
 #
 # Prerequisites:
 #   - lineage-service running and reachable (docker: lineage-service:8091; host: localhost:8091).
@@ -85,18 +85,14 @@ def _():
     LINEAGE_URL = os.environ.get("LINEAGE_URL", "http://lineage-service:8091")
     LINEAGE_NAMESPACE = "spark-demo"
 
-    # Maven proxy: the image bakes ivysettings.xml and exports SPARK_IVY_SETTINGS.
-    # On the host (no env var) we fall back to a plain repositories override.
-    IVY_SETTINGS = os.environ.get("SPARK_IVY_SETTINGS")
-    MAVEN_PROXY = "https://maven-proxy.cloud.databricks.com"
+    # No Maven/Ivy config here anymore: the Spark jars (UC 0.5 connector, delta-spark,
+    # openlineage, hadoop-aws) are baked onto the classpath in the marimo image.
     return (
         AWS_REGION,
         CATALOG,
         DERIVED,
-        IVY_SETTINGS,
         LINEAGE_NAMESPACE,
         LINEAGE_URL,
-        MAVEN_PROXY,
         SCHEMA,
         STORAGE_ROOT,
         TABLE,
@@ -153,16 +149,20 @@ def _(mo):
 def _(
     AWS_REGION,
     CATALOG,
-    IVY_SETTINGS,
     LINEAGE_NAMESPACE,
     LINEAGE_URL,
-    MAVEN_PROXY,
     UC_URI,
 ):
-    from delta import configure_spark_with_delta_pip
     import pyspark
 
-    builder = (
+    # All Spark jars (the UC 0.5 connector, delta-spark, openlineage, hadoop-aws +
+    # transitive deps) are baked onto the classpath in the marimo image via a
+    # spark-defaults.conf (Dockerfile `jars` stage). So there is NO runtime Ivy
+    # resolution here: no spark.jars.packages / .repositories / .ivySettings and no
+    # configure_spark_with_delta_pip. We just build a plain session with the catalog +
+    # OpenLineage config. (The previous Databricks-Maven-proxy path is gone — the proxy
+    # mirrors outdated artifacts, e.g. it 404s openlineage 1.49.0.)
+    spark = (
         pyspark.sql.SparkSession.builder.appName("spark-lineage")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog")
@@ -182,27 +182,8 @@ def _(
         .config("spark.openlineage.transport.endpoint", "/api/v1/lineage")
         .config("spark.openlineage.namespace", LINEAGE_NAMESPACE)
         .config("spark.openlineage.columnLineage.datasetLineageEnabled", "true")
+        .getOrCreate()
     )
-
-    # Maven package resolution through the Databricks proxy. In-container the image
-    # bakes an ivysettings.xml (sole resolver = the proxy) and exports
-    # SPARK_IVY_SETTINGS; on the host we just add the proxy as a repository.
-    if IVY_SETTINGS:
-        builder = builder.config("spark.jars.ivySettings", IVY_SETTINGS)
-    else:
-        builder = builder.config("spark.jars.repositories", MAVEN_PROXY)
-
-    extra_packages = [
-        "io.unitycatalog:unitycatalog-spark_2.13:0.4.0",
-        "org.apache.hadoop:hadoop-aws:3.4.0",
-        # Use the _2.13 coordinate at 1.47.1: it's the latest mirrored on the
-        # Databricks Maven proxy AND is Spark-4.0-compatible. The bare
-        # `openlineage-spark` coordinate only goes to 1.8.0 on the proxy, which
-        # breaks Spark 4.0 ("No active or default Spark session found").
-        "io.openlineage:openlineage-spark_2.13:1.47.1",
-    ]
-
-    spark = configure_spark_with_delta_pip(builder, extra_packages=extra_packages).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return (spark,)
 
@@ -314,36 +295,18 @@ def _(mo):
 
 
 @app.cell
-def _(MAVEN_PROXY):
-    # Run the SDP pipeline. `spark-pipelines` ships with pyspark **4.1.0+** (NOT 4.0.1
-    # — see the note above). Packages are passed at run time (same coordinates as the
-    # session above); the spec carries the UC + S3A + OpenLineage config. We pass the
-    # Maven proxy as a repository so resolution works in-network.
+def _():
+    # Run the SDP pipeline. `spark-pipelines` ships with pyspark **4.1.0+** (the image
+    # now pins 4.1.2). No --packages/--repositories: the Spark jars are baked onto the
+    # classpath in the marimo image (spark-submit, which spark-pipelines wraps, picks up
+    # the baked spark-defaults.conf). The spec carries the UC + S3A + OpenLineage config.
     import subprocess
     from pathlib import Path
 
-    packages = ",".join(
-        [
-            "io.delta:delta-spark_2.13:4.0.1",
-            "io.unitycatalog:unitycatalog-spark_2.13:0.4.0",
-            "org.apache.hadoop:hadoop-aws:3.4.0",
-            # 1.47.1 is the latest on the Databricks Maven proxy and Spark-4-compatible.
-            "io.openlineage:openlineage-spark_2.13:1.47.1",
-        ]
-    )
     spec = Path("pipelines/spark-pipeline.yml")
 
     proc = subprocess.run(
-        [
-            "spark-pipelines",
-            "run",
-            "--spec",
-            str(spec),
-            "--conf",
-            f"spark.jars.packages={packages}",
-            "--conf",
-            f"spark.jars.repositories={MAVEN_PROXY}",
-        ],
+        ["spark-pipelines", "run", "--spec", str(spec)],
         capture_output=True,
         text=True,
     )

@@ -48,16 +48,11 @@ services:
     volumes:
       # Bind-mount the repo-root notebooks/ dir RW so edits land on the host.
       - ../notebooks:/notebooks
-      # Spark jar (Ivy) cache. The notebooks build their SparkSession with
-      # `spark.jars.packages` (delta-spark, unitycatalog-spark, hadoop-aws), which
-      # makes spark-submit resolve those coordinates from Maven Central at startup.
-      # This container has NO outbound network (egress is routed through Envoy), so
-      # without a pre-populated cache Ivy resolution fails and pyspark dies with
-      # "[JAVA_GATEWAY_EXITED] Java gateway process exited before sending its port
-      # number". Mounting the host Ivy cache (populated by the host `uvx --sandbox`
-      # runs) lets Ivy resolve fully offline. RW because spark-submit writes its
-      # per-run resolution cache here. Spark 4.x uses ~/.ivy2.5.2.
-      - ${HOME}/.ivy2.5.2:/home/appuser/.ivy2.5.2
+      # NOTE: no Ivy cache mount. The Spark jars (UC 0.5 connector, delta-spark,
+      # openlineage, hadoop-aws + transitive deps) are baked onto the classpath in the
+      # marimo image at build time (see environments/docker/marimo/Dockerfile). Notebooks
+      # build a plain SparkSession with no `spark.jars.packages`, so there is no runtime
+      # Ivy resolution — the container needs no outbound Maven access and no host cache.
     # marimo user config (AI assistant wiring) injected at the XDG config path,
     # outside the notebooks bind mount. Declared as a top-level `config` in the
     # parent compose files (same pattern unity-catalog uses).
