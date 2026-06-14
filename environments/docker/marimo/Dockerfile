@@ -2,9 +2,12 @@
 #
 # Multi-stage uv build (marimo's recommended pattern): a builder stage runs
 # `uv sync --frozen` into /app/.venv, then a slim runtime stage copies just the
-# venv. Notebooks are NOT baked in — the repo `notebooks/` dir is bind-mounted at
-# runtime (see environments/services/notebooks.yaml) so interactive edits persist
-# to the host, matching the host `uvx --directory notebooks/` flow.
+# venv. The repo `notebooks/` dir IS baked into the runtime image so the deployed
+# container is self-contained; the dev stack additionally bind-mounts ../notebooks over
+# /notebooks (see environments/services/notebooks.yaml) so interactive edits persist to
+# the host, matching the host `uvx --directory notebooks/` flow. The build context is the
+# REPO ROOT (needed to reach notebooks/), so build-input COPYs use full repo-relative
+# paths and Dockerfile.dockerignore trims the context to just what this image needs.
 #
 # Spark note: pyspark does NOT bundle/vendor a JRE (confirmed against the Spark
 # 4.x install docs) — classic PySpark launches a local JVM on the driver, so the
@@ -81,7 +84,10 @@ COPY --from=uc-connector /root/.ivy2 /root/.ivy2
 # the Dockerfile to avoid shell-quoting fragility); it builds a custom ivysettings.xml so
 # the resolver chain is exactly `local` + ${MAVEN_REPO} and nothing else. Coordinates +
 # MAVEN_REPO are passed through the environment.
-COPY resolve-spark-jars.sh /usr/local/bin/resolve-spark-jars.sh
+#
+# NOTE: the build context is the REPO ROOT (so the runtime stage can bake repo-root
+# notebooks/), hence all build-input COPYs are prefixed with environments/docker/marimo/.
+COPY environments/docker/marimo/resolve-spark-jars.sh /usr/local/bin/resolve-spark-jars.sh
 RUN chmod +x /usr/local/bin/resolve-spark-jars.sh \
     && DELTA_PACKAGE="${DELTA_PACKAGE}" UC_PACKAGE="${UC_PACKAGE}" \
        HADOOP_AWS_PACKAGE="${HADOOP_AWS_PACKAGE}" OPENLINEAGE_PACKAGE="${OPENLINEAGE_PACKAGE}" \
@@ -109,8 +115,8 @@ WORKDIR /app
 # Cached dependency layer: lockfile + manifest + the local wheels index. pyproject's
 # [[tool.uv.index]] url = "./wheels" resolves unitycatalog-client from this dir, so it
 # must be present before `uv sync` (both arch wheels live here; see wheels/README.md).
-COPY pyproject.toml uv.lock ./
-COPY wheels ./wheels
+COPY environments/docker/marimo/pyproject.toml environments/docker/marimo/uv.lock ./
+COPY environments/docker/marimo/wheels ./wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
@@ -161,9 +167,11 @@ RUN SPARK_CONF_DIR="$(/app/.venv/bin/python -c 'import pyspark,os;print(os.path.
         > "$SPARK_CONF_DIR/spark-defaults.conf" \
     && echo "Baked $(ls /opt/spark-jars/*.jar | wc -l) jars into $SPARK_CONF_DIR/spark-defaults.conf"
 
-# Working dir == the runtime bind-mount target for the host notebooks/ dir.
+# Bake the repo notebooks into the image so the DEPLOYED container is self-contained
+# (the dev stack still bind-mounts ../notebooks over /notebooks for live edits — the mount
+# shadows this baked copy, so local editing is unchanged). Context is the repo root.
 WORKDIR /notebooks
-RUN chown appuser:appuser /notebooks
+COPY --chown=appuser:appuser notebooks /notebooks
 
 USER appuser
 

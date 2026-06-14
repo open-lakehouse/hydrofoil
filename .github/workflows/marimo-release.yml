@@ -115,7 +115,10 @@ jobs:
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
-          context: environments/docker/marimo
+          # Context is the repo root so the build can bake repo-root notebooks/ into the
+          # image. Dockerfile.dockerignore trims the (huge) root context to just the marimo
+          # build inputs + notebooks/.
+          context: .
           file: environments/docker/marimo/Dockerfile
           build-args: |
             OPENLINEAGE_PACKAGE=${{ env.OPENLINEAGE_PACKAGE }}

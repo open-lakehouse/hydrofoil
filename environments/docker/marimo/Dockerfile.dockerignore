@@ -1,0 +1,19 @@
+# Per-Dockerfile ignore for the marimo image (BuildKit reads <dockerfile>.dockerignore in
+# preference to the root .dockerignore). The build context is the REPO ROOT, which is huge
+# (52GB target/, .git, local stack .data, etc.), so allowlist only what this image needs:
+# the marimo build inputs and the notebooks we bake.
+#
+# Exclude everything, then re-include the two trees we need.
+*
+
+!environments/docker/marimo
+!notebooks
+
+# Within those, drop local noise that must never enter the image.
+environments/docker/marimo/.venv
+**/__pycache__
+**/__marimo__
+**/*.pyc
+**/.data
+**/spark-warehouse
+notebooks/.env

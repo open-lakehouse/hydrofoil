@@ -8,13 +8,24 @@
 services:
   marimo:
     build:
-      context: ./docker/marimo
-      dockerfile: Dockerfile
+      # Context is the repo root (one level up from the compose project dir) so the build
+      # can bake repo-root notebooks/ into the image; the Dockerfile lives under
+      # docker/marimo/. docker/marimo/Dockerfile.dockerignore trims the context.
+      context: ..
+      dockerfile: environments/docker/marimo/Dockerfile
       args:
-        # uv package index for the build. Defaults to the internal Databricks
-        # pypi proxy; override via UV_INDEX_URL in environments/.env when building
-        # outside the Databricks network.
+        # Package indexes/repos for the build. Default to the internal Databricks proxies
+        # (the dev-build network); override each via environments/.env when building
+        # outside the Databricks network (the CI release workflow passes the public
+        # PyPI / Maven Central values + an empty MAVEN_PROXY_URL).
+        #   UV_INDEX_URL    — builder venv (uv sync)
+        #   PIP_INDEX_URL   — jars stage's throwaway pyspark install
+        #   MAVEN_REPO      — Spark --packages resolution (delta/openlineage/hadoop-aws)
+        #   MAVEN_PROXY_URL — the UC connector sbt build (launcher + dep resolution)
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi-proxy.cloud.databricks.com/simple}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi-proxy.cloud.databricks.com/simple}
+        MAVEN_REPO: ${MAVEN_REPO:-https://maven-proxy.cloud.databricks.com/}
+        MAVEN_PROXY_URL: ${MAVEN_PROXY_URL:-https://maven-proxy.cloud.databricks.com}
     restart: unless-stopped
     # Override the image CMD to serve under a configurable path prefix
     # (`--base-url`, default `/marimo`) so the prefix-unfriendly editor UI stays
