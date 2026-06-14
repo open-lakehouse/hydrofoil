@@ -50,9 +50,11 @@ SPARK_HOME=$(/opt/resolver/bin/python -c "import pyspark,os;print(os.path.dirnam
 # dir avoids the duplicate copies you'd get by also scanning $IVY_HOME/cache (same jars,
 # unprefixed names) — duplicates on the classpath are wasteful and load each class twice.
 mkdir -p /spark-jars
+# No -n needed: a single flat dir has no same-named collisions, and dropping it avoids
+# coreutils' "behavior of -n is non-portable" warning.
 find "$IVY_HOME/jars" -type f -name '*.jar' \
   ! -name '*-sources.jar' ! -name '*-javadoc.jar' \
-  -exec cp -n {} /spark-jars/ \;
+  -exec cp {} /spark-jars/ \;
 
 count=$(find /spark-jars -name '*.jar' | wc -l)
 echo "Collected ${count} jars into /spark-jars"

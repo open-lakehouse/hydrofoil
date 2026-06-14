@@ -107,7 +107,10 @@ jobs:
 
       # Build + push by digest only (no tags here — the merge job applies them). The
       # context is the marimo image dir (its Dockerfile COPYs wheels/pyproject relative
-      # to it). CI has open internet so build-args use Maven Central / PyPI defaults.
+      # to it). GitHub-hosted runners are on the PUBLIC internet and CANNOT reach the
+      # internal Databricks proxies, so we must override the Dockerfile's proxy-oriented
+      # defaults to public PyPI + Maven Central (and leave MAVEN_PROXY_URL empty so the
+      # sbt connector build resolves from Maven Central directly).
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -116,6 +119,10 @@ jobs:
           file: environments/docker/marimo/Dockerfile
           build-args: |
             OPENLINEAGE_PACKAGE=${{ env.OPENLINEAGE_PACKAGE }}
+            UV_INDEX_URL=https://pypi.org/simple
+            PIP_INDEX_URL=https://pypi.org/simple
+            MAVEN_REPO=https://repo1.maven.org/maven2
+            MAVEN_PROXY_URL=
           platforms: ${{ matrix.platform.os }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
