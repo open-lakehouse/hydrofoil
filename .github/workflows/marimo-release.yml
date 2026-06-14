@@ -1,0 +1,232 @@
+name: Release Marimo Notebook Image
+
+# Build and publish the marimo notebook-server image to GHCR. Separate from
+# docker-release.yml (which ships the Rust service images on `v*` tags): this image
+# is the demo notebook runtime — marimo + pyspark 4.1 + delta-spark 4.1 + the
+# Unity Catalog 0.5 Spark connector (built from source) + openlineage, with the full
+# Spark jar closure baked onto the classpath (see environments/docker/marimo/Dockerfile).
+#
+# It releases on its OWN tag namespace `marimo-v*` (e.g. marimo-v0.1.0) so notebook
+# image releases are decoupled from the service `v*` release cadence. A tag push builds
+# multi-arch (amd64 + native arm64), pushes each arch by digest, then a merge job
+# assembles the manifest list, applies tags, and signs the index keyless via cosign.
+# PRs / main pushes that touch the image build for validation but do not publish.
+#
+# CI runners have open internet, so the build uses the defaults (Maven Central + PyPI)
+# and pins openlineage 1.49.0 (latest stable). Local proxy-only builds instead pass
+# MAVEN_PROXY_URL/MAVEN_REPO/UV_INDEX_URL/PIP_INDEX_URL and stay on the Dockerfile's
+# proxy-available 1.48.0 default.
+
+on:
+  push:
+    tags: ["marimo-v*"]
+    branches: [main]
+    # Branch/main builds only when something affecting THIS image changes.
+    # Tag pushes ignore `paths` and always run.
+    paths:
+      - environments/docker/marimo/**
+      - notebooks/**
+      - .github/workflows/marimo-release.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - environments/docker/marimo/**
+      - notebooks/**
+      - .github/workflows/marimo-release.yml
+  workflow_dispatch: {}
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege by default; jobs opt into more.
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/open-lakehouse/marimo
+  # openlineage on Maven Central (CI has open internet); overrides the Dockerfile's
+  # proxy-safe 1.48.0 default.
+  OPENLINEAGE_PACKAGE: io.openlineage:openlineage-spark_2.13:1.49.0
+
+jobs:
+  # Build each platform on its NATIVE runner and push BY DIGEST (no tags). Native arm64
+  # avoids QEMU-emulating the long sbt connector build + jar resolution.
+  build:
+    name: Build marimo (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+
+    # Publish from the canonical repo on pushes to main / marimo-v* tags, not on PRs.
+    if: ${{ contains(fromJSON('["push", "workflow_dispatch"]'), github.event_name) && github.repository == 'open-lakehouse/hydrofoil' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main') }}
+
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io with GITHUB_TOKEN
+      id-token: write   # build provenance / SBOM attestations
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            os: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            os: linux/arm64
+            runner: ubuntu-24.04-arm   # native arm64 hosted runner
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest
+        with:
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.title=marimo
+            org.opencontainers.image.description=open-lakehouse marimo notebook server (Spark 4.1 + Unity Catalog 0.5)
+            org.opencontainers.image.vendor=open-lakehouse
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.source=https://github.com/open-lakehouse/hydrofoil
+
+      # Build + push by digest only (no tags here — the merge job applies them). The
+      # context is the marimo image dir (its Dockerfile COPYs wheels/pyproject relative
+      # to it). CI has open internet so build-args use Maven Central / PyPI defaults.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: environments/docker/marimo
+          file: environments/docker/marimo/Dockerfile
+          build-args: |
+            OPENLINEAGE_PACKAGE=${{ env.OPENLINEAGE_PACKAGE }}
+          platforms: ${{ matrix.platform.os }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=marimo-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=marimo-${{ matrix.platform.arch }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-marimo-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assemble the per-arch digests into one multi-arch manifest list, apply the tags,
+  # then sign the resulting index by digest (keyless).
+  merge:
+    name: Merge and sign
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # cosign keyless signing
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digests-marimo-*
+          merge-multiple: true
+          path: /tmp/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagging strategy:
+      #   tag push marimo-v* -> <version> parsed after `marimo-v` (e.g. 0.1.0) + the raw
+      #                         git tag + `latest`
+      #   main push          -> `main`, `main-<sha>`, `edge`; never `latest`
+      # The semver `match` strips the `marimo-v` prefix so the image tag is a clean
+      # version, while `type=ref,event=tag` also keeps the full `marimo-v0.1.0` tag.
+      - name: Generate metadata and tags
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=match,pattern=marimo-v(.*),group=1
+            type=ref,event=tag
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+          flavor: |
+            latest=auto
+          labels: |
+            org.opencontainers.image.title=marimo
+            org.opencontainers.image.description=open-lakehouse marimo notebook server (Spark 4.1 + Unity Catalog 0.5)
+            org.opencontainers.image.vendor=open-lakehouse
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.source=https://github.com/open-lakehouse/hydrofoil
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ env.IMAGE }}
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=(); for t in "${tags[@]}"; do tag_args+=(-t "$t"); done
+          ann_args=()
+          while IFS= read -r a; do
+            [ -n "$a" ] && ann_args+=(--annotation "$a")
+          done <<< "$DOCKER_METADATA_OUTPUT_ANNOTATIONS"
+          srcs=(); for d in *; do srcs+=("${IMAGE}@sha256:${d}"); done
+          docker buildx imagetools create "${tag_args[@]}" "${ann_args[@]}" "${srcs[@]}"
+
+      - name: Inspect and capture index digest
+        id: digest
+        run: |
+          ref=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect "$ref"
+          d=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "index=$d" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign images (keyless)
+        env:
+          DIGEST: ${{ steps.digest.outputs.index }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "$TAGS" | sed "s/:.*\$/@$DIGEST/" | sort -u | \
+            xargs --no-run-if-empty cosign sign --yes

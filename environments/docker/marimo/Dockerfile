@@ -13,6 +13,80 @@
 # creates the stable /usr/lib/jvm/default-java symlink we point JAVA_HOME at
 # (the concrete path is arch-specific: java-17-openjdk-{arm64,amd64}). Without
 # it the Spark notebooks fail with "JAVA_HOME is not set".
+#
+# Jar note: the Spark jars (the UC 0.5 connector built from source, delta-spark,
+# openlineage, hadoop-aws) are RESOLVED + BAKED at build time (the uc-connector and
+# jars stages below) onto a fixed classpath, replacing the old runtime Ivy resolution.
+# The UC 0.5 connector isn't published anywhere, so it's built from branch-0.5 here.
+# The published jars resolve from Maven Central by default; pass MAVEN_REPO=<proxy> to
+# build behind the corporate firewall (the pins are chosen to be proxy-available).
+
+# ---- UC Spark connector: built from source (branch-0.5) ----------------------
+# The deployed demo server is Unity Catalog 0.5, which exposes the catalog-managed
+# Delta APIs (/delta/v1 add-commit). The published unitycatalog-spark 0.4.x connector
+# does NOT carry that support — it only lives on branch-0.5, unreleased to Maven
+# Central, so we build the connector from source here. crossPaths=false +
+# CrossSparkVersions => the artifact is io.unitycatalog:unitycatalog-spark_4.1_2.13:0.5.0
+# (default sparkVersion 4.1.0). publishLocal drops it into ~/.ivy2/local so the jars
+# stage below can pull it as a normal Spark package alongside the Maven-Central ones.
+FROM eclipse-temurin:17-jdk AS uc-connector
+ARG UC_BRANCH=branch-0.5
+ARG UC_SPARK_VERSION=4.1.0
+# Optional Maven mirror. The repo's build/sbt wrapper honors MAVEN_PROXY_URL for BOTH the
+# sbt-launcher bootstrap download AND as the sole dependency repository (local + proxy) —
+# matching the quickstart's documented build flow. Leave empty for an open-internet build
+# (the wrapper uses Maven Central); set to the proxy URL to build behind the firewall.
+# (The connector's deps — hadoop-aws, scala, etc. — ARE mirrored on the proxy.)
+ARG MAVEN_PROXY_URL=
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch ${UC_BRANCH} \
+    https://github.com/unitycatalog/unitycatalog /uc
+WORKDIR /uc
+# Build + publish the Spark connector (and its UC client deps) to the local Ivy repo.
+RUN MAVEN_PROXY_URL="${MAVEN_PROXY_URL}" \
+    ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} "spark/publishLocal"
+
+# ---- Spark jar closure: resolve everything into one classpath dir -------------
+# Reuse Spark's own resolver (spark-submit --packages) so the dir holds the exact
+# transitive closure --packages would pull. Coordinates pinned to the latest stable
+# releases that are reachable through both Maven Central and the Databricks proxy
+# (see MAVEN_REPO + the openlineage 1.48.0 note below).
+FROM eclipse-temurin:17-jdk AS jars
+ARG DELTA_PACKAGE=io.delta:delta-spark_4.1_2.13:4.1.0
+ARG UC_PACKAGE=io.unitycatalog:unitycatalog-spark_4.1_2.13:0.5.0
+ARG HADOOP_AWS_PACKAGE=org.apache.hadoop:hadoop-aws:3.4.2
+ARG OPENLINEAGE_PACKAGE=io.openlineage:openlineage-spark_2.13:1.48.0
+ARG PYSPARK_VERSION=4.1.2
+# Remote Maven repo for resolution. Defaults to Maven Central. openlineage is pinned to
+# 1.48.0 — the highest the Databricks Maven proxy mirrors (1.49.0 is Central-only) — so
+# this build also works behind the corporate firewall by overriding MAVEN_REPO to the
+# proxy. Bump to 1.49.0+ only once an open-internet/CI build is the norm.
+ARG MAVEN_REPO=https://repo1.maven.org/maven2
+# pip index for the throwaway pyspark below. Defaults to PyPI; override to the Databricks
+# proxy (same value as the builder's UV_INDEX_URL) when building behind the firewall.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+# A throwaway pyspark gives us spark-submit + the matching Spark to resolve against.
+RUN python3 -m venv /opt/resolver \
+    && /opt/resolver/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" "pyspark==${PYSPARK_VERSION}"
+# Copy the whole Ivy home from the connector build: `local` has the published
+# unitycatalog-spark_4.1_2.13:0.5.0, and `cache` already holds the connector's deps that
+# sbt resolved through the proxy (so they need not be re-fetched).
+COPY --from=uc-connector /root/.ivy2 /root/.ivy2
+# Resolve the closure + harvest jars into /spark-jars. Logic lives in a script (kept out of
+# the Dockerfile to avoid shell-quoting fragility); it builds a custom ivysettings.xml so
+# the resolver chain is exactly `local` + ${MAVEN_REPO} and nothing else. Coordinates +
+# MAVEN_REPO are passed through the environment.
+COPY resolve-spark-jars.sh /usr/local/bin/resolve-spark-jars.sh
+RUN chmod +x /usr/local/bin/resolve-spark-jars.sh \
+    && DELTA_PACKAGE="${DELTA_PACKAGE}" UC_PACKAGE="${UC_PACKAGE}" \
+       HADOOP_AWS_PACKAGE="${HADOOP_AWS_PACKAGE}" OPENLINEAGE_PACKAGE="${OPENLINEAGE_PACKAGE}" \
+       MAVEN_REPO="${MAVEN_REPO}" \
+       /usr/local/bin/resolve-spark-jars.sh
 
 # ---- Builder: resolve + install deps into a venv -----------------------------
 FROM python:3.13-slim-bookworm AS builder
@@ -32,8 +106,11 @@ ENV UV_INDEX_URL=${UV_INDEX_URL} \
 
 WORKDIR /app
 
-# Cached dependency layer: lockfile + manifest only, no project source.
+# Cached dependency layer: lockfile + manifest + the local wheels index. pyproject's
+# [[tool.uv.index]] url = "./wheels" resolves unitycatalog-client from this dir, so it
+# must be present before `uv sync` (both arch wheels live here; see wheels/README.md).
 COPY pyproject.toml uv.lock ./
+COPY wheels ./wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
@@ -63,6 +140,26 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     MARIMO_SKIP_UPDATE_CHECK=1
 
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+
+# --- Baked Spark jar classpath -----------------------------------------------
+# The Spark jars (UC 0.5 connector, delta-spark, openlineage, hadoop-aws + their
+# transitive closure) are resolved at BUILD time and baked in here, instead of the
+# old runtime `spark.jars.packages` Ivy resolution through the Databricks Maven proxy
+# (which mirrors outdated artifacts — e.g. it 404s openlineage 1.49.0). Notebooks now
+# run fully offline with no Ivy resolution.
+#
+# We point every SparkSession at the baked dir via a spark-defaults.conf written into
+# pyspark's bundled conf dir. The OpenLineage SparkListener must be on the DRIVER
+# classpath at JVM launch, so we set spark.driver.extraClassPath (a dir glob) in
+# addition to spark.jars (executor + general visibility).
+COPY --from=jars --chown=appuser:appuser /spark-jars /opt/spark-jars
+RUN SPARK_CONF_DIR="$(/app/.venv/bin/python -c 'import pyspark,os;print(os.path.join(os.path.dirname(pyspark.__file__),"conf"))')" \
+    && mkdir -p "$SPARK_CONF_DIR" \
+    && JARS_CSV="$(ls /opt/spark-jars/*.jar | paste -sd, -)" \
+    && printf 'spark.jars %s\nspark.driver.extraClassPath %s\nspark.executor.extraClassPath %s\n' \
+        "$JARS_CSV" "/opt/spark-jars/*" "/opt/spark-jars/*" \
+        > "$SPARK_CONF_DIR/spark-defaults.conf" \
+    && echo "Baked $(ls /opt/spark-jars/*.jar | wc -l) jars into $SPARK_CONF_DIR/spark-defaults.conf"
 
 # Working dir == the runtime bind-mount target for the host notebooks/ dir.
 WORKDIR /notebooks

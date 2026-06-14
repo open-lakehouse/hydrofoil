@@ -1,3 +1,0 @@
-# Wheels are locally-built artifacts — see README.md for how to produce them.
-*.whl
-!README.md

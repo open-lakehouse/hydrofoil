@@ -2,9 +2,9 @@
 #
 # `spark-pipelines run --spec spark-pipeline.yml` is built on spark-submit, so all
 # Spark config (Delta, Unity Catalog, S3A, and the OpenLineage listener/transport)
-# is supplied here in `configuration:` — except jars/packages and the Maven proxy
-# repository, which are passed on the command line at run time (see
-# notebooks/spark_lineage.py).
+# is supplied here in `configuration:`. The Spark jars (UC 0.5 connector, delta-spark,
+# openlineage, hadoop-aws) are baked onto the classpath in the marimo image
+# (spark-defaults.conf), so spark-submit picks them up — no --packages needed.
 #
 # Target: the pipeline writes UC-managed Delta tables into demo.sdp_demo on real S3.
 # The `demo` catalog (with a storage_root) and `sdp_demo` schema must already exist

@@ -8,9 +8,13 @@ dependencies = [
     # DuckDB UC path (uc_duckdb.py)
     "duckdb>=1.5.0",
     # Spark + Delta path (uc_crud.py, uc_managed.py, uc_duckdb.py) — needs a JRE
-    # in the image (installed in the Dockerfile runtime stage).
-    "delta-spark==4.0.1",
-    "pyspark==4.0.1",
+    # in the image (installed in the Dockerfile runtime stage). Pinned to the latest
+    # stable 4.1 line: pyspark 4.1.2 (4.2.0 is still preview), delta-spark 4.1.0 — the
+    # python pkg versions MUST match the jars baked into the image (Dockerfile `jars`
+    # stage) or sessions fail with NoSuchMethodError/ClassNotFound. 4.1 also unlocks
+    # Spark Declarative Pipelines (pyspark.pipelines), absent from 4.0.x.
+    "delta-spark==4.1.0",
+    "pyspark==4.1.2",
     # Flight SQL / ADBC client path (client.py, policy_demo.py)
     "adbc-driver-flightsql>=1.9.0",
     "deltalake>=1.3.0",
