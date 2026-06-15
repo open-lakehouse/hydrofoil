@@ -55,8 +55,19 @@ WORKDIR /uc
 # runtime with ClassNotFoundException. branch-0.5's client is unreleased, so we must
 # publishLocal it too (sbt project `client` -> artifact unitycatalog-client) so the jar
 # resolver prefers the 0.5 client over Central's 0.4.0.
+#
+# Skip the client's Javadoc: `publishLocal` runs the `doc` task, and the client's
+# javadoc fails — its OpenAPI-generated sources reference packages
+# (io.unitycatalog.client.delta.model.*) javadoc can't resolve ("package ... does not
+# exist"). We only need the compiled jar + pom for resolution, not the javadoc. Both:
+#   - deselect the javadoc artifact from publish (publishArtifact := false), and
+#   - make the `doc` task itself a no-op (empty sources) so it can't fail even if some
+#     publish path still evaluates it (the client redefines `Compile / doc` in build.sbt).
 RUN MAVEN_PROXY_URL="${MAVEN_PROXY_URL}" \
-    ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} "client/publishLocal" "spark/publishLocal"
+    ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} \
+      'set client / Compile / packageDoc / publishArtifact := false' \
+      'set client / Compile / doc / sources := Seq.empty' \
+      "client/publishLocal" "spark/publishLocal"
 
 # ---- Spark jar closure: resolve everything into one classpath dir -------------
 # Reuse Spark's own resolver (spark-submit --packages) so the dir holds the exact
