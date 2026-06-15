@@ -21,6 +21,14 @@ dependencies = [
     "pyarrow",
     # UC REST calls
     "requests",
+    # Casper's demo (caspers_gen.py + caspers_load.py + stageN notebooks). numpy
+    # drives the seeded RNG in the generator; pandas backs polars.to_pandas() for
+    # spark.createDataFrame in the loader and the Altair charts; altair/plotly render
+    # the stage dashboards. polars + pyarrow are already above.
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "altair>=5.4",
+    "plotly>=5.24",
     # language server python
     "ty>=0.0.40",
     "openai>=2.38.0",
