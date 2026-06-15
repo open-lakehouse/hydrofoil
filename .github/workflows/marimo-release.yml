@@ -16,6 +16,11 @@ name: Release Marimo Notebook Image
 # and pins openlineage 1.49.0 (latest stable). Local proxy-only builds instead pass
 # MAVEN_PROXY_URL/MAVEN_REPO/UV_INDEX_URL/PIP_INDEX_URL and stay on the Dockerfile's
 # proxy-available 1.48.0 default.
+#
+# The build refreshes environments/docker/marimo/uv.lock against public PyPI before
+# building, so a dependency added to pyproject.toml is picked up even if the committed
+# lock is stale (the Dockerfile's `uv sync --frozen` would otherwise fail). The refresh
+# happens in the runner's checkout and is not committed back.
 
 on:
   push:
@@ -83,6 +88,23 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Refresh the lockfile so `uv sync --frozen` in the Dockerfile sees the current
+      # pyproject.toml (adding a dependency to pyproject without re-locking would fail
+      # the frozen sync). CI runners have open internet, so resolve against public PyPI
+      # — the same index the build uses (build-args below) — with the local wheels dir
+      # for unitycatalog-client. The lock is cross-platform, so both matrix arches
+      # regenerate it identically before building; nothing is committed back here.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6b9c6063abd6010835644d4c2e1bef4cf5cd0fca # v6.0.1
+        with:
+          version: "0.9.7"   # match the uv pinned in the Dockerfile
+      - name: Refresh uv lock
+        working-directory: environments/docker/marimo
+        env:
+          UV_INDEX_URL: https://pypi.org/simple
+          UV_FIND_LINKS: ./wheels
+        run: uv lock
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
