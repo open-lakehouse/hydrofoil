@@ -1,0 +1,102 @@
+{
+  "_comment": [
+    "PuppyGraph schema mapping the flat-graph Delta tables produced by lineage_graph.py",
+    "to a graph: Dataset --[CONSUMED_BY]--> Job --[PRODUCES]--> Dataset.",
+    "PuppyGraph reads Delta as EXTERNAL tables via a metastore (it resolves a table's",
+    "storage_location and reads the Delta log at that path); it does NOT support the UC",
+    "catalog-managed read path. The catalog block below is a PLACEHOLDER pointing at our",
+    "UC OSS server — finalize it in the PuppyGraph deployment step. For now the graph tables",
+    "live as plain Delta under environments/.data/lineage_graph; register them as UC external",
+    "tables (file:// storage_location) once an external location is available, then point",
+    "host/databricksCatalogName/schema/table here.",
+    "The 'unity' connector works against UC OSS too: token is ignored in dev,",
+    "databricksCatalogName is just the UC catalog name."
+  ],
+  "catalogs": [
+    {
+      "name": "lineage",
+      "type": "deltalake",
+      "metastore": {
+        "type": "unity",
+        "host": "http://unity-catalog:8081",
+        "token": "no-use",
+        "databricksCatalogName": "demo"
+      }
+    }
+  ],
+  "vertices": [
+    {
+      "label": "Job",
+      "mappedTableSource": {
+        "catalog": "lineage",
+        "schema": "lineage_graph",
+        "table": "v_job",
+        "metaFields": {
+          "id": "id"
+        }
+      },
+      "attributes": [
+        { "name": "job_name", "type": "String" },
+        { "name": "job_namespace", "type": "String" },
+        { "name": "event_type", "type": "String" },
+        { "name": "event_time", "type": "DateTime" },
+        { "name": "producer", "type": "String" }
+      ]
+    },
+    {
+      "label": "Dataset",
+      "mappedTableSource": {
+        "catalog": "lineage",
+        "schema": "lineage_graph",
+        "table": "v_dataset",
+        "metaFields": {
+          "id": "id"
+        }
+      },
+      "attributes": [
+        { "name": "dataset_name", "type": "String" },
+        { "name": "dataset_namespace", "type": "String" }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "label": "PRODUCES",
+      "from": "Job",
+      "to": "Dataset",
+      "mappedTableSource": {
+        "catalog": "lineage",
+        "schema": "lineage_graph",
+        "table": "e_produces",
+        "metaFields": {
+          "id": "id",
+          "from": "from_id",
+          "to": "to_id"
+        }
+      },
+      "attributes": [
+        { "name": "event_time", "type": "DateTime" },
+        { "name": "event_type", "type": "String" }
+      ]
+    },
+    {
+      "label": "CONSUMED_BY",
+      "from": "Dataset",
+      "to": "Job",
+      "mappedTableSource": {
+        "catalog": "lineage",
+        "schema": "lineage_graph",
+        "table": "e_consumed_by",
+        "metaFields": {
+          "id": "id",
+          "from": "from_id",
+          "to": "to_id"
+        }
+      },
+      "attributes": [
+        { "name": "event_time", "type": "DateTime" },
+        { "name": "event_type", "type": "String" }
+      ]
+    }
+  ]
+}
