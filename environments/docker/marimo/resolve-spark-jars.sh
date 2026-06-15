@@ -59,30 +59,37 @@ find "$IVY_HOME/jars" -type f -name '*.jar' \
 count=$(find /spark-jars -name '*.jar' | wc -l)
 echo "Collected ${count} jars into /spark-jars"
 
-# Force the source-built 0.5 UC client. The connector is built+publishLocal'd from
-# branch-0.5, but spark-submit's transitive resolution still pulls unitycatalog-client
+# Force the source-built 0.5 UC modules (client + hadoop). The connector is
+# `.dependsOn(client, hadoop)` and built+publishLocal'd from branch-0.5, but
+# spark-submit's transitive resolution still pulls the RELEASED unitycatalog-client
 # 0.4.0 from Maven Central (the local-ivy resolver doesn't satisfy the connector's
-# transitive client dep), and 0.4.0 LACKS io.unitycatalog.client.internal.ApiClientUtils
-# that the 0.5 connector calls -> ClassNotFoundException at runtime. So drop whatever
-# client the resolver harvested and copy the 0.5 client jar straight from Ivy-local
-# (where client/publishLocal wrote it).
-local_client=$(find /root/.ivy2/local -path '*unitycatalog-client*/jars/*.jar' \
-  ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -1)
-if [ -n "$local_client" ]; then
-  rm -f /spark-jars/*unitycatalog-client*.jar
-  # Name it with the org prefix + the local revision so it matches the harvested naming.
-  rev=$(printf '%s' "$local_client" | sed -E 's#.*/unitycatalog-client/([^/]+)/jars/.*#\1#')
-  cp "$local_client" "/spark-jars/io.unitycatalog_unitycatalog-client-${rev}.jar"
-  echo "Forced source-built UC client: io.unitycatalog_unitycatalog-client-${rev}.jar (from ${local_client})"
-else
-  echo "WARNING: no source-built unitycatalog-client in /root/.ivy2/local — did client/publishLocal run?" >&2
-fi
+# transitive deps) — and 0.4.0 lacks io.unitycatalog.client.internal.ApiClientUtils;
+# the `hadoop` module (io.unitycatalog.hadoop.UCCredentialHadoopConfs, used by
+# credential vending) isn't on Central at all so it's missing entirely. Both break
+# managed-table writes with ClassNotFoundException. So for each, drop whatever the
+# resolver harvested and copy the source-built 0.5 jar straight from Ivy-local.
+force_local_uc_module() {  # $1 = module name (unitycatalog-client | unitycatalog-hadoop)
+  local module="$1" jar rev
+  jar=$(find /root/.ivy2/local -path "*${module}*/jars/*.jar" \
+    ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -1)
+  if [ -n "$jar" ]; then
+    rm -f /spark-jars/*"${module}"*.jar
+    # Org prefix + local revision so it matches the harvested naming convention.
+    rev=$(printf '%s' "$jar" | sed -E "s#.*/${module}/([^/]+)/jars/.*#\1#")
+    cp "$jar" "/spark-jars/io.unitycatalog_${module}-${rev}.jar"
+    echo "Forced source-built ${module}: io.unitycatalog_${module}-${rev}.jar (from ${jar})"
+  else
+    echo "WARNING: no source-built ${module} in /root/.ivy2/local — did its publishLocal run?" >&2
+  fi
+}
+force_local_uc_module unitycatalog-client
+force_local_uc_module unitycatalog-hadoop
 
 # Fail loudly if any of the headline artifacts is missing. The UC client is included
 # because the branch-0.5 connector calls classes (io.unitycatalog.client.internal.*)
 # that only exist in the source-built 0.5 client — a 0.4.0 client from Maven Central
 # resolves fine but breaks at runtime.
-for m in unitycatalog-spark unitycatalog-client delta-spark openlineage-spark hadoop-aws; do
+for m in unitycatalog-spark unitycatalog-client unitycatalog-hadoop delta-spark openlineage-spark hadoop-aws; do
   ls /spark-jars | grep -q "$m" || { echo "MISSING jar: $m" >&2; exit 1; }
 done
 

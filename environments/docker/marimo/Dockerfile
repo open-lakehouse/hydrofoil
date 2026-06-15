@@ -69,11 +69,15 @@ WORKDIR /uc
 # can snapshot that dir BEFORE generate populates it, so only the hand-written sources
 # compile and javac fails with `cannot find symbol: ApiClient` (the generated classes).
 # Generating in a prior command guarantees the sources exist before compile scans.
+# Also publishLocal the `hadoop` module: the connector is `.dependsOn(client, hadoop)`
+# and the catalog-managed write path loads io.unitycatalog.hadoop.UCCredentialHadoopConfs
+# (UC credential vending) from it — another branch-0.5 module unpublished to Maven, so
+# without it managed-table writes fail with ClassNotFoundException at credential vending.
 RUN MAVEN_PROXY_URL="${MAVEN_PROXY_URL}" \
     ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} \
       'set client / Compile / packageDoc / publishArtifact := false' \
       'set client / Compile / doc / sources := Seq.empty' \
-      "client/generate" "client/publishLocal" "spark/publishLocal"
+      "client/generate" "client/publishLocal" "hadoop/publishLocal" "spark/publishLocal"
 
 # ---- Spark jar closure: resolve everything into one classpath dir -------------
 # Reuse Spark's own resolver (spark-submit --packages) so the dir holds the exact
