@@ -63,11 +63,17 @@ WORKDIR /uc
 #   - deselect the javadoc artifact from publish (publishArtifact := false), and
 #   - make the `doc` task itself a no-op (empty sources) so it can't fail even if some
 #     publish path still evaluates it (the client redefines `Compile / doc` in build.sbt).
+# Run `client/generate` as its OWN sbt command first. The client's OpenAPI codegen
+# writes sources into clients/java/target/src/main/java, which `Compile /
+# unmanagedSourceDirectories` references; on a clean checkout the publishLocal compile
+# can snapshot that dir BEFORE generate populates it, so only the hand-written sources
+# compile and javac fails with `cannot find symbol: ApiClient` (the generated classes).
+# Generating in a prior command guarantees the sources exist before compile scans.
 RUN MAVEN_PROXY_URL="${MAVEN_PROXY_URL}" \
     ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} \
       'set client / Compile / packageDoc / publishArtifact := false' \
       'set client / Compile / doc / sources := Seq.empty' \
-      "client/publishLocal" "spark/publishLocal"
+      "client/generate" "client/publishLocal" "spark/publishLocal"
 
 # ---- Spark jar closure: resolve everything into one classpath dir -------------
 # Reuse Spark's own resolver (spark-submit --packages) so the dir holds the exact
