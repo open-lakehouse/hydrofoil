@@ -11,8 +11,8 @@ use url::Url;
 
 use crate::sql::commands::{Mode, VacuumStatement};
 use crate::sql::unity::{
-    CreateCatalogStatement, CreateSchemaStatement, DropCatalogStatement, DropSchemaStatement,
-    UnityCatalogStatement,
+    CreateCatalogStatement, CreateManagedTableStatement, CreateSchemaStatement,
+    DropCatalogStatement, DropSchemaStatement, UnityCatalogStatement,
 };
 
 /// Same as `sqlparser`
@@ -239,11 +239,68 @@ impl<'a> HFParser<'a> {
             self.parse_create_schema()
         } else if self.parser.parser.parse_keyword(Keyword::SHARE) {
             self.parse_create_share()
+        } else if self.parser.parser.peek_keyword(Keyword::TABLE) {
+            self.parse_create_table()
         } else {
             Ok(Statement::DFStatement(Box::from(
                 self.parser.parse_create()?,
             )))
         }
+    }
+
+    /// Parse `CREATE TABLE <catalog>.<schema>.<table> (<cols>) USING <fmt>` as a
+    /// Unity Catalog **managed** table.
+    ///
+    /// A managed table carries no `LOCATION` (the catalog allocates storage). If
+    /// a `LOCATION` is present the statement is an *external* table — out of
+    /// scope for this path — so we error directing the caller to the external
+    /// create surface rather than silently mis-creating a managed table.
+    fn parse_create_table(&mut self) -> Result<Statement, DataFusionError> {
+        self.parser.parser.expect_keyword(Keyword::TABLE)?;
+        let if_not_exists =
+            self.parser
+                .parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+        let name = self.parser.parser.parse_object_name(false)?;
+
+        // Column definitions are required (no CTAS in this cut).
+        if !self.parser.parser.peek_token().token.eq(&Token::LParen) {
+            return parser_err!(
+                "Expected column definitions '(...)' for CREATE TABLE; \
+                 CREATE TABLE AS SELECT is not yet supported for managed tables"
+            );
+        }
+        let (columns, _constraints) = self.parser.parser.parse_columns()?;
+
+        // Trailing clauses: accept `USING <fmt>`; reject `LOCATION` (external).
+        loop {
+            if self.parser.parser.parse_keyword(Keyword::USING) {
+                // Consume the format identifier (e.g. DELTA); only Delta managed
+                // tables are produced here, so the value is informational.
+                let _ = self.parser.parser.parse_object_name(false)?;
+            } else if self.parser.parser.parse_keyword(Keyword::LOCATION) {
+                return parser_err!(
+                    "CREATE TABLE with LOCATION creates an external table, which is not \
+                     supported on this path; omit LOCATION to create a Unity Catalog managed table"
+                );
+            } else {
+                let token = self.parser.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return self.expected("USING <format> or end of statement", token)?;
+                }
+            }
+        }
+
+        Ok(Statement::UnityCatalog(
+            CreateManagedTableStatement {
+                name,
+                columns,
+                if_not_exists,
+            }
+            .into(),
+        ))
     }
 
     fn parse_create_catalog(&mut self) -> Result<Statement, DataFusionError> {
@@ -700,6 +757,43 @@ mod tests {
                 ..
             })) if loc == &expected_location
         ));
+    }
+
+    #[test]
+    fn test_parse_create_managed_table() {
+        let sql = "CREATE TABLE my_catalog.sales.orders (id BIGINT, name STRING) USING DELTA";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let expected_name: ObjectName =
+            vec![Ident::new("my_catalog"), Ident::new("sales"), Ident::new("orders")].into();
+        match &statements[0] {
+            Statement::UnityCatalog(UnityCatalogStatement::CreateManagedTable(stmt)) => {
+                assert_eq!(stmt.name, expected_name);
+                assert!(!stmt.if_not_exists);
+                assert_eq!(stmt.columns.len(), 2);
+                assert_eq!(stmt.columns[0].name.value, "id");
+                assert_eq!(stmt.columns[1].name.value, "name");
+            }
+            other => panic!("expected CreateManagedTable, got {other:?}"),
+        }
+
+        // IF NOT EXISTS is parsed.
+        let sql = "CREATE TABLE IF NOT EXISTS c.s.t (id INT) USING DELTA";
+        let statements = HFParser::parse_sql(sql).unwrap();
+        assert!(matches!(
+            &statements[0],
+            Statement::UnityCatalog(UnityCatalogStatement::CreateManagedTable(
+                CreateManagedTableStatement {
+                    if_not_exists: true,
+                    ..
+                }
+            ))
+        ));
+
+        // LOCATION (external) is rejected on this path.
+        let sql = "CREATE TABLE c.s.t (id INT) USING DELTA LOCATION 's3://b/t'";
+        let err = HFParser::parse_sql(sql).unwrap_err();
+        assert!(err.to_string().contains("external table"), "{err}");
     }
 
     #[test]

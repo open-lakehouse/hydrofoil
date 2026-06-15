@@ -26,6 +26,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use unitycatalog_client::UnityCatalogClient;
+use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use super::{ExecutableUnityCatalogStatement, ExecuteUnityCatalogPlanNode, UnityCatalogStatement};
 
@@ -34,6 +35,15 @@ use super::{ExecutableUnityCatalogStatement, ExecuteUnityCatalogPlanNode, UnityC
 /// Catalog is wired; without it, UC DDL cannot be planned.
 #[derive(Clone)]
 pub struct UnityClientExtension(pub UnityCatalogClient);
+
+/// Session-config extension carrying the [`UnityObjectStoreFactory`] used by the
+/// managed-table write paths (bulk ingest append and managed `CREATE TABLE`).
+/// Unlike [`UnityClientExtension`] (which only exposes the catalog client), the
+/// factory also vends fresh per-table object-store credentials, which the kernel
+/// committer needs to stage and publish commits. Set on the session state
+/// alongside [`UnityClientExtension`] when Unity Catalog is wired.
+#[derive(Clone)]
+pub struct UnityFactoryExt(pub Arc<UnityObjectStoreFactory>);
 
 /// [`ExtensionPlanner`] that lowers [`ExecuteUnityCatalogPlanNode`] to a
 /// [`StreamingTableExec`] over a [`UnityCatalogPartitionStream`].

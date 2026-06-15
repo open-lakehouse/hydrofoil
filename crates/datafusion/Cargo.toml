@@ -16,13 +16,13 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 url = { workspace = true }
 
+datafusion-unitycatalog = { workspace = true }
 unitycatalog-client = { workspace = true }
+unitycatalog-common = { workspace = true }
+unitycatalog-object-store = { workspace = true }
 
 [dev-dependencies]
-datafusion-unitycatalog = { workspace = true }
 deltalake-core = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-unitycatalog-common = { workspace = true }
-unitycatalog-object-store = { workspace = true }

@@ -19,10 +19,12 @@ use unitycatalog_client::UnityCatalogClient;
 pub use self::catalogs::*;
 pub use self::exec::*;
 pub use self::schemas::*;
+pub use self::tables::*;
 
 mod catalogs;
 mod exec;
 mod schemas;
+mod tables;
 
 /// A Unity Catalog DDL statement that can be executed against a live Unity
 /// Catalog instance, returning a single result [`RecordBatch`].
@@ -59,6 +61,7 @@ pub enum UnityCatalogStatement {
     DropCatalog(DropCatalogStatement),
     CreateSchema(CreateSchemaStatement),
     DropSchema(DropSchemaStatement),
+    CreateManagedTable(CreateManagedTableStatement),
 }
 
 impl From<CreateCatalogStatement> for UnityCatalogStatement {
@@ -85,6 +88,12 @@ impl From<DropSchemaStatement> for UnityCatalogStatement {
     }
 }
 
+impl From<CreateManagedTableStatement> for UnityCatalogStatement {
+    fn from(value: CreateManagedTableStatement) -> Self {
+        UnityCatalogStatement::CreateManagedTable(value)
+    }
+}
+
 impl UnityCatalogStatement {
     pub fn command_name(&self) -> &str {
         use UnityCatalogStatement::*;
@@ -94,6 +103,7 @@ impl UnityCatalogStatement {
             DropCatalog(_) => "DropCatalog",
             CreateSchema(_) => "CreateSchema",
             DropSchema(_) => "DropSchema",
+            CreateManagedTable(_) => "CreateManagedTable",
         }
     }
 
@@ -112,6 +122,13 @@ impl UnityCatalogStatement {
                 f,
                 "DropSchema: name={} if_exists={} cascade={}",
                 cmd.name, cmd.if_exists, cmd.cascade
+            ),
+            CreateManagedTable(cmd) => write!(
+                f,
+                "CreateManagedTable: name={} columns={} if_not_exists={}",
+                cmd.name,
+                cmd.columns.len(),
+                cmd.if_not_exists
             ),
         }
     }
@@ -158,7 +175,7 @@ impl ExecutableUnityCatalogStatement for UnityCatalogStatement {
         use UnityCatalogStatement::*;
 
         match &self {
-            CreateCatalog(_) | CreateSchema(_) => &CREATE_UC_RETURN_SCHEMA,
+            CreateCatalog(_) | CreateSchema(_) | CreateManagedTable(_) => &CREATE_UC_RETURN_SCHEMA,
             DropCatalog(_) | DropSchema(_) => &DROP_UC_RETURN_SCHEMA,
         }
     }
@@ -171,6 +188,7 @@ impl ExecutableUnityCatalogStatement for UnityCatalogStatement {
             DropCatalog(cmd) => cmd.execute(client).await,
             CreateSchema(cmd) => cmd.execute(client).await,
             DropSchema(cmd) => cmd.execute(client).await,
+            CreateManagedTable(cmd) => cmd.execute(client).await,
         }
     }
 }

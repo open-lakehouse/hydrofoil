@@ -39,11 +39,15 @@ use crate::engine::{Engine, Session, SessionStore, StoredStatement};
 use crate::stream::FlightDataReceiverStreamBuilder;
 use crate::{execution::CpuRuntime, policy::Policy};
 use crate::{
-    planner::{DeltaPlanner, FlightPlanner},
+    planner::{DeltaPlanner, FlightPlanner, collect_coerced_batches},
     policy::StaticPolicy,
 };
 
 mod metadata;
+
+/// Engine identifier recorded in the `commitInfo` of commits this server writes
+/// to Unity Catalog managed tables (the managed connector's `engine_info`).
+const ENGINE_INFO: &str = concat!("hydrofoil/", env!("CARGO_PKG_VERSION"));
 
 /// gRPC metadata key carrying the Flight SQL session id (a slash-safe,
 /// header-friendly alternative to the `authorization: Bearer` channel ADBC
@@ -332,6 +336,207 @@ impl FlightSqlServiceImpl {
 
         Ok(Response::new(Box::pin(stream)))
     }
+
+    /// Detect whether an ingest target is a Unity Catalog managed table.
+    ///
+    /// Returns `Some(ManagedIngestTarget)` when the target resolves to a managed
+    /// table (so the caller writes through the catalog committer), or `None`
+    /// when Unity Catalog is not wired, the name does not resolve through
+    /// `/delta/v1`, or the table is external — in which case the caller falls
+    /// through to the regular external INSERT path. Needs only the ticket +
+    /// session, so it runs before the data stream is consumed.
+    async fn resolve_managed_ingest(
+        &self,
+        ctx: &Arc<crate::session::LakehouseCtx>,
+        ticket: &CommandStatementIngest,
+    ) -> Result<Option<ManagedIngestTarget>, DataFusionError> {
+        use datafusion::common::exec_datafusion_err;
+        use datafusion::sql::TableReference;
+        use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
+        use deltalake_datafusion::sql::UnityFactoryExt;
+
+        let state = ctx.ctx().state();
+        let Some(factory) = state.config().get_extension::<UnityFactoryExt>() else {
+            // Unity Catalog not wired → nothing is managed.
+            debug!("managed ingest: no UnityFactoryExt on session; using external path");
+            return Ok(None);
+        };
+
+        // Resolve the fully-qualified `(catalog, schema, table)`. Prefer the
+        // ticket's explicit catalog/schema; otherwise parse a (possibly
+        // qualified) table name. A name we cannot fully qualify to three parts
+        // is not a UC table reference — fall through to the external path.
+        let table_ref = TableReference::parse_str(&ticket.table);
+        let (catalog, schema, table) = match (ticket.catalog.clone(), ticket.schema.clone()) {
+            (Some(c), Some(s)) => (c, s, table_ref.table().to_string()),
+            _ => match &table_ref {
+                TableReference::Full {
+                    catalog,
+                    schema,
+                    table,
+                } => (catalog.to_string(), schema.to_string(), table.to_string()),
+                _ => {
+                    debug!(table = %ticket.table, "managed ingest: name not fully qualified; using external path");
+                    return Ok(None);
+                }
+            },
+        };
+
+        let client = factory.0.unity_client().delta_v1();
+        let loaded = match client.load_table(&catalog, &schema, &table).await {
+            Ok(loaded) => loaded,
+            // Not resolvable through `/delta/v1` (older server, or not a UC
+            // table): let the external INSERT path try.
+            Err(e) => {
+                debug!(%catalog, %schema, %table, error = %e, "managed ingest: load_table failed; using external path");
+                return Ok(None);
+            }
+        };
+        debug!(%catalog, %schema, %table, "managed ingest: resolved managed target");
+
+        match resolve_managed_read_state(&loaded)? {
+            ManagedReadState::NotManaged => return Ok(None),
+            ManagedReadState::Managed { .. } => {}
+        }
+
+        // Partitioned managed appends are not yet supported by the connector
+        // (it writes through `unpartitioned_write_context`). Fail clearly rather
+        // than commit a wrong layout.
+        if loaded
+            .metadata
+            .partition_columns
+            .as_ref()
+            .is_some_and(|p| !p.is_empty())
+        {
+            return Err(exec_datafusion_err!(
+                "ingest into partitioned managed table '{catalog}.{schema}.{table}' is not yet supported"
+            ));
+        }
+
+        Ok(Some(ManagedIngestTarget {
+            factory: factory.0.clone(),
+            catalog,
+            schema,
+            table,
+        }))
+    }
+
+    /// Append a Flight ingest stream into a managed Unity Catalog table.
+    ///
+    /// Managed tables must commit through the catalog's coordinated-commit
+    /// endpoint, so we cannot reuse the DataFusion INSERT plan (whose
+    /// `DataFusionLogStore` writes `_delta_log/` directly). We drain the Flight
+    /// batches and append them through `append_to_managed_table`, which stages
+    /// the commit and ratifies it via UC `updateTable` `AddCommit`.
+    /// Authorization runs the identical Cedar gate a regular append would face:
+    /// we build the same `INSERT INTO … Append` plan and authorize it (without
+    /// executing) before writing. The batches are concatenated into a single
+    /// commit for atomicity.
+    async fn ingest_managed(
+        &self,
+        ctx: &Arc<crate::session::LakehouseCtx>,
+        target: ManagedIngestTarget,
+        stream: PeekableFlightDataStream,
+    ) -> Result<i64, DataFusionError> {
+        use datafusion::common::exec_datafusion_err;
+        use datafusion::sql::TableReference;
+
+        // Resolve the provider (registering the UC catalog onto the session
+        // first) so we coerce the wire batches to the table schema and build the
+        // same INSERT plan the external path would, for an identical
+        // authorization decision.
+        let table_ref =
+            TableReference::full(target.catalog.clone(), target.schema.clone(), target.table.clone());
+        let qualified = table_ref.to_string();
+        let provider = ctx.resolve_table_provider(table_ref).await?;
+        let target_schema = provider.schema();
+
+        let insert_plan = FlightPlanner::build_insert_plan_for_auth(&qualified, provider.clone())?;
+        ctx.authorize_logical_plan(insert_plan).await?;
+
+        let batches = collect_coerced_batches(stream, target_schema.clone()).await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        if total_rows == 0 {
+            return Ok(0);
+        }
+        let batch = arrow::compute::concat_batches(&target_schema, &batches)
+            .map_err(|e| exec_datafusion_err!("failed to concatenate ingest batches: {e}"))?;
+
+        datafusion_unitycatalog::managed::append_to_managed_table(
+            target.factory,
+            &target.catalog,
+            &target.schema,
+            &target.table,
+            batch,
+            ENGINE_INFO,
+        )
+        .await
+        .map_err(|e| exec_datafusion_err!("managed append failed: {e}"))?;
+
+        Ok(total_rows as i64)
+    }
+
+    /// Plan and execute a SQL `executeUpdate(...)` statement, returning the
+    /// Flight-SQL affected-row count (`-1` for DDL / config statements that have
+    /// no count). Shared by [`Self::do_put_statement_update`].
+    async fn execute_update_sql(
+        &self,
+        request: &Request<PeekableFlightDataStream>,
+        sql: String,
+    ) -> Result<i64, Status> {
+        let session = self.resolve_session(request).await?;
+        let agent = crate::agent::agent_context_from_metadata(request.metadata());
+        let lineage = self.lineage_context(
+            request,
+            Uuid::now_v7(),
+            Some(&sql),
+            session.principal(),
+            agent.as_ref(),
+        );
+        let lh = session.lakehouse_for_query(lineage.clone(), agent);
+
+        let plan = match self.executor.create_logical_plan(lh, sql).await {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.emit_planning_failure(&lineage, &e.to_string());
+                return Err(status!("Error building plan", e));
+            }
+        };
+        let ctx = Arc::new(session.ctx());
+        self.execute_update_plan(&ctx, plan).await
+    }
+
+    /// Verify (DDL gate) and execute an already-planned update statement,
+    /// returning `-1` (Flight SQL's "unknown row count") on success. Unity
+    /// Catalog DDL rides through the gate as an `Extension` node and is
+    /// authorized by the Cedar gate inside `execute_logical_plan`.
+    async fn execute_update_plan(
+        &self,
+        ctx: &Arc<crate::session::LakehouseCtx>,
+        plan: LogicalPlan,
+    ) -> Result<i64, Status> {
+        let options = SQLOptions::new().with_allow_ddl(false).with_allow_dml(true);
+        options
+            .verify_plan(&plan)
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
+
+        ctx.execute_logical_plan(plan)
+            .await
+            .map_err(|e| status!("Failed to execute update statement", e))?
+            .collect()
+            .await
+            .map_err(|e| status!("Failed to execute update statement", e))?;
+        Ok(-1)
+    }
+}
+
+/// A resolved managed-table ingest target (see
+/// [`FlightSqlServiceImpl::resolve_managed_ingest`]).
+struct ManagedIngestTarget {
+    factory: Arc<UnityObjectStoreFactory>,
+    catalog: String,
+    schema: String,
+    table: String,
 }
 
 #[tonic::async_trait]
@@ -841,13 +1046,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
     )]
     async fn do_put_statement_update(
         &self,
-        _handle: CommandStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
+        handle: CommandStatementUpdate,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         debug!("do_put_statement_update");
-        // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
-        // and we are required to return some row count here
-        Ok(-1)
+        // `executeUpdate(...)` statements (e.g. `CREATE TABLE … USING DELTA`,
+        // `SET datafusion.nnn`) arrive here. Plan + execute so DDL — notably
+        // managed `CREATE TABLE`, lowered to a Unity Catalog extension node and
+        // authorized by the Cedar gate — actually runs, rather than silently
+        // no-op'ing. Flight SQL expects an affected-row count; DDL has none, so
+        // we return -1 ("unknown") on success.
+        self.execute_update_sql(&request, handle.query).await
     }
 
     #[instrument(
@@ -860,13 +1069,22 @@ impl FlightSqlService for FlightSqlServiceImpl {
     )]
     async fn do_put_prepared_statement_update(
         &self,
-        _handle: CommandPreparedStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
+        handle: CommandPreparedStatementUpdate,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         info!("do_put_prepared_statement_update");
-        // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
-        // and we are required to return some row count here
-        Ok(-1)
+        // The plan was built at prepare time and stored by handle; execute it
+        // (same gate + execution path as `do_put_statement_update`).
+        let plan_id = Uuid::from_slice(&handle.prepared_statement_handle)
+            .map_err(|e| status!("Invalid handle", e))?;
+        let session = self.resolve_session(&request).await?;
+        let plan = session
+            .statements()
+            .get(&plan_id)
+            .map(|s| s.plan.clone())
+            .ok_or_else(|| Status::internal(format!("Plan handle not found: {plan_id}")))?;
+        let ctx = Arc::new(session.ctx());
+        self.execute_update_plan(&ctx, plan).await
     }
 
     #[instrument(
@@ -887,8 +1105,26 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<i64, Status> {
         let session = self.resolve_session(&request).await?;
         let ctx = Arc::new(session.ctx());
-        let planner = FlightPlanner::new();
 
+        // A Unity Catalog managed table cannot be written by a plain
+        // `_delta_log/` commit (the catalog must ratify the version through its
+        // coordinated-commit endpoint). Detect a managed target up front (this
+        // needs only the ticket + session, not the data stream); when managed,
+        // append the batches through the catalog committer instead of the
+        // DataFusion INSERT path. External / non-UC tables keep the
+        // filesystem-commit INSERT path unchanged.
+        if let Some(managed) = self
+            .resolve_managed_ingest(&ctx, &ticket)
+            .await
+            .map_err(|e| status!("Failed to resolve managed ingest target", e))?
+        {
+            return self
+                .ingest_managed(&ctx, managed, request.into_inner())
+                .await
+                .map_err(|e| status!("Failed managed ingest", e));
+        }
+
+        let planner = FlightPlanner::new();
         let ctx_inner = ctx.clone();
         let plan = self
             .executor

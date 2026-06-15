@@ -41,7 +41,7 @@ use url::Url;
 use uuid::Uuid;
 
 use datafusion_unitycatalog::catalog::{UnityCatalogProviderList, build_catalog_managed_snapshot};
-use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension};
+use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension, UnityFactoryExt};
 use unitycatalog_common::models::delta::v1::DeltaCommit;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
@@ -164,6 +164,30 @@ impl LakehouseCtx {
         &self.inner
     }
 
+    /// Resolve `table_ref` to a [`TableProvider`], registering its Unity Catalog
+    /// catalog onto the session's catalog list first when a UC resolver is
+    /// wired. The statement path registers UC catalogs lazily inside
+    /// `create_logical_plan`; the ingest/write path does not parse SQL, so it
+    /// must trigger the same registration before `table_provider` can resolve a
+    /// `catalog.schema.table` reference.
+    pub async fn resolve_table_provider(
+        &self,
+        table_ref: datafusion::sql::TableReference,
+    ) -> Result<Arc<dyn TableProvider>> {
+        if let Some(unity) = self.unity.as_ref() {
+            let resolved = unity
+                .resolve(std::slice::from_ref(&table_ref), self.inner.state().config())
+                .await?;
+            let state = self.inner.state();
+            for name in resolved.catalog_names() {
+                if let Some(catalog) = resolved.catalog(&name) {
+                    state.catalog_list().register_catalog(name, catalog);
+                }
+            }
+        }
+        self.inner.table_provider(table_ref).await
+    }
+
     pub fn session(&self) -> LakehouseSession {
         LakehouseSession {
             inner: self.inner.state(),
@@ -207,6 +231,21 @@ impl LakehouseCtx {
         // Catalog facts (resource folding) come from the session's fact sink;
         // the taint ledger is absent on this ingest/delta-connect path (it is a
         // write path, and taint recording tracks reads at the statement path).
+        let governed = self.authorize_logical_plan(plan).await?;
+        self.inner.execute_logical_plan(governed).await
+    }
+
+    /// Run the access-control gate over `plan` without executing it, returning
+    /// the governed plan on `Allow` (or an authorization error on `Deny`).
+    ///
+    /// This is the gate half of [`Self::execute_logical_plan`], factored out so
+    /// write paths that bypass DataFusion execution — notably the managed-table
+    /// bulk-ingest append, which writes through the Unity Catalog committer
+    /// instead of a physical plan — authorize under the identical Cedar policy a
+    /// regular `INSERT INTO … Append` would face. The caller passes the same
+    /// insert plan it would otherwise execute; a writer authorized for an
+    /// external table is thus authorized for a managed one under one policy.
+    pub async fn authorize_logical_plan(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         let eval = eval_context(&self.inner.state());
         let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal, &eval).await?;
         let optimized_plan = self.inner.state().optimize(&governed)?;
@@ -221,7 +260,7 @@ impl LakehouseCtx {
                 self.principal.uid
             );
         }
-        self.inner.execute_logical_plan(governed).await
+        Ok(governed)
     }
 }
 
@@ -721,10 +760,14 @@ pub fn create_session_for(
 
     // When Unity Catalog is wired, make its client available to the physical
     // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
+    // The factory is also exposed (carrying per-table credential vending) so the
+    // managed-table write paths — bulk-ingest append and managed `CREATE TABLE` —
+    // can stage and publish commits through the catalog committer.
     if let Some(factory) = unity_factory.as_ref() {
         session_config.set_extension(Arc::new(UnityClientExtension(
             factory.unity_client().clone(),
         )));
+        session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
     }
 
     // Base physical planner that also lowers the Unity Catalog DDL extension

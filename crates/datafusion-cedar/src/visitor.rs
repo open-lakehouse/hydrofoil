@@ -52,6 +52,11 @@ pub(crate) enum PlanAction {
 /// downcasting to a concrete type. The securable name is carried in the request
 /// context (see [`unity_ddl_context`]); a policy may gate on the action alone or
 /// additionally on `context.securable`.
+///
+/// Managed `CREATE TABLE` (`CreateManagedTable`) is handled separately in the
+/// visitor — its securable is a `Table`, so it lowers to a table create
+/// (`create_external_table`) with the `Table` resource + catalog-fact folding,
+/// rather than the Catalog/Schema shape this function produces.
 fn recognize_unity_ddl(name: &str) -> Option<(&'static str, &'static str)> {
     match name {
         "CreateCatalog" => Some(("create_catalog", "Catalog")),
@@ -114,7 +119,13 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
                 // must be authorized; other extension nodes (e.g. instrumentation
                 // wrappers) are pass-through and ignored, matching the default
                 // arm below.
-                if let Some((action, resource_type)) = recognize_unity_ddl(node.name()) {
+                if node.name() == "CreateManagedTable" {
+                    // A managed `CREATE TABLE` securable is a `Table`; authorize
+                    // it as a table create (same action/resource/fact-folding as
+                    // `CreateExternalTable`/CTAS) rather than a Catalog/Schema DDL.
+                    let table_ref = TableReference::parse_str(&securable_name_from_node(node));
+                    self.actions.push(PlanAction::CreateTable(table_ref));
+                } else if let Some((action, resource_type)) = recognize_unity_ddl(node.name()) {
                     self.actions.push(PlanAction::UnityDdl {
                         action,
                         resource_type,
@@ -508,6 +519,21 @@ mod tests {
                 "{command} lowers to {action}"
             );
         }
+    }
+
+    #[test]
+    fn create_managed_table_lowers_to_table_create() {
+        // A managed `CREATE TABLE` extension node authorizes as a table create
+        // (create_external_table over a Table resource), not a Catalog/Schema DDL.
+        let plan = ddl_plan("CreateManagedTable", "my_catalog.sales.orders");
+        let requests = authorize_plan(&plan, &principal()).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(action_of(&requests[0]), "Action::\"create_external_table\"");
+        assert_eq!(
+            requests[0].table.as_ref().map(|t| t.to_string()),
+            Some("my_catalog.sales.orders".to_string()),
+            "managed create carries the Table reference for fact folding"
+        );
     }
 
     #[test]
