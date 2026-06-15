@@ -52,8 +52,14 @@ def _():
 def _(uuid):
     import os
 
-    ENDPOINT = os.environ.get("HYDROFOIL_ENDPOINT", "grpc://localhost:50052")
-    LINEAGE_API = os.environ.get("LINEAGE_API", "http://localhost:8091/api/v1")
+    # Defaults to the DEPLOYED services (hydrofoil gRPC+TLS + lineage REST); override
+    # for a local stack. HYDROFOIL_GRPC_ENDPOINT is the deployed marimo task's var name.
+    ENDPOINT = (
+        os.environ.get("HYDROFOIL_ENDPOINT")
+        or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")
+        or "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
+    )
+    LINEAGE_API = os.environ.get("LINEAGE_API", "https://lineage.openlakehousedemos.dev/api/v1")
 
     SOURCE = "caspers.silver.orders_enriched"
     VENDOR_VIEW = "caspers.gold.vendor_payout_summary"  # the table we (re)build + trace
@@ -133,8 +139,16 @@ def _(ENDPOINT, NAMESPACE, PARENT_JOB, PARENT_RUN_ID, user):
         "x-openlineage-parent-job-name": PARENT_JOB,
     }
 
+    _token_key = f"{_demo_auth.RPC_CALL_HEADER_PREFIX}{_demo_auth.UC_TOKEN_HEADER}"
+    _admin = _demo_auth.admin_token()
+
     def _connect():
-        return connect(ENDPOINT, db_kwargs=_demo_auth.db_kwargs(user.value, extra=_lineage_headers))
+        kwargs = _demo_auth.db_kwargs(user.value, extra=_lineage_headers)
+        # Admin-token fallback for the deployed (auth-enabled) UC when the chosen user
+        # has no per-user token configured.
+        if _admin and _token_key not in kwargs:
+            kwargs[_token_key] = _admin
+        return connect(ENDPOINT, db_kwargs=kwargs)
 
     return ConnectionOptions, _connect
 

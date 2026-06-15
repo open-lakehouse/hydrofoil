@@ -126,7 +126,19 @@ struct JobAgg {
 #[derive(Default)]
 struct Model {
     jobs: BTreeMap<EntityId, JobAgg>,
-    datasets: BTreeMap<EntityId, (i64, i64)>,
+    datasets: BTreeMap<EntityId, DatasetAgg>,
+}
+
+/// Reconstructed dataset state: the first/last event times plus the columns
+/// from the latest `schema` dataset facet seen for it (so the dataset shows its
+/// fields in the graph). `schema_at` is the event time the fields came from, so
+/// a later schema wins and an event without a schema facet never clears one.
+#[derive(Default)]
+struct DatasetAgg {
+    first_seen: i64,
+    last_seen: i64,
+    fields: Vec<serde_json::Value>,
+    schema_at: i64,
 }
 
 impl LineageStore {
@@ -178,8 +190,8 @@ impl LineageStore {
         for (id, agg) in &model.jobs {
             note(&id.namespace, agg.first_seen, agg.last_seen);
         }
-        for (id, (lo, hi)) in &model.datasets {
-            note(&id.namespace, *lo, *hi);
+        for (id, agg) in &model.datasets {
+            note(&id.namespace, agg.first_seen, agg.last_seen);
         }
         let mut namespaces: Vec<Namespace> = names
             .into_iter()
@@ -256,7 +268,7 @@ impl LineageStore {
             .datasets
             .iter()
             .filter(|(id, _)| namespace.is_none_or(|ns| id.namespace == ns))
-            .map(|(id, times)| build_dataset(id, *times))
+            .map(|(id, agg)| build_dataset(id, agg))
             .collect();
         all.sort_by(|a, b| a.name.cmp(&b.name));
         let total_count = all.len();
@@ -277,7 +289,7 @@ impl LineageStore {
         model
             .datasets
             .get(&id)
-            .map(|times| build_dataset(&id, *times))
+            .map(|agg| build_dataset(&id, agg))
             .ok_or_else(|| ReadError::NotFound(format!("dataset {namespace}/{name}")))
     }
 
@@ -297,14 +309,14 @@ impl LineageStore {
                 });
             }
         }
-        for (id, (_, hi)) in &model.datasets {
+        for (id, agg) in &model.datasets {
             if id.name.to_lowercase().contains(&needle) {
                 results.push(SearchResult {
                     name: id.name.clone(),
                     namespace: id.namespace.clone(),
                     node_id: dataset_node_id(&id.namespace, &id.name),
                     result_type: "DATASET".into(),
-                    updated_at: micros_to_rfc3339(*hi),
+                    updated_at: micros_to_rfc3339(agg.last_seen),
                 });
             }
         }
@@ -766,14 +778,23 @@ fn fold_batch(model: &mut Model, batch: &RecordBatch) -> Result<(), ReadError> {
                     fold_run(entry, rid, value(&etype, row), ts);
                 }
 
-                // Datasets implied by the job's edges.
-                for r in in_refs.into_iter().chain(out_refs) {
-                    note_dataset(model, r.namespace, r.name, ts_or_zero);
+                // Datasets implied by the job's edges. Output datasets may carry a
+                // schema facet (their columns) in the raw event — capture it so the
+                // dataset shows its fields; inputs get no schema from this event.
+                let out_schemas = parse_output_schemas(value(&raw, row));
+                for r in in_refs {
+                    note_dataset(model, r.namespace, r.name, ts_or_zero, None);
+                }
+                for r in out_refs {
+                    let schema = out_schemas
+                        .get(&(r.namespace.clone(), r.name.clone()))
+                        .map(|v| v.as_slice());
+                    note_dataset(model, r.namespace, r.name, ts_or_zero, schema);
                 }
             }
             Some("dataset") => {
                 if let (Some(ns), Some(name)) = (value(&ds_ns, row), value(&ds_name, row)) {
-                    note_dataset(model, ns.to_string(), name.to_string(), ts_or_zero);
+                    note_dataset(model, ns.to_string(), name.to_string(), ts_or_zero, None);
                 }
             }
             _ => {}
@@ -864,11 +885,64 @@ fn parse_job_meta(raw: Option<&str>) -> (Option<String>, Vec<String>) {
     (description, tags)
 }
 
-fn note_dataset(model: &mut Model, namespace: String, name: String, ts: i64) {
+fn note_dataset(
+    model: &mut Model,
+    namespace: String,
+    name: String,
+    ts: i64,
+    schema: Option<&[serde_json::Value]>,
+) {
     let id = EntityId { namespace, name };
-    let e = model.datasets.entry(id).or_insert((ts, ts));
-    e.0 = e.0.min(ts);
-    e.1 = e.1.max(ts);
+    let e = model.datasets.entry(id).or_default();
+    if e.first_seen == 0 && e.last_seen == 0 && e.schema_at == 0 {
+        e.first_seen = ts;
+    }
+    e.first_seen = e.first_seen.min(ts);
+    e.last_seen = e.last_seen.max(ts);
+    // Latest-wins schema: only replace when this event carries fields and is at
+    // least as recent as the schema we already have.
+    if let Some(fields) = schema
+        && !fields.is_empty()
+        && ts >= e.schema_at
+    {
+        e.fields = fields.to_vec();
+        e.schema_at = ts;
+    }
+}
+
+/// Extract per-output-dataset schema fields from an event's `raw_json`:
+/// `outputs[].facets.schema.fields`, keyed by `"namespace\u{1}name"`. Empty when
+/// the event carries no output schema facet (a cheap substring pre-filter skips
+/// the JSON parse for the common facet-less event).
+fn parse_output_schemas(raw: Option<&str>) -> HashMap<(String, String), Vec<serde_json::Value>> {
+    let mut out = HashMap::new();
+    let Some(raw) = raw else { return out };
+    if !raw.contains("\"schema\"") {
+        return out;
+    }
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return out;
+    };
+    let Some(outputs) = event.get("outputs").and_then(|o| o.as_array()) else {
+        return out;
+    };
+    for ds in outputs {
+        let (Some(ns), Some(name)) = (
+            ds.get("namespace").and_then(|v| v.as_str()),
+            ds.get("name").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if let Some(fields) = ds
+            .get("facets")
+            .and_then(|f| f.get("schema"))
+            .and_then(|s| s.get("fields"))
+            .and_then(|f| f.as_array())
+        {
+            out.insert((ns.to_string(), name.to_string()), fields.clone());
+        }
+    }
+    out
 }
 
 fn parse_dataset_refs(raw: Option<&str>) -> Vec<EntityId> {
@@ -945,7 +1019,15 @@ fn build_run(run: &RunAgg) -> LatestRun {
     }
 }
 
-fn build_dataset(id: &EntityId, times: (i64, i64)) -> Dataset {
+fn build_dataset(id: &EntityId, agg: &DatasetAgg) -> Dataset {
+    // Surface the schema facet's columns both as Marquez `fields` (what the UI
+    // dereferences) and as a `schema` facet (spec shape), so the dataset shows
+    // its columns however the consumer reads them.
+    let facets = if agg.fields.is_empty() {
+        json!({})
+    } else {
+        json!({ "schema": { "fields": agg.fields } })
+    };
     Dataset {
         id: id.clone(),
         dataset_type: "DB_TABLE".into(),
@@ -953,11 +1035,11 @@ fn build_dataset(id: &EntityId, times: (i64, i64)) -> Dataset {
         physical_name: id.name.clone(),
         namespace: id.namespace.clone(),
         source_name: id.namespace.clone(),
-        created_at: micros_to_rfc3339(times.0),
-        updated_at: micros_to_rfc3339(times.1),
+        created_at: micros_to_rfc3339(agg.first_seen),
+        updated_at: micros_to_rfc3339(agg.last_seen),
         description: None,
-        fields: Vec::new(),
-        facets: json!({}),
+        fields: agg.fields.clone(),
+        facets,
         tags: Vec::new(),
         deleted: false,
     }
@@ -979,10 +1061,10 @@ fn build_node(node_id: &str, model: &Model, edges: &HashSet<LineageEdge>) -> Opt
             ("JOB", serde_json::to_value(job).ok()?)
         }
         NodeKind::Dataset => {
-            let times = *model.datasets.get(&id)?;
+            let agg = model.datasets.get(&id)?;
             (
                 "DATASET",
-                serde_json::to_value(build_dataset(&id, times)).ok()?,
+                serde_json::to_value(build_dataset(&id, agg)).ok()?,
             )
         }
     };

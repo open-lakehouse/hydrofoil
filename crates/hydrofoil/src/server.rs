@@ -437,6 +437,7 @@ impl FlightSqlServiceImpl {
         ctx: &Arc<crate::session::LakehouseCtx>,
         target: ManagedIngestTarget,
         stream: PeekableFlightDataStream,
+        lineage: datafusion_open_lineage::context::LineageContext,
     ) -> Result<i64, DataFusionError> {
         use datafusion::common::exec_datafusion_err;
         use datafusion::sql::TableReference;
@@ -473,7 +474,58 @@ impl FlightSqlServiceImpl {
         .await
         .map_err(|e| exec_datafusion_err!("managed append failed: {e}"))?;
 
+        // Emit lineage with the managed table as an OUTPUT dataset. The append
+        // bypasses DataFusion plan execution, so `OpenLineageExec` never fires —
+        // without this the write would surface as a job with empty outputs and the
+        // table would not appear as a dataset in the lineage graph. Schema-only
+        // (no column lineage): a bulk ingest has no upstream column mapping.
+        self.emit_managed_ingest(&lineage, &qualified, &target_schema);
+
         Ok(total_rows as i64)
+    }
+
+    /// Emit a COMPLETE OpenLineage event for a managed bulk-ingest, with the
+    /// target as an OUTPUT dataset (schema facet from the Arrow schema). No-op
+    /// when lineage is not wired. Mirrors `emit_planning_failure`'s use of the
+    /// configured client + per-request context.
+    fn emit_managed_ingest(
+        &self,
+        lineage: &datafusion_open_lineage::context::LineageContext,
+        qualified: &str,
+        schema: &arrow::datatypes::SchemaRef,
+    ) {
+        use datafusion_open_lineage::extract::{OutputTable, QueryLineage, schema_fields};
+        use datafusion_open_lineage::naming::DatasetName;
+
+        let Some(client) = self.lineage.as_ref() else {
+            return;
+        };
+        let run_id = lineage.run_id.unwrap_or_else(Uuid::now_v7);
+        let name = DatasetName::from_table_ref(&self.lineage_config.job_namespace, qualified);
+        let query = QueryLineage {
+            sql: lineage.sql.clone(),
+            inputs: Vec::new(),
+            outputs: vec![OutputTable {
+                name,
+                // The ingested table's columns -> the output dataset's schema facet.
+                fields: schema_fields(schema.fields()),
+                column_lineage: None,
+            }],
+        };
+        // START + COMPLETE so the run has a defined lifecycle (the read path's
+        // OpenLineageExec emits both; we mirror that for a consistent graph).
+        client.emit(datafusion_open_lineage::builder::start_event(
+            run_id,
+            &query,
+            lineage,
+            &self.lineage_config,
+        ));
+        client.emit(datafusion_open_lineage::builder::complete_event(
+            run_id,
+            &query,
+            lineage,
+            &self.lineage_config,
+        ));
     }
 
     /// Plan and execute a SQL `executeUpdate(...)` statement, returning the
@@ -1118,8 +1170,25 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .await
             .map_err(|e| status!("Failed to resolve managed ingest target", e))?
         {
+            // Lineage context for the managed write. The managed-append path does
+            // not run a DataFusion plan, so no `OpenLineageExec` fires — we emit the
+            // event explicitly in `ingest_managed` with the target as an OUTPUT
+            // dataset (otherwise the write produces a job with empty outputs and the
+            // table never shows up as a dataset in the lineage graph).
+            let agent = crate::agent::agent_context_from_metadata(request.metadata());
+            let sql = format!(
+                "INGEST INTO {}.{}.{}",
+                managed.catalog, managed.schema, managed.table
+            );
+            let lineage = self.lineage_context(
+                &request,
+                Uuid::now_v7(),
+                Some(&sql),
+                session.principal(),
+                agent.as_ref(),
+            );
             return self
-                .ingest_managed(&ctx, managed, request.into_inner())
+                .ingest_managed(&ctx, managed, request.into_inner(), lineage)
                 .await
                 .map_err(|e| status!("Failed managed ingest", e));
         }

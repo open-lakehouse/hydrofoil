@@ -45,7 +45,13 @@ def _():
 def _():
     import os
 
-    ENDPOINT = os.environ.get("HYDROFOIL_ENDPOINT", "grpc://localhost:50052")
+    # Defaults to the DEPLOYED hydrofoil (gRPC+TLS); override for a local stack.
+    # HYDROFOIL_GRPC_ENDPOINT is the deployed marimo task's var name.
+    ENDPOINT = (
+        os.environ.get("HYDROFOIL_ENDPOINT")
+        or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")
+        or "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
+    )
     # Principals for the walls demo. Vendor principals map to a brand; finance is a
     # revenue-only role. Their UC tokens come from notebooks/.env keyed by email.
     WING = os.environ.get("CASPERS_WING_USER", "wing@example.com")
@@ -68,9 +74,19 @@ def _(ENDPOINT):
 
     import _demo_auth
 
+    _token_key = f"{_demo_auth.RPC_CALL_HEADER_PREFIX}{_demo_auth.UC_TOKEN_HEADER}"
+    _admin = _demo_auth.admin_token()
+
     def run_as(email: str, sql: str):
         try:
-            with connect(ENDPOINT, db_kwargs=_demo_auth.db_kwargs(email)) as conn:
+            kwargs = _demo_auth.db_kwargs(email)
+            # Against the deployed (auth-enabled) UC, principals without a per-user token
+            # (UC_TOKEN_<USER>) fall back to the admin token so the query still connects.
+            # NOTE: with the admin token UC enforces no per-user walls — to demo the
+            # vendor row-filter properly, mint per-user tokens (`just mint-demo-tokens`).
+            if _admin and _token_key not in kwargs:
+                kwargs[_token_key] = _admin
+            with connect(ENDPOINT, db_kwargs=kwargs) as conn:
                 cur = conn.cursor()
                 try:
                     cur.execute(sql)

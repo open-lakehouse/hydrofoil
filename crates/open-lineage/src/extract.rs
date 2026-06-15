@@ -41,6 +41,10 @@ pub struct InputTable {
 #[derive(Debug)]
 pub struct OutputTable {
     pub name: DatasetName,
+    /// The output table's columns, emitted as a `schema` dataset facet so the
+    /// written table shows its columns in the lineage graph. Empty when the
+    /// writer can't resolve a schema.
+    pub fields: Vec<SchemaField>,
     /// Output field name -> source columns, when soundly resolvable.
     pub column_lineage: Option<ResolvedColumns>,
 }
@@ -82,6 +86,20 @@ pub fn extract(plan: &LogicalPlan, config: &OpenLineageConfig) -> QueryLineage {
 /// disagree on dataset identity.
 pub(crate) fn dataset_for(table_ref: &TableReference, config: &OpenLineageConfig) -> DatasetName {
     DatasetName::from_table_ref(&config.job_namespace, &table_ref.to_string())
+}
+
+/// Map Arrow fields to OpenLineage [`SchemaField`]s (name + type string). Shared
+/// by input scans and output writers so a dataset's schema facet is consistent
+/// however it's produced.
+pub fn schema_fields(fields: &datafusion::arrow::datatypes::Fields) -> Vec<SchemaField> {
+    fields
+        .iter()
+        .map(|f| SchemaField {
+            name: f.name().to_string(),
+            type_: f.data_type().to_string(),
+            description: None,
+        })
+        .collect()
 }
 
 struct LineageVisitor<'a> {
@@ -145,6 +163,8 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 WriteOp::Insert(_) | WriteOp::Update | WriteOp::Delete | WriteOp::Ctas => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&dml.table_name),
+                        // The write target's full table schema -> the output's columns.
+                        fields: schema_fields(dml.target.schema().fields()),
                         column_lineage: None,
                     });
                 }
@@ -154,6 +174,7 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 DdlStatement::CreateExternalTable(cmd) => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&cmd.name),
+                        fields: schema_fields(cmd.schema.as_arrow().fields()),
                         column_lineage: None,
                     });
                 }
@@ -163,6 +184,7 @@ impl TreeNodeVisitor<'_> for LineageVisitor<'_> {
                 DdlStatement::CreateMemoryTable(cmd) => {
                     self.outputs.push(OutputTable {
                         name: self.dataset_for(&cmd.name),
+                        fields: schema_fields(cmd.input.schema().as_arrow().fields()),
                         column_lineage: None,
                     });
                 }
@@ -205,13 +227,27 @@ pub fn input_dataset_facets(input: &InputTable, config: &OpenLineageConfig) -> D
 /// influences (filter/join/group/sort keys) are appended to every field's
 /// `inputFields`, matching how the OpenLineage Spark integration emits them.
 pub fn output_dataset_facets(output: &OutputTable, config: &OpenLineageConfig) -> DatasetFacets {
+    // Schema facet: emit the output table's columns (when known) so the written
+    // dataset shows its columns in the graph — independent of whether column
+    // lineage resolved.
+    let schema = (!output.fields.is_empty()).then(|| SchemaDatasetFacet {
+        base: BaseFacet::new(&config.producer, SCHEMA_FACET),
+        fields: output.fields.clone(),
+    });
+
     let Some(resolved) = &output.column_lineage else {
-        return DatasetFacets::default();
+        return DatasetFacets {
+            schema,
+            ..Default::default()
+        };
     };
     if resolved.fields.is_empty() {
-        // Nothing resolvable to a source column (e.g. all-literal INSERT):
-        // an empty facet carries no information.
-        return DatasetFacets::default();
+        // No column lineage resolvable (e.g. all-literal INSERT / bulk ingest):
+        // still emit the schema facet so the dataset carries its columns.
+        return DatasetFacets {
+            schema,
+            ..Default::default()
+        };
     }
 
     let direct = |subtype: &str| Transformation {
@@ -266,6 +302,7 @@ pub fn output_dataset_facets(output: &OutputTable, config: &OpenLineageConfig) -
         .collect();
 
     DatasetFacets {
+        schema,
         column_lineage: Some(ColumnLineageDatasetFacet {
             base: BaseFacet::new(&config.producer, COLUMN_LINEAGE_FACET),
             fields,

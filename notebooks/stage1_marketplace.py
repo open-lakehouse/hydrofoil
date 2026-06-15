@@ -63,7 +63,10 @@ def _():
 
     import polars as pl
 
-    BACKEND = os.environ.get("CASPERS_BACKEND", "")  # "spark" | "flight" | "" (auto)
+    # Default to the DEPLOYED governed read path (flight = Hydrofoil over gRPC+TLS).
+    # Set CASPERS_BACKEND=spark to read UC-managed Delta via Spark, or =off to force the
+    # in-process seeded generator (offline / no-stack demo).
+    BACKEND = os.environ.get("CASPERS_BACKEND", "flight")
 
     QUERIES = {
         "kpis": "SELECT * FROM caspers.gold.platform_kpis_daily ORDER BY date",
@@ -80,7 +83,7 @@ def _():
     def _from_platform():
         import _caspers_read as cr
 
-        reader = cr.make_reader(BACKEND or "spark")
+        reader = cr.make_reader(BACKEND)
         return {k: reader.sql(q) for k, q in QUERIES.items()}
 
     def _from_generator():

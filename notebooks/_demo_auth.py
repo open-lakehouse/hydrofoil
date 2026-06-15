@@ -42,6 +42,35 @@ REGION_HEADER = "x-hydrofoil-region"
 _DEFAULT_USERS = ["alice@example.com", "bob@example.com"]
 
 
+def admin_token() -> str:
+    """Resolve a UC admin/bearer token for talking to an auth-enabled server.
+
+    Order: ``UC_TOKEN`` env -> ``UC_ADMIN_TOKEN`` env -> the sibling
+    unitycatalog-quickstart repo's ``.env`` (``UC_ADMIN_TOKEN=…``). Returns ``""``
+    when none is found (an auth-disabled local UC accepts unauthenticated requests).
+
+    The quickstart fallback lets the notebooks run against the DEPLOYED UC without an
+    explicit export; override the repo path with ``UC_QUICKSTART``. The token value is
+    never logged here — callers decide what to surface (and must not print it).
+    """
+    for var in ("UC_TOKEN", "UC_ADMIN_TOKEN"):
+        tok = os.environ.get(var)
+        if tok:
+            return tok
+    # Fall back to the quickstart .env (UC_ADMIN_TOKEN="…", possibly quoted).
+    repo = os.environ.get("UC_QUICKSTART") or os.path.expanduser("~/code/unitycatalog-quickstart")
+    env_path = os.path.join(repo, ".env")
+    try:
+        with open(env_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("UC_ADMIN_TOKEN="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
 def _env_var_name(email: str) -> str:
     """Map an email to its token env-var name: alice@x.com -> UC_TOKEN_ALICE."""
     local = email.split("@", 1)[0]

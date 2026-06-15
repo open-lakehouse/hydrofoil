@@ -56,7 +56,9 @@ def _():
 
     import polars as pl
 
-    BACKEND = os.environ.get("CASPERS_BACKEND", "")
+    # Default to the DEPLOYED governed read path (flight). =spark reads UC-managed
+    # Delta via Spark; =off forces the in-process seeded generator (offline demo).
+    BACKEND = os.environ.get("CASPERS_BACKEND", "flight")
 
     QUERIES = {
         "orders": (
@@ -70,7 +72,7 @@ def _():
     def _from_platform():
         import _caspers_read as cr
 
-        reader = cr.make_reader(BACKEND or "spark")
+        reader = cr.make_reader(BACKEND)
         return {k: reader.sql(q) for k, q in QUERIES.items()}
 
     def _from_generator():
@@ -87,8 +89,10 @@ def _():
         }
 
     try:
-        data = _from_platform() if BACKEND in ("spark", "flight") else _from_generator()
-        source = f"platform: {BACKEND}" if BACKEND in ("spark", "flight") else "in-process generator (seed=42)"
+        if BACKEND not in ("spark", "flight"):
+            raise RuntimeError("generator forced (CASPERS_BACKEND=off)")
+        data = _from_platform()
+        source = f"platform: {BACKEND}"
     except Exception as _e:  # noqa: BLE001
         data = _from_generator()
         source = f"in-process generator (seed=42) — backend unavailable ({type(_e).__name__})"

@@ -214,20 +214,32 @@ def _(CATALOG, SCHEMA, TABLE, spark):
 
 @app.cell
 def _(CATALOG, DERIVED, SCHEMA, TABLE, spark):
-    # Derived table: this CTAS reads {TABLE} and writes {DERIVED}, producing the
-    # input -> output edge (and column-level lineage) the listener reports.
-    spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.{SCHEMA}.{DERIVED}")
-    spark.sql(
+    # Derived table: reads {TABLE} and writes {DERIVED}, producing the input -> output
+    # edge (and column-level lineage) the listener reports.
+    #
+    # We do NOT use `CREATE TABLE ... AS SELECT` (CTAS): the UC connector's CTAS path
+    # doesn't register the table's columns with the catalog (it lands schema-less). So
+    # compute the aggregation into a DataFrame, CREATE the table with EXPLICIT columns
+    # from that DataFrame's schema, then APPEND the rows. The listener still sees the
+    # read of {TABLE} and the write to {DERIVED}, so the lineage edge is unchanged.
+    _agg = spark.sql(
         f"""
-        CREATE TABLE {CATALOG}.{SCHEMA}.{DERIVED}
-        USING DELTA
-        TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported')
-        AS
         SELECT kind, COUNT(*) AS n, MAX(ts) AS last_seen
         FROM {CATALOG}.{SCHEMA}.{TABLE}
         GROUP BY kind
         """
     )
+    _col_defs = ", ".join(
+        f"{f.name} {f.dataType.simpleString().upper()} "
+        f"{'NOT NULL' if not f.nullable else ''}".strip()
+        for f in _agg.schema.fields
+    )
+    spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.{SCHEMA}.{DERIVED}")
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {CATALOG}.{SCHEMA}.{DERIVED} ({_col_defs}) "
+        f"USING DELTA TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported')"
+    )
+    _agg.write.format("delta").mode("append").saveAsTable(f"{CATALOG}.{SCHEMA}.{DERIVED}")
     spark.table(f"{CATALOG}.{SCHEMA}.{DERIVED}").show(truncate=False)
     return
 

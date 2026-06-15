@@ -30,9 +30,22 @@ from __future__ import annotations
 import os
 
 CATALOG = "caspers"
-AWS_REGION = "eu-central-1"
-UC_URI = os.environ.get("UC_URI", "http://localhost:8081")
-HYDROFOIL_ENDPOINT = os.environ.get("HYDROFOIL_ENDPOINT", "grpc://localhost:50052")
+# Defaults target the DEPLOYED services; override via env for a local stack.
+AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
+UC_URI = os.environ.get("UC_URI", "https://uc.openlakehousedemos.dev")
+HYDROFOIL_ENDPOINT = (
+    os.environ.get("HYDROFOIL_ENDPOINT")
+    # The deployed marimo ECS task injects the endpoint as HYDROFOIL_GRPC_ENDPOINT.
+    or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")
+    or "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
+)
+
+
+def _uc_token() -> str:
+    """UC bearer token, resolved lazily (UC_TOKEN/UC_ADMIN_TOKEN env or quickstart .env)."""
+    import _demo_auth
+
+    return _demo_auth.admin_token()
 
 
 class _SparkReader:
@@ -47,7 +60,7 @@ class _SparkReader:
             .config("spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog")
             .config(f"spark.sql.catalog.{CATALOG}", "io.unitycatalog.spark.UCSingleCatalog")
             .config(f"spark.sql.catalog.{CATALOG}.uri", UC_URI)
-            .config(f"spark.sql.catalog.{CATALOG}.token", "")
+            .config(f"spark.sql.catalog.{CATALOG}.token", _uc_token())
             .config("spark.sql.defaultCatalog", CATALOG)
             .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.endpoint.region", AWS_REGION)
@@ -76,10 +89,15 @@ class _FlightReader:
         import _demo_auth
 
         self._email = email
-        self._conn = connect(
-            HYDROFOIL_ENDPOINT,
-            db_kwargs=_demo_auth.db_kwargs(email, extra=lineage or {}),
-        )
+        kwargs = _demo_auth.db_kwargs(email, extra=lineage or {})
+        # Admin-token-for-everything fallback: if the chosen principal has no per-user
+        # token configured, forward the admin token (env or quickstart .env) so an
+        # auth-enabled server still accepts the connection.
+        token_key = f"{_demo_auth.RPC_CALL_HEADER_PREFIX}{_demo_auth.UC_TOKEN_HEADER}"
+        _tok = _uc_token()
+        if _tok and token_key not in kwargs:
+            kwargs[token_key] = _tok
+        self._conn = connect(HYDROFOIL_ENDPOINT, db_kwargs=kwargs)
 
     def sql(self, query: str):
         import polars as pl
@@ -97,11 +115,13 @@ class _FlightReader:
 
 
 def make_reader(backend: str | None = None, **kwargs):
-    """Build a reader. `backend` defaults to env ``CASPERS_BACKEND`` then ``spark``.
+    """Build a reader. `backend` defaults to env ``CASPERS_BACKEND`` then ``flight``.
 
+    Defaults to ``flight`` (Hydrofoil over gRPC+TLS — the deployed governed read path);
+    set ``CASPERS_BACKEND=spark`` to read UC-managed Delta directly via Spark instead.
     kwargs pass through to the backend (e.g. ``email=`` / ``lineage=`` for flight).
     """
-    backend = (backend or os.environ.get("CASPERS_BACKEND", "spark")).lower()
+    backend = (backend or os.environ.get("CASPERS_BACKEND", "flight")).lower()
     if backend == "flight":
         return _FlightReader(**kwargs)
     if backend == "spark":

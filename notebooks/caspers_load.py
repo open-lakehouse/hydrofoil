@@ -280,25 +280,51 @@ def _(spark):
         # and reject it. Arrow preserves nullable int64 exactly, matching the schema.
         return spark.createDataFrame(df_pl.to_arrow(), schema=schema)
 
-    return (to_spark,)
+    def create_table_ddl(table_name, schema, properties):
+        # Explicit-column CREATE TABLE DDL from a Spark StructType. We do NOT use
+        # `CREATE TABLE ... AS SELECT` (CTAS): the UC connector's CTAS path does not
+        # register the table's columns with the catalog, so the table shows up with no
+        # schema. Declaring the columns explicitly (then appending the data) registers
+        # them. Mirrors the shared create_table_ddl helper.
+        tbl_properties = ""
+        if properties:
+            props = ", ".join(f"'{k}' = '{v}'" for k, v in properties.items())
+            tbl_properties = f"TBLPROPERTIES ({props})"
+        col_defs = ", ".join(
+            f"{field.name} {field.dataType.simpleString().upper()} "
+            f"{'NOT NULL' if not field.nullable else ''}".strip()
+            for field in schema.fields
+        )
+        return (
+            f"CREATE TABLE IF NOT EXISTS {table_name}\n"
+            f"({col_defs})\n"
+            f"USING DELTA\n"
+            f"{tbl_properties}"
+        ).strip()
+
+    return create_table_ddl, to_spark
 
 
 @app.cell
-def _(frames, spark, to_spark):
-    # Create + overwrite every managed table. fqname is `caspers.<schema>.<table>`.
+def _(create_table_ddl, frames, spark, to_spark):
+    # Create each managed table with EXPLICIT columns, then append the rows.
+    # NOT `CREATE TABLE ... AS SELECT` (CTAS): the UC connector's CTAS path doesn't
+    # register the table's columns with the catalog (the table shows up schema-less),
+    # so we declare the columns via create_table_ddl, then write the data with an
+    # append. DROP first so re-runs are clean.
     written = []
     for _fq, _pl in frames.items():
         _sdf = to_spark(_pl)
-        # Temp view -> CTAS-with-feature-flag keeps it managed and avoids hand-writing DDL
-        # for ~20 schemas. We CREATE OR REPLACE so re-runs are clean.
-        _view = "_load_" + _fq.replace(".", "_")
-        _sdf.createOrReplaceTempView(_view)
         spark.sql(f"DROP TABLE IF EXISTS {_fq}")
         spark.sql(
-            f"CREATE TABLE {_fq} USING DELTA "
-            f"TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported') "
-            f"AS SELECT * FROM {_view}"
+            create_table_ddl(
+                _fq,
+                _sdf.schema,
+                {"delta.feature.catalogManaged": "supported"},
+            )
         )
+        # Append into the just-created (column-registered) managed table.
+        _sdf.write.format("delta").mode("append").saveAsTable(_fq)
         written.append((_fq, _sdf.count()))
         print("wrote", _fq, written[-1][1], "rows")
     return (written,)
