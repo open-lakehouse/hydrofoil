@@ -47,9 +47,16 @@ RUN apt-get update \
 RUN git clone --depth 1 --branch ${UC_BRANCH} \
     https://github.com/unitycatalog/unitycatalog /uc
 WORKDIR /uc
-# Build + publish the Spark connector (and its UC client deps) to the local Ivy repo.
+# Build + publish the Spark connector AND the UC Java client to the local Ivy repo.
+# `spark/publishLocal` alone publishes only the connector; its transitive
+# `unitycatalog-client` dep then resolves to the latest RELEASED client (0.4.0) from
+# Maven Central — which LACKS classes the branch-0.5 connector calls (e.g.
+# io.unitycatalog.client.internal.ApiClientUtils), so managed-table writes fail at
+# runtime with ClassNotFoundException. branch-0.5's client is unreleased, so we must
+# publishLocal it too (sbt project `client` -> artifact unitycatalog-client) so the jar
+# resolver prefers the 0.5 client over Central's 0.4.0.
 RUN MAVEN_PROXY_URL="${MAVEN_PROXY_URL}" \
-    ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} "spark/publishLocal"
+    ./build/sbt -DsparkVersion=${UC_SPARK_VERSION} "client/publishLocal" "spark/publishLocal"
 
 # ---- Spark jar closure: resolve everything into one classpath dir -------------
 # Reuse Spark's own resolver (spark-submit --packages) so the dir holds the exact

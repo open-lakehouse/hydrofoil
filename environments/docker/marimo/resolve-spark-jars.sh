@@ -59,7 +59,22 @@ find "$IVY_HOME/jars" -type f -name '*.jar' \
 count=$(find /spark-jars -name '*.jar' | wc -l)
 echo "Collected ${count} jars into /spark-jars"
 
-# Fail loudly if any of the four headline artifacts is missing.
-for m in unitycatalog-spark delta-spark openlineage-spark hadoop-aws; do
+# Fail loudly if any of the headline artifacts is missing. The UC client is included
+# because the branch-0.5 connector calls classes (io.unitycatalog.client.internal.*)
+# that only exist in the source-built 0.5 client — a 0.4.0 client from Maven Central
+# resolves fine but breaks at runtime.
+for m in unitycatalog-spark unitycatalog-client delta-spark openlineage-spark hadoop-aws; do
   ls /spark-jars | grep -q "$m" || { echo "MISSING jar: $m" >&2; exit 1; }
 done
+
+# Guard against the version-mismatch regression: the UC client jar MUST carry
+# ApiClientUtils (present in 0.5, absent in 0.4.0). Without this, managed-table writes
+# fail at runtime with ClassNotFoundException despite resolution "succeeding".
+client_jar=$(find /spark-jars -name 'io.unitycatalog_unitycatalog-client-*.jar' | head -1)
+[ -n "$client_jar" ] || { echo "MISSING jar: unitycatalog-client" >&2; exit 1; }
+# `jar` ships with the JDK base image (no unzip needed).
+if ! jar tf "$client_jar" 2>/dev/null | grep -q 'io/unitycatalog/client/internal/ApiClientUtils'; then
+  echo "WRONG unitycatalog-client: $(basename "$client_jar") lacks ApiClientUtils — the 0.4.0 client leaked in instead of the source-built 0.5 client (did client/publishLocal run?)." >&2
+  exit 1
+fi
+echo "UC client OK: $(basename "$client_jar") carries ApiClientUtils"
