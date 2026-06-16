@@ -60,24 +60,24 @@ ENDPOINT = (
     or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")
     or "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
 )
-PRINCIPAL = os.environ.get("CASPERS_PRINCIPAL", "alice@example.com")
+PRINCIPAL = os.environ.get("CASPERS_PRINCIPAL", "robert.pack@databricks.com")
 # Target catalog. caspers_gen emits FQNs under `caspers.*`; set CASPERS_CATALOG to
 # write into a different catalog (e.g. caspers_test) — the prefix is remapped per table.
 CATALOG = os.environ.get("CASPERS_CATALOG", "caspers")
 SEED = int(os.environ.get("CASPERS_SEED", "42"))
 RECREATE = os.environ.get("CASPERS_RECREATE") == "1"
-NAMESPACE = os.environ.get("CASPERS_LINEAGE_NAMESPACE", "caspers-load-hydrofoil")
+NAMESPACE = os.environ.get("CASPERS_LINEAGE_NAMESPACE", "caspers-load")
 # Belt-and-suspenders lineage: also POST a dataset event (with a schema facet) per
 # table directly to the lineage-service REST API. Hydrofoil's managed-ingest now emits
 # this itself, but a Hydrofoil that PREDATES that fix emits a job with no output dataset;
 # this client-side emit guarantees the table + its columns appear regardless. Set
 # CASPERS_EMIT_LINEAGE=0 to skip (e.g. to test the server emission alone).
 EMIT_LINEAGE = os.environ.get("CASPERS_EMIT_LINEAGE", "1") != "0"
-LINEAGE_API = (
-    os.environ.get("LINEAGE_API")
-    or (os.environ.get("LINEAGE_URL", "https://lineage.openlakehousedemos.dev").rstrip("/") + "/api/v1")
+LINEAGE_API = os.environ.get("LINEAGE_API") or (
+    os.environ.get("LINEAGE_URL", "https://lineage.openlakehousedemos.dev").rstrip("/")
+    + "/api/v1"
 )
-OL_PRODUCER = "https://github.com/open-lakehouse/caspers_load_hydrofoil"
+OL_PRODUCER = "https://github.com/open-lakehouse/caspers_load"
 OL_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 
 # Prefix on per-RPC call-header options (matches _demo_auth).
@@ -90,7 +90,16 @@ def sql_type(dtype: pl.DataType) -> str:
     Mirrors caspers_load.py's minimal type set (no DECIMAL / TIMESTAMP_NTZ / nested),
     which keeps the table on the proven UC-managed feature contract our readers support.
     """
-    if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64):
+    if dtype in (
+        pl.Int8,
+        pl.Int16,
+        pl.Int32,
+        pl.Int64,
+        pl.UInt8,
+        pl.UInt16,
+        pl.UInt32,
+        pl.UInt64,
+    ):
         return "BIGINT"
     if dtype in (pl.Float32, pl.Float64):
         return "DOUBLE"
@@ -106,7 +115,11 @@ def to_arrow(df: pl.DataFrame):
     (matching the CREATE), and Arrow preserves nullable int64 (e.g. driver_id) exactly —
     unlike to_pandas(), which would upcast null-bearing ints to float."""
     df = df.with_columns(
-        [pl.col(c).cast(pl.Datetime("us")) for c, d in df.schema.items() if d == pl.Date]
+        [
+            pl.col(c).cast(pl.Datetime("us"))
+            for c, d in df.schema.items()
+            if d == pl.Date
+        ]
     )
     return df.to_arrow()
 
@@ -160,7 +173,9 @@ def main() -> int:
 
     token = _demo_auth.admin_token()
     print(f"Hydrofoil: {ENDPOINT}")
-    print(f"principal: {PRINCIPAL} | UC token: {'set' if token else 'NONE (unauthenticated)'}")
+    print(
+        f"principal: {PRINCIPAL} | UC token: {'set' if token else 'NONE (unauthenticated)'}"
+    )
     print(f"namespace: {NAMESPACE} | recreate: {RECREATE} | seed: {SEED}")
 
     frames = caspers_gen.generate_all(seed=SEED)
@@ -191,6 +206,7 @@ def main() -> int:
             conn.adbc_connection.set_options(
                 **{f"{prefix}x-openlineage-job-name": f"load_{fq.replace('.', '_')}"}
             )
+
             def run_ddl(c, sql):
                 # The DDL's Flight DoGet stream MUST be consumed for the statement to
                 # actually execute (Flight SQL executeUpdate semantics) — fetch the
@@ -229,10 +245,16 @@ def main() -> int:
                     try:
                         emit_dataset_event(fq, df, run_id=str(uuid.uuid4()))
                     except Exception as le:  # noqa: BLE001
-                        print(f"  (lineage emit skipped for {fq}: {type(le).__name__})", file=sys.stderr)
+                        print(
+                            f"  (lineage emit skipped for {fq}: {type(le).__name__})",
+                            file=sys.stderr,
+                        )
             except Exception as e:  # noqa: BLE001 — record + continue so one bad table doesn't abort
                 failed.append((fq, str(e)))
-                print(f"  FAILED {fq}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
+                print(
+                    f"  FAILED {fq}: {type(e).__name__}: {str(e)[:200]}",
+                    file=sys.stderr,
+                )
 
     print(f"\n=== DONE: {len(written)} tables written, {len(failed)} failed ===")
     for fq, n in written:

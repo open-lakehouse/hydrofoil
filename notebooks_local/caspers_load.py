@@ -88,12 +88,13 @@ def _():
     # Managed-storage root. EMPTY by default so the deployed UC uses its OWN configured
     # managed root (it 403s a catalog pinned to a root it has no external location for —
     # e.g. s3://olai-demo-1). For a local olai-demo-1 stack set
-    # CASPERS_STORAGE_ROOT=s3://olai-demo-1/managed.
     STORAGE_ROOT = os.environ.get("CASPERS_STORAGE_ROOT", "")
     AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 
     # Lineage service — the deployed URL by default.
-    LINEAGE_URL = os.environ.get("LINEAGE_URL", "https://lineage.openlakehousedemos.dev")
+    LINEAGE_URL = os.environ.get(
+        "LINEAGE_URL", "https://lineage.openlakehousedemos.dev"
+    )
     LINEAGE_NAMESPACE = "caspers-load"
     # Register the OpenLineage Spark listener (default on). Set CASPERS_LINEAGE=0 to skip
     # it. NOTE: this Spark path requires the marimo image's baked jars regardless — a
@@ -102,11 +103,9 @@ def _():
 
     SEED = 42
 
-    # Hydrofoil bulk-ingest stretch (read here so `os` is imported in one cell only).
-    TRY_HYDROFOIL_WRITE = os.environ.get("TRY_HYDROFOIL_WRITE") == "1"
     HYDROFOIL_ENDPOINT = (
         os.environ.get("HYDROFOIL_ENDPOINT")
-        or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")  # the deployed marimo task's var name
+        or os.environ.get("HYDROFOIL_GRPC_ENDPOINT")
         or "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
     )
     return (
@@ -149,8 +148,12 @@ def _(CATALOG, SCHEMAS, STORAGE_ROOT, UC_TOKEN, UC_URI):
     # unauthenticated request or an unauthorized root is never silent. The token
     # value itself is never printed.
     print(f"UC endpoint: {UC_URI}")
-    print(f"auth: {'Bearer token (set)' if UC_TOKEN else 'NONE — requests are unauthenticated'}")
-    print(f"storage_root: {STORAGE_ROOT or '(unset — server uses its own managed root)'}")
+    print(
+        f"auth: {'Bearer token (set)' if UC_TOKEN else 'NONE — requests are unauthenticated'}"
+    )
+    print(
+        f"storage_root: {STORAGE_ROOT or '(unset — server uses its own managed root)'}"
+    )
 
     def _create(path, payload):
         r = requests.post(f"{base}/{path}", json=payload, headers=_headers)
@@ -176,12 +179,22 @@ def _(CATALOG, SCHEMAS, STORAGE_ROOT, UC_TOKEN, UC_URI):
 
     _cat = requests.get(f"{base}/catalogs/{CATALOG}", headers=_headers).json()
     print("catalog:", _cat["name"], "| storage_root:", _cat.get("storage_root"))
-    print("schemas:", [s["name"] for s in requests.get(f"{base}/schemas", params={"catalog_name": CATALOG}, headers=_headers).json()["schemas"]])
+    print(
+        "schemas:",
+        [
+            s["name"]
+            for s in requests.get(
+                f"{base}/schemas", params={"catalog_name": CATALOG}, headers=_headers
+            ).json()["schemas"]
+        ],
+    )
     return
 
 
 @app.cell
-def _(AWS_REGION, CATALOG, LINEAGE_NAMESPACE, LINEAGE_URL, UC_TOKEN, UC_URI, WITH_LINEAGE):
+def _(
+    AWS_REGION, CATALOG, LINEAGE_NAMESPACE, LINEAGE_URL, UC_TOKEN, UC_URI, WITH_LINEAGE
+):
     import pyspark
 
     # IMPORTANT: this Spark path requires the BAKED JARS — UC 0.5 connector
@@ -197,7 +210,9 @@ def _(AWS_REGION, CATALOG, LINEAGE_NAMESPACE, LINEAGE_URL, UC_TOKEN, UC_URI, WIT
     _builder = (
         pyspark.sql.SparkSession.builder.appName("caspers-load")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog")
+        .config(
+            "spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog"
+        )
         .config(f"spark.sql.catalog.{CATALOG}", "io.unitycatalog.spark.UCSingleCatalog")
         .config(f"spark.sql.catalog.{CATALOG}.uri", UC_URI)
         .config(f"spark.sql.catalog.{CATALOG}.token", UC_TOKEN)
@@ -210,19 +225,22 @@ def _(AWS_REGION, CATALOG, LINEAGE_NAMESPACE, LINEAGE_URL, UC_TOKEN, UC_URI, WIT
         _builder = (
             _builder
             # OpenLineage listener -> our lineage service so loaded tables become entities.
-            .config("spark.extraListeners", "io.openlineage.spark.agent.OpenLineageSparkListener")
+            .config(
+                "spark.extraListeners",
+                "io.openlineage.spark.agent.OpenLineageSparkListener",
+            )
             .config("spark.openlineage.transport.type", "http")
             .config("spark.openlineage.transport.url", LINEAGE_URL)
             .config("spark.openlineage.transport.endpoint", "/api/v1/lineage")
             .config("spark.openlineage.namespace", LINEAGE_NAMESPACE)
             .config("spark.openlineage.columnLineage.datasetLineageEnabled", "true")
         )
-    print("OpenLineage listener:", "enabled" if WITH_LINEAGE else "disabled (CASPERS_LINEAGE=0)")
-
-    spark = (
-        _builder
-        .getOrCreate()
+    print(
+        "OpenLineage listener:",
+        "enabled" if WITH_LINEAGE else "disabled (CASPERS_LINEAGE=0)",
     )
+
+    spark = _builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return (spark,)
 
@@ -246,7 +264,13 @@ def _(spark):
     import polars as pl
     import pyspark.sql.functions as F  # noqa: F401 (handy in interactive debugging)
     from pyspark.sql.types import (
-        BooleanType, DoubleType, LongType, StringType, StructField, StructType, TimestampType,
+        BooleanType,
+        DoubleType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
     )
 
     # polars dtype -> Spark type. Integers land as LongType, floats as DoubleType.
@@ -256,7 +280,16 @@ def _(spark):
     # NOTE: names must NOT be underscore-prefixed — marimo treats leading-underscore
     # names as cell-private, so they wouldn't be visible to the write cell below.
     def spark_field(name, dtype):
-        if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64):
+        if dtype in (
+            pl.Int8,
+            pl.Int16,
+            pl.Int32,
+            pl.Int64,
+            pl.UInt8,
+            pl.UInt16,
+            pl.UInt32,
+            pl.UInt64,
+        ):
             t = LongType()
         elif dtype in (pl.Float32, pl.Float64):
             t = DoubleType()
@@ -271,7 +304,11 @@ def _(spark):
     def to_spark(df_pl):
         # Cast dates to datetimes so Spark sees TIMESTAMP uniformly.
         df_pl = df_pl.with_columns(
-            [pl.col(c).cast(pl.Datetime("us")) for c, d in df_pl.schema.items() if d == pl.Date]
+            [
+                pl.col(c).cast(pl.Datetime("us"))
+                for c, d in df_pl.schema.items()
+                if d == pl.Date
+            ]
         )
         schema = StructType([spark_field(c, d) for c, d in df_pl.schema.items()])
         # Build from ARROW, not pandas: a nullable Int64 column (e.g. driver_id, null on
@@ -343,60 +380,6 @@ def _(mo, written):
 def _(CATALOG, spark):
     # Confirm one table is MANAGED and see its UC-assigned S3 location.
     spark.sql(f"DESCRIBE EXTENDED {CATALOG}.bronze.orders").show(truncate=False)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## (Stretch, unverified) Write via Hydrofoil bulk-ingest
-
-    Hydrofoil is our Flight SQL server. The ADBC Flight SQL driver exposes a
-    **bulk-ingest** operation (`cursor.adbc_ingest(table, arrow_data, mode=...)`)
-    that streams Arrow record batches straight to the server — the right route for
-    a write through Hydrofoil (no `INSERT … SELECT` SQL), and a clean fit since the
-    generator already produces Arrow.
-
-    **This path is unverified** — Hydrofoil hasn't been exercised for writes. The
-    cell below is wrapped so a failure is *reported, not raised*, in the same spirit
-    as the `duckdb_flight.py` / `uc_duckdb.py` caveats. Toggle `TRY_HYDROFOIL_WRITE`
-    to attempt it.
-    """)
-    return
-
-
-@app.cell
-def _(HYDROFOIL_ENDPOINT, TRY_HYDROFOIL_WRITE, frames, mo):
-    _out = "Skipped (set `TRY_HYDROFOIL_WRITE=1` to attempt the bulk-ingest write)."
-    if TRY_HYDROFOIL_WRITE:
-        try:
-            from adbc_driver_flightsql.dbapi import connect
-
-            import _demo_auth
-
-            # A small frame to probe the bulk-ingest path.
-            probe_fq = "caspers.bronze.vendors"
-            arrow_tbl = frames[probe_fq].to_arrow()
-            target = probe_fq.split(".")[-1] + "_hf_probe"
-
-            with connect(
-                HYDROFOIL_ENDPOINT,
-                db_kwargs=_demo_auth.db_kwargs(
-                    "alice@example.com",
-                    extra={
-                        "x-openlineage-job-namespace": "caspers-load",
-                        "x-openlineage-job-name": "hydrofoil_bulk_ingest_probe",
-                    },
-                ),
-            ) as conn:
-                cur = conn.cursor()
-                n = cur.adbc_ingest(target, arrow_tbl, mode="create")
-                cur.close()
-            _out = f"✅ Hydrofoil bulk-ingest wrote {n} rows to `{target}`."
-        except Exception as e:  # noqa: BLE001 — record the empirical outcome
-            _out = f"❌ Hydrofoil bulk-ingest not supported / failed:\n\n```\n{e}\n```"
-
-    mo.md(_out)
     return
 
 

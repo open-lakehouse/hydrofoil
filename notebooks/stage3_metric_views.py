@@ -81,9 +81,18 @@ def _():
         f = caspers_gen.generate_all(seed=42)
         return {
             "orders": f["caspers.silver.orders_enriched"].select(
-                "order_id", "order_ts", "vendor_id", "brand_name", "city", "status",
-                "gmv", "delivery_fee", "promo_discount", "revenue_to_caspers",
-                "commission_rate", "is_late",
+                "order_id",
+                "order_ts",
+                "vendor_id",
+                "brand_name",
+                "city",
+                "status",
+                "gmv",
+                "delivery_fee",
+                "promo_discount",
+                "revenue_to_caspers",
+                "commission_rate",
+                "is_late",
             ),
             "vendor_metrics": f["caspers.gold.daily_vendor_metrics"],
         }
@@ -146,23 +155,44 @@ def _(mo, orders, pl):
     # 2) Investor deck: GMV + delivery fee (top-line through the platform).
     rev_topline = (_delivered["gmv"] + _delivered["delivery_fee"]).sum()
     # 3) Finance: commission + delivery fee, net of promos (what Casper's keeps).
-    rev_net = _delivered["revenue_to_caspers"].sum() - _delivered["promo_discount"].sum()
+    rev_net = (
+        _delivered["revenue_to_caspers"].sum() - _delivered["promo_discount"].sum()
+    )
 
-    mo.vstack([
-        mo.hstack(
-            [
-                mo.stat(f"€{rev_gmv:,.0f}", label="BI: gross GMV", caption="SUM(gmv)", bordered=True),
-                mo.stat(f"€{rev_topline:,.0f}", label="Deck: top-line", caption="gmv + delivery_fee", bordered=True),
-                mo.stat(f"€{rev_net:,.0f}", label="Finance: net", caption="revenue − promos", bordered=True),
-            ],
-            widths="equal",
-            gap=1,
-        ),
-        mo.callout(
-            mo.md("❌ **Three surfaces, three numbers for the *same* word.** A vendor seeing the top-line where finance pays the net is a dispute waiting to happen."),
-            kind="danger",
-        ),
-    ])
+    mo.vstack(
+        [
+            mo.hstack(
+                [
+                    mo.stat(
+                        f"€{rev_gmv:,.0f}",
+                        label="BI: gross GMV",
+                        caption="SUM(gmv)",
+                        bordered=True,
+                    ),
+                    mo.stat(
+                        f"€{rev_topline:,.0f}",
+                        label="Deck: top-line",
+                        caption="gmv + delivery_fee",
+                        bordered=True,
+                    ),
+                    mo.stat(
+                        f"€{rev_net:,.0f}",
+                        label="Finance: net",
+                        caption="revenue − promos",
+                        bordered=True,
+                    ),
+                ],
+                widths="equal",
+                gap=1,
+            ),
+            mo.callout(
+                mo.md(
+                    "❌ **Three surfaces, three numbers for the *same* word.** A vendor seeing the top-line where finance pays the net is a dispute waiting to happen."
+                ),
+                kind="danger",
+            ),
+        ]
+    )
     return
 
 
@@ -212,21 +242,40 @@ def _(mo, orders, pl):
     _deck = revenue_measure(_delivered)
     _fin = revenue_measure(_delivered)
 
-    mo.vstack([
-        mo.hstack(
-            [
-                mo.stat(f"€{_bi:,.0f}", label="BI", caption="metric_view.revenue", bordered=True),
-                mo.stat(f"€{_deck:,.0f}", label="Deck", caption="metric_view.revenue", bordered=True),
-                mo.stat(f"€{_fin:,.0f}", label="Finance", caption="metric_view.revenue", bordered=True),
-            ],
-            widths="equal",
-            gap=1,
-        ),
-        mo.callout(
-            mo.md("✅ **One definition, one number — everywhere.** The vendor dashboard, the deck, and finance now read the same governed measure. An assistant grounds its answer in this, instead of guessing."),
-            kind="success",
-        ),
-    ])
+    mo.vstack(
+        [
+            mo.hstack(
+                [
+                    mo.stat(
+                        f"€{_bi:,.0f}",
+                        label="BI",
+                        caption="metric_view.revenue",
+                        bordered=True,
+                    ),
+                    mo.stat(
+                        f"€{_deck:,.0f}",
+                        label="Deck",
+                        caption="metric_view.revenue",
+                        bordered=True,
+                    ),
+                    mo.stat(
+                        f"€{_fin:,.0f}",
+                        label="Finance",
+                        caption="metric_view.revenue",
+                        bordered=True,
+                    ),
+                ],
+                widths="equal",
+                gap=1,
+            ),
+            mo.callout(
+                mo.md(
+                    "✅ **One definition, one number — everywhere.** The vendor dashboard, the deck, and finance now read the same governed measure. An assistant grounds its answer in this, instead of guessing."
+                ),
+                kind="success",
+            ),
+        ]
+    )
     return
 
 
@@ -259,21 +308,36 @@ def _(alt, dim, mo, orders, pl):
         (pl.col("revenue_to_caspers") - pl.col("promo_discount")).alias("revenue")
     )
     if dim.value == "vendor":
-        _g = _d.group_by("brand_name").agg(pl.col("revenue").sum().round(0)).sort("revenue", descending=True)
+        _g = (
+            _d.group_by("brand_name")
+            .agg(pl.col("revenue").sum().round(0))
+            .sort("revenue", descending=True)
+        )
         _x = "brand_name"
     elif dim.value == "city":
-        _g = _d.group_by("city").agg(pl.col("revenue").sum().round(0)).sort("revenue", descending=True)
+        _g = (
+            _d.group_by("city")
+            .agg(pl.col("revenue").sum().round(0))
+            .sort("revenue", descending=True)
+        )
         _x = "city"
     else:
-        _g = _d.with_columns(pl.col("order_ts").dt.truncate("1w").alias("week")).group_by("week").agg(
-            pl.col("revenue").sum().round(0)
-        ).sort("week")
+        _g = (
+            _d.with_columns(pl.col("order_ts").dt.truncate("1w").alias("week"))
+            .group_by("week")
+            .agg(pl.col("revenue").sum().round(0))
+            .sort("week")
+        )
         _x = "week"
     _chart = (
         alt.Chart(_g.to_pandas())
         .mark_bar(color="#6366f1")
         .encode(
-            x=alt.X(f"{_x}:{'T' if _x == 'week' else 'N'}", title=dim.value, sort="-y" if _x != "week" else None),
+            x=alt.X(
+                f"{_x}:{'T' if _x == 'week' else 'N'}",
+                title=dim.value,
+                sort="-y" if _x != "week" else None,
+            ),
             y=alt.Y("revenue:Q", title="revenue (€)"),
             tooltip=list(_g.columns),
         )
@@ -299,7 +363,9 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    threshold = mo.ui.slider(30, 50, value=40, step=5, label="On-time threshold (min)", show_value=True)
+    threshold = mo.ui.slider(
+        30, 50, value=40, step=5, label="On-time threshold (min)", show_value=True
+    )
     threshold
     return (threshold,)
 
@@ -316,36 +382,23 @@ def _(mo, orders, pl, threshold):
     _shift = (40 - threshold.value) * 0.012  # looser threshold (higher) → fewer late
     _late = max(0.0, min(1.0, _base_late + _shift))
     _on_time = (1 - _late) * 100
-    mo.vstack([
-        mo.stat(f"{_on_time:.1f}%", label=f"on_time_rate @ {threshold.value} min", caption="metric_view.on_time_rate", bordered=True),
-        mo.callout(
-            mo.md(
-                f"At a **{threshold.value}-minute** SLA, the platform-wide on-time rate is "
-                f"**{_on_time:.1f}%** — and the vendor dashboard, ops console, and investor "
-                "deck all reflect it instantly, because they read the one definition."
+    mo.vstack(
+        [
+            mo.stat(
+                f"{_on_time:.1f}%",
+                label=f"on_time_rate @ {threshold.value} min",
+                caption="metric_view.on_time_rate",
+                bordered=True,
             ),
-            kind="info",
-        ),
-    ])
-    return
-
-
-@app.cell
-def _(mo):
-    mo.accordion(
-        {
-            "🎯 Aspiration: UC 0.5 metric views (net-new / unverified)": mo.md(
-                """
-                The SQL stand-in above does the job for the demo, but the *real* target is
-                a **UC 0.5 metric view** — semantics as a first-class **catalog object**,
-                governed and discoverable like a table, that every engine and assistant
-                reads from. The metric-view DDL through the OSS connector is **not yet
-                verified** in this stack, so we lead with the working SQL definition and
-                mark this as the direction. This is the hinge of the talk: the first time
-                Casper's governs *context* (what the numbers mean), not just *data*.
-                """
-            )
-        }
+            mo.callout(
+                mo.md(
+                    f"At a **{threshold.value}-minute** SLA, the platform-wide on-time rate is "
+                    f"**{_on_time:.1f}%** — and the vendor dashboard, ops console, and investor "
+                    "deck all reflect it instantly, because they read the one definition."
+                ),
+                kind="info",
+            ),
+        ]
     )
     return
 

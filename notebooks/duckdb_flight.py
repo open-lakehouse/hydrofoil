@@ -48,7 +48,7 @@ def _():
     import marimo as mo
 
     # The Flight SQL endpoint hydrofoil listens on (host port-mapped from the container).
-    ENDPOINT = "grpc://hydrofoil:50051"
+    ENDPOINT = "grpc+tls://hydro-grpc.openlakehousedemos.dev:443"
     return ENDPOINT, mo
 
 
@@ -123,7 +123,8 @@ def _(ENDPOINT, _demo_auth, driver_path, user):
             _opts[_k] = f"'{_v}'"
     _struct = ", ".join(
         # 'driver'/'uri' values are expressions; header values are quoted literals.
-        f"'{_k}': {_v}" for _k, _v in _opts.items()
+        f"'{_k}': {_v}"
+        for _k, _v in _opts.items()
     )
     con.execute(f"SET VARIABLE conn = (SELECT adbc_connect({{{_struct}}}));")
     return (con,)
@@ -132,7 +133,9 @@ def _(ENDPOINT, _demo_auth, driver_path, user):
 @app.cell
 def _(con):
     query = "SELECT id, event FROM demo.managed_demo.events WHERE id > 1"
-    con.execute(f"SELECT * FROM adbc_scan(getvariable('conn')::BIGINT, '{query}')").to_arrow_table()
+    con.execute(
+        f"SELECT * FROM adbc_scan(getvariable('conn')::BIGINT, '{query}')"
+    ).to_arrow_table()
     return
 
 

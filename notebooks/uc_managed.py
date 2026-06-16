@@ -31,7 +31,7 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    UC_URI = "http://unity-catalog:8081"
+    UC_URI = "https://uc.openlakehousedemos.dev"
     CATALOG = "demo"
     SCHEMA = "managed_demo"
     TABLE = "events"
@@ -57,14 +57,22 @@ def _(CATALOG, SCHEMA, STORAGE_ROOT, UC_URI):
             r.raise_for_status()
         return r
 
-    _create("catalogs", {"name": CATALOG, "comment": "managed demo", "storage_root": STORAGE_ROOT})
+    _create(
+        "catalogs",
+        {"name": CATALOG, "comment": "managed demo", "storage_root": STORAGE_ROOT},
+    )
     _create("schemas", {"name": SCHEMA, "catalog_name": CATALOG})
 
     cat = requests.get(f"{base}/catalogs/{CATALOG}").json()
     print("catalog:", cat["name"], "| storage_root:", cat.get("storage_root"))
     print(
         "schemas:",
-        [s["name"] for s in requests.get(f"{base}/schemas", params={"catalog_name": CATALOG}).json()["schemas"]],
+        [
+            s["name"]
+            for s in requests.get(
+                f"{base}/schemas", params={"catalog_name": CATALOG}
+            ).json()["schemas"]
+        ],
     )
     return
 
@@ -79,12 +87,14 @@ def _(AWS_REGION, CATALOG, UC_URI):
     spark = (
         pyspark.sql.SparkSession.builder.appName("uc-managed")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog")
+        .config(
+            "spark.sql.catalog.spark_catalog", "io.unitycatalog.spark.UCSingleCatalog"
+        )
         .config(f"spark.sql.catalog.{CATALOG}", "io.unitycatalog.spark.UCSingleCatalog")
         .config(f"spark.sql.catalog.{CATALOG}.uri", UC_URI)
         .config(f"spark.sql.catalog.{CATALOG}.token", "")  # UC OSS dev: no auth
         .config("spark.sql.defaultCatalog", CATALOG)
-        # S3A region for the real AWS bucket. We do NOT set access/secret keys or a credentials
+        # S3A region for the AWS bucket. We do NOT set access/secret keys or a credentials
         # provider here: UC vends STS temporary credentials and the UCSingleCatalog connector
         # injects them into the s3a client per table.
         .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
