@@ -1,9 +1,11 @@
 //! Physical-plan wrapper that emits COMPLETE / FAIL at end of execution.
 //!
-//! The [`crate::planner::OpenLineageQueryPlanner`] emits START at plan time and
-//! wraps the root physical plan in an [`OpenLineageExec`]. This node observes
-//! the result streams and emits exactly one terminal event once every output
-//! partition has finished:
+//! [`crate::rule::OpenLineageQueryPlanner`] emits START at plan time and carries
+//! a COMPLETE template through the plan in a [`crate::rule::LineageMarker`];
+//! [`crate::rule::LineageExtensionPlanner`] lowers that marker into an
+//! [`OpenLineageExec`] at the physical root. This node observes the result
+//! streams and emits exactly one terminal event once every output partition has
+//! finished:
 //!
 //! - COMPLETE when all partitions drain successfully;
 //! - FAIL (with an `errorMessage` run facet) if any partition yields an error
