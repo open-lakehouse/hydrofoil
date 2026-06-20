@@ -36,7 +36,7 @@ use crate::facets::{
     OutputStatisticsOutputDatasetFacet,
 };
 
-const ERROR_FACET: &str = "1-0-0/ErrorMessageRunFacet.json";
+const ERROR_FACET: &str = "1-0-1/ErrorMessageRunFacet.json";
 const OUTPUT_STATS_FACET: &str = "1-0-2/OutputStatisticsOutputDatasetFacet.json";
 const INPUT_STATS_FACET: &str = "1-0-0/InputStatisticsInputDatasetFacet.json";
 

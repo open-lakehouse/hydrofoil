@@ -21,7 +21,7 @@ use crate::facets::{
 };
 use crate::naming::DatasetName;
 
-const SCHEMA_FACET: &str = "1-1-0/SchemaDatasetFacet.json";
+const SCHEMA_FACET: &str = "1-2-0/SchemaDatasetFacet.json";
 const COLUMN_LINEAGE_FACET: &str = "1-2-0/ColumnLineageDatasetFacet.json";
 
 /// What a query reads and writes.

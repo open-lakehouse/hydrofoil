@@ -22,7 +22,7 @@ pub struct BaseFacet {
 
 impl BaseFacet {
     /// Build a [`BaseFacet`] for `producer` pointing at the facet schema named
-    /// `schema` (e.g. `1-1-0/SchemaDatasetFacet.json`).
+    /// `schema` (e.g. `1-2-0/SchemaDatasetFacet.json`).
     pub fn new(producer: &str, schema: &str) -> Self {
         Self {
             producer: producer.to_string(),
