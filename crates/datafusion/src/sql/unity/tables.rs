@@ -69,11 +69,9 @@ impl CreateManagedTableStatement {
 /// requirement for schemas).
 fn split_table_name(name: &ObjectName) -> Result<(String, String, String)> {
     match name.0.as_slice() {
-        [catalog, schema, table] => Ok((
-            catalog.to_string(),
-            schema.to_string(),
-            table.to_string(),
-        )),
+        [catalog, schema, table] => {
+            Ok((catalog.to_string(), schema.to_string(), table.to_string()))
+        }
         _ => Err(DataFusionError::Execution(format!(
             "Managed table name '{name}' must be a three-part identifier (<catalog>.<schema>.<table>)"
         ))),
@@ -99,12 +97,10 @@ pub(crate) fn sql_columns_to_arrow_schema(columns: &[ColumnDef]) -> Result<Schem
             let data_type = sql_type_to_arrow(&col.data_type, &col.name.value)?;
             // Columns are nullable unless an explicit NOT NULL option is present;
             // matching Spark/Delta defaults keeps the create schema permissive.
-            let nullable = !col.options.iter().any(|o| {
-                matches!(
-                    o.option,
-                    sqlparser::ast::ColumnOption::NotNull
-                )
-            });
+            let nullable = !col
+                .options
+                .iter()
+                .any(|o| matches!(o.option, sqlparser::ast::ColumnOption::NotNull));
             Ok(Field::new(&col.name.value, data_type, nullable))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -172,8 +168,14 @@ mod tests {
             col("a", SqlDataType::BigInt(None)),
             col("b", SqlDataType::Varchar(None)),
             col("c", SqlDataType::Boolean),
-            col("d", SqlDataType::Custom(vec![Ident::new("LONG")].into(), vec![])),
-            col("e", SqlDataType::Custom(vec![Ident::new("string")].into(), vec![])),
+            col(
+                "d",
+                SqlDataType::Custom(vec![Ident::new("LONG")].into(), vec![]),
+            ),
+            col(
+                "e",
+                SqlDataType::Custom(vec![Ident::new("string")].into(), vec![]),
+            ),
         ];
         let schema = sql_columns_to_arrow_schema(&cols).unwrap();
         assert_eq!(schema.field(0).data_type(), &DataType::Int64);

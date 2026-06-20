@@ -176,7 +176,10 @@ impl LakehouseCtx {
     ) -> Result<Arc<dyn TableProvider>> {
         if let Some(unity) = self.unity.as_ref() {
             let resolved = unity
-                .resolve(std::slice::from_ref(&table_ref), self.inner.state().config())
+                .resolve(
+                    std::slice::from_ref(&table_ref),
+                    self.inner.state().config(),
+                )
                 .await?;
             let state = self.inner.state();
             for name in resolved.catalog_names() {
