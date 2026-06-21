@@ -62,6 +62,42 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       # Live-integration tests (UC / OCI registry / a running hydrofoil) are
-      # marked #[ignore], so the default run needs no services.
+      # marked #[ignore], so the default run needs no services. The always-on
+      # OpenLineage spec-conformance suite (tests/conformance.rs) runs here too —
+      # it validates emitted events against vendored JSON Schemas, no services.
       - name: Test
         run: cargo test --workspace --all-features
+
+  # The OpenLineage adapter's acceptance test against the Marquez reference
+  # backend. Separate job: it needs Docker (testcontainers spins up Marquez +
+  # Postgres) and is gated behind the `marquez-it` feature + #[ignore], so it
+  # never runs in the authoritative `ci` job above. Non-blocking for now
+  # (continue-on-error) while the live harness beds in; flip off once stable.
+  marquez-acceptance:
+    name: marquez reference acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.96"
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "31.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+
+      # ubuntu-latest ships a working Docker daemon; testcontainers finds it at
+      # the default socket. The test pulls marquezproject/marquez + postgres.
+      - name: Marquez acceptance test
+        run: cargo test -p datafusion-open-lineage --features marquez-it --test marquez_acceptance -- --ignored --nocapture

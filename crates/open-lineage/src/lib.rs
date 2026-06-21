@@ -1,9 +1,13 @@
 //! OpenLineage integration for Apache DataFusion.
 //!
-//! Wrap a `SessionState`'s query planner with [`instrument_session_state`] to
-//! emit [OpenLineage](https://openlineage.io) run events (START / COMPLETE /
-//! FAIL) describing each query's input/output datasets and column-level
-//! lineage.
+//! Instrument a `SessionState` with [`instrument_session_state`] to emit
+//! [OpenLineage](https://openlineage.io) run events (START / COMPLETE / FAIL)
+//! describing each query's input/output datasets and column-level lineage.
+//! Planning-time work (lineage extraction, context, START) runs in a
+//! [`QueryPlanner`](crate::rule::OpenLineageQueryPlanner); the terminal
+//! COMPLETE/FAIL node is installed by a registered
+//! [`ExtensionPlanner`](crate::rule::LineageExtensionPlanner) that lowers a
+//! plan-carried marker — see the [`rule`] module and ADR 0014.
 //!
 //! The sink is pluggable via the [`Transport`] trait; the default
 //! [`CloudClientTransport`] (feature `http`) posts events to a deployed,
@@ -36,7 +40,7 @@ pub mod exec;
 pub mod extract;
 pub mod facets;
 pub mod naming;
-pub mod planner;
+pub mod rule;
 pub mod session;
 pub mod transport;
 
@@ -50,7 +54,7 @@ pub use event::{Dataset, Job, Run, RunEvent, RunEventType};
 pub use exec::OpenLineageExec;
 pub use extract::{QueryLineage, extract};
 pub use naming::DatasetName;
-pub use planner::OpenLineageQueryPlanner;
+pub use rule::{LineageExtensionPlanner, LineageMarker, OpenLineageQueryPlanner};
 pub use session::{instrument_session_state, instrument_session_state_simple};
 pub use transport::{ConsoleTransport, NoopTransport, Transport, TransportError};
 

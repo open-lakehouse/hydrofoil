@@ -446,8 +446,11 @@ impl FlightSqlServiceImpl {
         // first) so we coerce the wire batches to the table schema and build the
         // same INSERT plan the external path would, for an identical
         // authorization decision.
-        let table_ref =
-            TableReference::full(target.catalog.clone(), target.schema.clone(), target.table.clone());
+        let table_ref = TableReference::full(
+            target.catalog.clone(),
+            target.schema.clone(),
+            target.table.clone(),
+        );
         let qualified = table_ref.to_string();
         let provider = ctx.resolve_table_provider(table_ref).await?;
         let target_schema = provider.schema();

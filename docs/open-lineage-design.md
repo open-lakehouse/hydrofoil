@@ -36,32 +36,41 @@ lineage is the third capability layered onto the same session.
    integrations (Spark) have validated; skip the machinery that doesn't earn its
    complexity in a first version.
 
-## Critical decision 1 — Where to hook: wrap the `QueryPlanner`
+## Critical decision 1 — Where to hook: a `QueryPlanner` + a registered `ExtensionPlanner`
 
 DataFusion offers several extension seams: `AnalyzerRule`, `OptimizerRule`,
-`PhysicalOptimizerRule`, custom `ExecutionPlan` nodes, and the `QueryPlanner`
-trait. We wrap the **`QueryPlanner`**.
+`PhysicalOptimizerRule`, custom `ExecutionPlan` nodes, the `ExtensionPlanner`, and
+the `QueryPlanner` trait. The work splits along three concerns with different
+needs (see ADR [0014](adr/0014-openlineage-planner-vs-rule.md)):
 
-Rationale: `QueryPlanner::create_physical_plan(&LogicalPlan, &SessionState)`
-receives the *fully optimized* logical plan — the richest lineage signal (scans
-have their projections/filters pushed down, so we see exactly which columns are
-read) — **and** the `SessionState`, which is how per-query context reaches us. It
-also straddles the success/failure boundary of planning, giving a natural place
-to emit START before and COMPLETE/FAIL after.
+- **Extraction** needs the *fully optimized* `LogicalPlan` — the richest lineage
+  signal (scans have projections/filters pushed down, so we see exactly which
+  columns are read).
+- **START + orchestration context** need `&SessionState` and are async.
+- **Terminal COMPLETE/FAIL + runtime stats** need a node at the physical root that
+  observes execution.
 
-The wrapper preserves any existing planner:
+`QueryPlanner::create_physical_plan(&LogicalPlan, &SessionState)` is the only
+logical-phase seam that gets `&SessionState`, so the first two concerns live in an
+`OpenLineageQueryPlanner`. But the terminal node is installed the composable,
+DataFusion-idiomatic way — a **registered `ExtensionPlanner`**, not the planner
+hand-wrapping the physical root. The planner carries a prebuilt COMPLETE template
+through the plan itself in a `LineageMarker` (`UserDefinedLogicalNodeCore`); a
+`LineageExtensionPlanner` lowers that marker into `OpenLineageExec` at the root.
+(The plan is the only per-query carrier from the logical phase into physical
+planning — rules get no `&SessionState` and no per-query mutable channel.)
 
 ```rust
-let inner = state.query_planner().clone();
-SessionStateBuilder::from(state)
-    .with_query_planner(Arc::new(OpenLineageQueryPlanner { inner, client, context, config }))
-    .build()
+// OpenLineageQueryPlanner: extract + context + START, then wrap the *logical*
+// plan in a LineageMarker carrying the COMPLETE template; delegate physical
+// planning to a DefaultPhysicalPlanner that registers LineageExtensionPlanner.
+let wrapped = LogicalPlan::Extension(Extension { node: Arc::new(marker) });
+self.physical.create_physical_plan(&wrapped, session_state).await
 ```
 
-This is the same composition pattern `datafusion-tracing` uses, and it composes
-cleanly with our other customizations — the Cedar policy check and the
-`datafusion-tracing` physical-optimizer rule all coexist on one session because
-each wraps rather than replaces.
+This composes cleanly with our other customizations — the Cedar policy check and
+the `datafusion-tracing` physical-optimizer rule coexist on one session, and any
+host-registered extension planners are preserved.
 
 **Public surface** is one call, matching `datafusion-tracing`'s ergonomics:
 
@@ -77,10 +86,10 @@ actual *execution* outcome, not just that planning succeeded: a query that plans
 cleanly can still error mid-stream. Emitting COMPLETE from the planner would
 report success for a query that later fails.
 
-So the planner wraps the root physical plan in an **`OpenLineageExec`** node and
-hands it the pre-built COMPLETE event (carrying the same `runId` as START). That
-node observes the result streams and emits the terminal event when execution
-actually ends:
+So the planner carries the pre-built COMPLETE event (same `runId` as START)
+through the plan in a `LineageMarker`, which a registered `LineageExtensionPlanner`
+lowers into an **`OpenLineageExec`** node at the physical root. That node observes
+the result streams and emits the terminal event when execution actually ends:
 
 - COMPLETE when every output partition drains successfully;
 - FAIL (with an `errorMessage` run facet) if any partition yields an error, or
@@ -97,8 +106,8 @@ zero-partition edge case. This is the same `Drop`-based technique
 `datafusion-tracing` uses to harvest metrics, specialized here for once-per-run
 event semantics rather than per-stream metric aggregation.
 
-A *planning* failure is different: there's no plan to wrap, so the planner emits
-FAIL directly.
+A *planning* failure is different: there's no execution to observe, so the planner
+emits FAIL directly.
 
 ### Runtime statistics, and where the row count actually lives
 
@@ -340,8 +349,10 @@ could pre-mint the `runId` the planner uses).
 
 ## Patterns adopted vs. deferred
 
-**Adopted** (validated by mature integrations, mostly Spark): planner-wrapping as
-the hook; `TreeNodeVisitor` plan walk; table-level input/output lineage with
+**Adopted** (validated by mature integrations, mostly Spark): a `QueryPlanner` for
+the `&SessionState`-bound planning-time work, with the terminal node installed via
+a registered `ExtensionPlanner`; `TreeNodeVisitor` plan walk; table-level
+input/output lineage with
 full-schema facets; spec-exact facets with `_producer`/`_schemaURL`; async
 fail-safe emission with a flush-on-shutdown drain and a dropped-events counter;
 standard env-var config; pluggable transport; **end-of-execution COMPLETE/FAIL

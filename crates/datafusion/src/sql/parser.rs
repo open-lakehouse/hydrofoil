@@ -764,8 +764,12 @@ mod tests {
         let sql = "CREATE TABLE my_catalog.sales.orders (id BIGINT, name STRING) USING DELTA";
         let statements = HFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
-        let expected_name: ObjectName =
-            vec![Ident::new("my_catalog"), Ident::new("sales"), Ident::new("orders")].into();
+        let expected_name: ObjectName = vec![
+            Ident::new("my_catalog"),
+            Ident::new("sales"),
+            Ident::new("orders"),
+        ]
+        .into();
         match &statements[0] {
             Statement::UnityCatalog(UnityCatalogStatement::CreateManagedTable(stmt)) => {
                 assert_eq!(stmt.name, expected_name);

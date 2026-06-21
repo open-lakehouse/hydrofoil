@@ -67,7 +67,7 @@ fn parent_from_env(config: &OpenLineageConfig) -> Option<ParentRunFacet> {
     };
 
     Some(ParentRunFacet {
-        base: BaseFacet::new(&config.producer, "1-0-0/ParentRunFacet.json"),
+        base: BaseFacet::new(&config.producer, "1-1-0/ParentRunFacet.json"),
         run: ParentRun { run_id },
         job: ParentJob { namespace, name },
         root: None,

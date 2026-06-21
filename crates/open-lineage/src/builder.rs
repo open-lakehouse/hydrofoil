@@ -13,9 +13,9 @@ use crate::facets::{
 };
 
 const PROCESSING_ENGINE_FACET: &str = "1-1-1/ProcessingEngineRunFacet.json";
-const SQL_FACET: &str = "1-0-0/SQLJobFacet.json";
+const SQL_FACET: &str = "1-1-0/SQLJobFacet.json";
 const JOB_TYPE_FACET: &str = "2-0-3/JobTypeJobFacet.json";
-const ERROR_FACET: &str = "1-0-0/ErrorMessageRunFacet.json";
+const ERROR_FACET: &str = "1-0-1/ErrorMessageRunFacet.json";
 
 /// Build the START event for a query.
 pub fn start_event(

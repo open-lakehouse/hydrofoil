@@ -129,7 +129,7 @@ pub fn context_from_metadata(meta: &MetadataMap, config: &OpenLineageConfig) -> 
                 _ => None,
             };
             Some(ParentRunFacet {
-                base: BaseFacet::new(&config.producer, "1-0-0/ParentRunFacet.json"),
+                base: BaseFacet::new(&config.producer, "1-1-0/ParentRunFacet.json"),
                 run: ParentRun { run_id },
                 job: ParentJob { namespace, name },
                 root,
@@ -367,7 +367,7 @@ pub fn execution_context(planning: &LineageContext, config: &OpenLineageConfig) 
         });
 
         cx.parent_run = Some(ParentRunFacet {
-            base: BaseFacet::new(&config.producer, "1-0-0/ParentRunFacet.json"),
+            base: BaseFacet::new(&config.producer, "1-1-0/ParentRunFacet.json"),
             run: ParentRun {
                 run_id: planning_run.to_string(),
             },
@@ -639,7 +639,7 @@ mod tests {
         let planning_run = uuid::Uuid::now_v7();
         let cfg = config();
         let orchestrator_parent = ParentRunFacet {
-            base: BaseFacet::new(&cfg.producer, "1-0-0/ParentRunFacet.json"),
+            base: BaseFacet::new(&cfg.producer, "1-1-0/ParentRunFacet.json"),
             run: ParentRun {
                 run_id: "airflow-run-1".to_string(),
             },
