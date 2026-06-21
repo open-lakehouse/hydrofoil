@@ -13,6 +13,21 @@ extend-ignore-re = [
 # to avoid having to name fields r#type
 typ = "typ"
 
+# Pluralized SQL keywords in prose/tests ("SELECTs", "INSERTs"): typos strips the
+# trailing "s" and flags the stem as a misspelling of SELECT / INSERT.
+selec = "selec"
+inser = "inser"
+
+# "criticals" — used as a noun ("first the criticals") in the service review docs.
+criticals = "criticals"
+
+# Hyphenated "mis-" prefix ("mis-creating", "mis-route"): the prefix is tokenized
+# on its own and flagged as a misspelling of miss/mist.
+mis = "mis"
+
+# MUC = Munich's IATA / city code, used in demo data (notebooks/caspers_gen.py).
+muc = "muc"
+
 # We only want typos to police code we own. Three classes of files carry
 # intentional or upstream-owned "misspellings" and are excluded here:
 #
