@@ -69,6 +69,14 @@ env-down env_name="live" *args:
 build_policy:
     cd crates/policy && buf generate
 
+# Regenerate the portal crate's buffa message types + connect-rust service stubs.
+# One-time plugin install (local binaries; no remote BSR plugin yet):
+#   cargo install --locked connectrpc-codegen     # protoc-gen-connect-rust
+#   cargo install --locked protoc-gen-buffa protoc-gen-buffa-packaging
+portal-gen:
+    cd crates/portal && buf generate
+    cargo fmt -p portal
+
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \
       config/policies/lakehouse.cedar:application/vnd.cedar.policyset.v1 \
