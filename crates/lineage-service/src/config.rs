@@ -10,9 +10,6 @@ use serde::Deserialize;
 #[serde(rename_all = "lowercase")]
 pub enum SinkKind {
     Delta,
-    /// Apache Iceberg. Only available when the crate is built with the
-    /// `iceberg` cargo feature.
-    Iceberg,
 }
 
 /// Error raised while loading configuration. A missing file (when none was
@@ -24,12 +21,6 @@ pub enum SinkKind {
 pub enum ConfigError {
     #[error("failed to load configuration: {0}")]
     Source(#[from] config::ConfigError),
-
-    #[error(
-        "config selects the iceberg sink, but this binary was built without the `iceberg` feature; rebuild with `--features iceberg`"
-    )]
-    #[cfg(not(feature = "iceberg"))]
-    IcebergNotCompiled,
 
     #[error("unknown delta.mode {0:?} (known: local, unity-external, unity-managed)")]
     UnknownDeltaMode(String),
@@ -188,30 +179,6 @@ impl DeltaConfig {
     }
 }
 
-#[cfg(feature = "iceberg")]
-#[derive(Debug, Clone, Deserialize)]
-pub struct IcebergConfig {
-    /// Iceberg REST catalog URI. For Lakekeeper this looks like
-    /// `http://lakekeeper:8181/catalog`.
-    pub catalog_uri: String,
-    /// REST `warehouse` property — for Lakekeeper this is the warehouse name
-    /// (e.g. `lineage`), not an S3 path. For other servers it may be an
-    /// `s3://bucket/prefix` URI.
-    pub warehouse: String,
-    pub namespace: String,
-    pub table: String,
-    /// Identity-transform partition columns. Empty means an unpartitioned
-    /// table.
-    #[serde(default)]
-    pub partition_cols: Vec<String>,
-    /// Optional bearer token to attach to REST requests (Lakekeeper OIDC).
-    /// Forwarded to the catalog as the REST `token` property by
-    /// `iceberg::build_rest_props`. A secret — supply via the `ICEBERG_TOKEN`
-    /// env var rather than the config file.
-    #[serde(default)]
-    pub token: Option<String>,
-}
-
 /// Tuning for the asynchronous buffered writer that sits between HTTP
 /// ingestion and the sinks. Defaults mirror the historical Go forwarder.
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -250,8 +217,6 @@ pub struct Config {
     pub port: u16,
     pub sinks: Vec<SinkKind>,
     pub delta: DeltaConfig,
-    #[cfg(feature = "iceberg")]
-    pub iceberg: Option<IcebergConfig>,
     /// Object-store options (region, endpoint, …) forwarded to the writer.
     /// Secrets (`AWS_*`, tokens) are layered in from the environment at load
     /// time rather than read from the config file — see [`Config::load`].
@@ -265,8 +230,6 @@ impl Default for Config {
             port: default_port(),
             sinks: default_sinks(),
             delta: DeltaConfig::default(),
-            #[cfg(feature = "iceberg")]
-            iceberg: None,
             storage_options: HashMap::new(),
             writer: WriterConfig::default(),
         }
@@ -341,10 +304,6 @@ impl Config {
 
     /// Validate cross-cutting invariants that serde can't express on its own.
     fn validate(&self) -> Result<(), ConfigError> {
-        #[cfg(not(feature = "iceberg"))]
-        if self.sinks.contains(&SinkKind::Iceberg) {
-            return Err(ConfigError::IcebergNotCompiled);
-        }
         // Resolve the delta target so a bad mode / missing endpoint / missing table name fails
         // at startup rather than during the first flush.
         let target = self.delta.resolve(&self.storage_options)?;
@@ -439,21 +398,6 @@ mod tests {
     #[test]
     fn test_malformed_value_is_error() {
         assert!(from_toml("port = \"not-a-port\"").is_err());
-    }
-
-    #[cfg(not(feature = "iceberg"))]
-    #[test]
-    fn test_iceberg_sink_without_feature_fails_validation() {
-        // `iceberg` deserializes fine (the variant always exists), but
-        // validate() rejects it when the feature is off.
-        let cfg = Config {
-            sinks: vec![SinkKind::Iceberg],
-            ..Config::default()
-        };
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigError::IcebergNotCompiled)
-        ));
     }
 
     #[test]

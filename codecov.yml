@@ -1,0 +1,20 @@
+# Coverage is reported but never blocks a PR while it beds in. Both project and
+# patch statuses are informational, so a coverage drop shows up in the Codecov
+# comment/status without turning the check red. Tighten (drop `informational`,
+# add a `target`) once a baseline is trusted.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# Public-repo tokenless upload; no CODECOV_TOKEN secret required.
+codecov:
+  require_ci_to_pass: false
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default

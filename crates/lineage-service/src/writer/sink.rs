@@ -1,6 +1,6 @@
 //! Pluggable lakehouse sink abstraction.
 //!
-//! Each `TableSink` impl owns its own table handle (Delta, Iceberg, ...) and
+//! Each `TableSink` impl owns its own table handle (Delta, Unity, ...) and
 //! consumes the same shared Arrow schema produced by `events_to_record_batch`.
 //! The [`BufferedWriter`](crate::writer::buffered) fans every flushed
 //! `RecordBatch` out to one or more sinks; a sink failure is logged and the
@@ -12,7 +12,7 @@ use deltalake::arrow::array::RecordBatch;
 #[async_trait]
 pub trait TableSink: Send + Sync {
     /// Stable, human-readable identifier used in logs and error wrapping
-    /// (e.g. `"delta"`, `"iceberg"`).
+    /// (e.g. `"delta"`, `"unity"`).
     fn name(&self) -> &'static str;
 
     /// Append `batch` to the underlying table.
@@ -20,7 +20,7 @@ pub trait TableSink: Send + Sync {
     /// Implementations MUST be a no-op for empty batches (`num_rows() == 0`)
     /// to preserve the historical behavior of `DeltaWriter::append` — the
     /// service layer relies on this so that an all-`event=None` `WriteBatch`
-    /// reports `written: 0` without creating an empty Delta/Iceberg snapshot.
+    /// reports `written: 0` without creating an empty Delta snapshot.
     async fn append(&self, batch: RecordBatch) -> Result<(), SinkError>;
 }
 
@@ -31,9 +31,6 @@ pub trait TableSink: Send + Sync {
 pub enum SinkError {
     #[error("delta: {0}")]
     Delta(String),
-
-    #[error("iceberg: {0}")]
-    Iceberg(String),
 
     #[error("unity: {0}")]
     Unity(String),
@@ -98,7 +95,7 @@ mod tests {
     async fn error_variants_render_with_prefix() {
         let e = SinkError::Delta("foo".into());
         assert_eq!(e.to_string(), "delta: foo");
-        let e = SinkError::Iceberg("bar".into());
-        assert_eq!(e.to_string(), "iceberg: bar");
+        let e = SinkError::Unity("bar".into());
+        assert_eq!(e.to_string(), "unity: bar");
     }
 }

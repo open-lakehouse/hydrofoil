@@ -90,33 +90,6 @@ async fn build_sinks(cfg: &Config) -> anyhow::Result<Vec<Arc<dyn TableSink>>> {
             SinkKind::Delta => {
                 sinks.push(build_delta_sink(cfg).await?);
             }
-            #[cfg(feature = "iceberg")]
-            SinkKind::Iceberg => {
-                use lineage_service::writer::iceberg::IcebergSink;
-                let ic = cfg
-                    .iceberg
-                    .as_ref()
-                    .context("iceberg sink requires ICEBERG_* config")?;
-                tracing::info!(
-                    "registering iceberg sink: catalog={} warehouse={} table={}.{}",
-                    ic.catalog_uri,
-                    ic.warehouse,
-                    ic.namespace,
-                    ic.table,
-                );
-                let sink = IcebergSink::from_config(ic)
-                    .await
-                    .context("failed to initialize iceberg sink")?;
-                sinks.push(Arc::new(sink));
-            }
-            // `SinkKind::Iceberg` can only be produced when the `iceberg`
-            // feature is enabled (config parsing rejects it otherwise), so this
-            // arm is unreachable in a default build — it exists only to keep the
-            // match exhaustive over the always-present enum variant.
-            #[cfg(not(feature = "iceberg"))]
-            SinkKind::Iceberg => unreachable!(
-                "iceberg sink selected without the `iceberg` feature; config parsing should have rejected this"
-            ),
         }
     }
     Ok(sinks)
