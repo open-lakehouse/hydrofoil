@@ -15,7 +15,7 @@ export function AppShell() {
     <div className="flex min-h-screen flex-col">
       <TopBar />
       <div className="flex flex-1">
-        <nav className="hidden w-56 shrink-0 border-r bg-card p-4 lg:block">
+        <nav className="hidden w-56 shrink-0 border-r bg-sidebar p-4 lg:block">
           <div className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Catalog
           </div>
