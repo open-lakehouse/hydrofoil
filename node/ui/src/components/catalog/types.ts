@@ -10,16 +10,26 @@ export const OBJECT_KINDS: ObjectKind[] = [
 ];
 
 /**
- * Everything that can be selected and shown in the detail pane: the two
- * namespace containers (catalog, schema) plus the leaf objects. The type-level
- * group rows (Tables/Volumes/...) are intentionally NOT here — they only expand.
+ * Metastore-level securables that live outside the three-level namespace:
+ * storage credentials and external locations.
  */
-export type SelectableKind = "catalog" | "schema" | ObjectKind;
+export type StorageKind = "credential" | "external_location";
+
+export const STORAGE_KINDS: StorageKind[] = ["external_location", "credential"];
+
+/**
+ * Everything that can be selected and shown in the detail pane: the two
+ * namespace containers (catalog, schema), the leaf objects, and the
+ * metastore-level storage securables. The type-level group rows
+ * (Tables/Volumes/...) are intentionally NOT here — they only expand.
+ */
+export type SelectableKind = "catalog" | "schema" | ObjectKind | StorageKind;
 
 export const SELECTABLE_KINDS: SelectableKind[] = [
   "catalog",
   "schema",
   ...OBJECT_KINDS,
+  ...STORAGE_KINDS,
 ];
 
 export function isObjectKind(kind: SelectableKind): kind is ObjectKind {

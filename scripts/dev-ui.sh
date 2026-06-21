@@ -4,10 +4,13 @@
 # unitycatalog-rs repo.
 #
 # What it does:
-#   1. Builds and starts the `uc` server (in-memory backend, REST API on :8080)
-#      from the sibling unitycatalog-rs checkout.
-#   2. Waits for the UC REST API to come up.
-#   3. Starts the Vite UI dev server (:3002) with its `/api` proxy pointed
+#   1. Renders a per-run server config (scripts/uc-config.dev.yaml.tmpl) that
+#      allow-lists a repo-local, gitignored .uc-data/run.* directory for file://
+#      managed storage (kept in-repo so the written data is easy to inspect).
+#   2. Builds and starts the `uc` server (in-memory backend, REST API on :8080)
+#      from the sibling unitycatalog-rs checkout, using that config.
+#   3. Waits for the UC REST API to come up.
+#   4. Starts the Vite UI dev server (:3002) with its `/api` proxy pointed
 #      straight at the UC server.
 #
 # Normally the UI's `/api` (and `/mlflow`, `/marimo`) requests go through the
@@ -21,9 +24,10 @@
 # Both servers are torn down when this script exits (Ctrl-C or otherwise).
 #
 # Overridable via environment:
-#   UC_REPO   sibling unitycatalog-rs checkout (default: ../unitycatalog-rs)
-#   UC_PORT   UC server REST port             (default: 8080)
-#   UI_PORT   Vite dev server port            (default: 3002)
+#   UC_REPO       sibling unitycatalog-rs checkout (default: ../unitycatalog-rs)
+#   UC_PORT       UC server REST port             (default: 8080)
+#   UI_PORT       Vite dev server port            (default: 3002)
+#   UC_DATA_ROOT  local managed-storage root      (default: repo-local .uc-data/run.*)
 
 set -euo pipefail
 
@@ -45,18 +49,39 @@ if [[ ! -d "$UC_REPO" ]]; then
 fi
 UC_REPO="$(cd "$UC_REPO" && pwd)"
 
+# Per-run local storage root + rendered server config, kept inside a repo-local,
+# gitignored `.uc-data/` directory so the data the server writes is easy to find
+# and inspect while debugging. The in-memory backend keeps no metadata across
+# restarts, but allow-listing this path lets catalogs / schemas / volumes use
+# managed storage under file://$UC_DATA_ROOT (it also backs the metastore managed
+# root). The path must exist at startup, so create it now (random per run).
+UC_DATA_BASE="$REPO_ROOT/.uc-data"
+mkdir -p "$UC_DATA_BASE"
+UC_DATA_ROOT="${UC_DATA_ROOT:-$(mktemp -d "$UC_DATA_BASE/run.XXXXXX")}"
+mkdir -p "$UC_DATA_ROOT"
+UC_CONFIG_TEMPLATE="$REPO_ROOT/scripts/uc-config.dev.yaml.tmpl"
+# Render the config alongside the data it points at, so both live under the same
+# inspectable per-run directory.
+UC_CONFIG="$UC_DATA_ROOT/uc-config.yaml"
+sed "s|@@UC_DATA_ROOT@@|${UC_DATA_ROOT}|g" "$UC_CONFIG_TEMPLATE" > "$UC_CONFIG"
+log "Local storage root : ${UC_DATA_ROOT}"
+log "Rendered UC config : ${UC_CONFIG}"
+
 # If something is already serving the UC API on this port, reuse it rather than
 # fighting over the bind (e.g. a server left running from a previous session).
 UC_PID=""
 if curl -fsS -o /dev/null "${UC_API}/catalogs" 2>/dev/null; then
   log "Reusing Unity Catalog server already responding at ${UC_API}"
+  log "NOTE: the rendered config only applies to a server started by this script."
+  log "      Stop the running server and re-run to pick up ${UC_DATA_ROOT}."
 else
   log "Building + starting Unity Catalog server from ${UC_REPO} (port ${UC_PORT})..."
   log "First build can take several minutes."
   (
     cd "$UC_REPO"
     exec env RUST_LOG="${RUST_LOG:-info}" \
-      cargo run --quiet -p unitycatalog-cli -- server --rest --port "$UC_PORT"
+      cargo run --quiet -p unitycatalog-cli -- server --rest --port "$UC_PORT" \
+        --config "$UC_CONFIG"
   ) &
   UC_PID=$!
 fi
@@ -75,6 +100,8 @@ cleanup() {
     kill "$UC_PID" 2>/dev/null || true
     lsof -tiTCP:"$UC_PORT" -sTCP:LISTEN 2>/dev/null | xargs -r kill 2>/dev/null || true
   fi
+  # Leave the per-run .uc-data/ directory (config + written data) in place for
+  # inspection; it's gitignored and a fresh one is created on the next run.
   exit "$code"
 }
 trap cleanup INT TERM EXIT

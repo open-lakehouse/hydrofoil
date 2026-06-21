@@ -2,7 +2,9 @@
 //
 // Tree rows and the detail pane trigger create/edit/delete flows through this
 // context instead of threading callbacks down the tree. The provider owns the
-// transient dialog request state and renders the matching dialog.
+// transient dialog request state and renders the matching dialog. It routes the
+// metastore-level storage securables (credentials, external locations) to their
+// dedicated dialogs and everything else to the generic catalog dialogs.
 import {
   createContext,
   type ReactNode,
@@ -14,20 +16,32 @@ import {
 import { CreateEntityDialog } from "@/components/CreateEntityDialog";
 import { DeleteEntityDialog } from "@/components/DeleteEntityDialog";
 import { EditEntityDialog } from "@/components/EditEntityDialog";
+import { CredentialDialog } from "@/components/storage/CredentialDialog";
+import { ExternalLocationDialog } from "@/components/storage/ExternalLocationDialog";
 
-import type { CreateRequest, DeleteRequest, EditRequest } from "./dialog-types";
+import type {
+  AnyCreateRequest,
+  AnyEditRequest,
+  CreateRequest,
+  DeleteRequest,
+  EditRequest,
+} from "./dialog-types";
 
 export type {
+  AnyCreateRequest,
+  AnyEditRequest,
   CreateRequest,
   DeletableKind,
   DeleteRequest,
   EditableKind,
   EditRequest,
+  StorageCreateRequest,
+  StorageEditRequest,
 } from "./dialog-types";
 
 interface CatalogDialogsValue {
-  create: (req: CreateRequest) => void;
-  edit: (req: EditRequest) => void;
+  create: (req: AnyCreateRequest) => void;
+  edit: (req: AnyEditRequest) => void;
   remove: (req: DeleteRequest) => void;
 }
 
@@ -36,8 +50,8 @@ const CatalogDialogsContext = createContext<CatalogDialogsValue | undefined>(
 );
 
 export function CatalogDialogsProvider({ children }: { children: ReactNode }) {
-  const [createReq, setCreateReq] = useState<CreateRequest>();
-  const [editReq, setEditReq] = useState<EditRequest>();
+  const [createReq, setCreateReq] = useState<AnyCreateRequest>();
+  const [editReq, setEditReq] = useState<AnyEditRequest>();
   const [deleteReq, setDeleteReq] = useState<DeleteRequest>();
 
   const value = useMemo<CatalogDialogsValue>(
@@ -49,21 +63,47 @@ export function CatalogDialogsProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const closeCreate = () => setCreateReq(undefined);
+  const closeEdit = () => setEditReq(undefined);
+
   return (
     <CatalogDialogsContext.Provider value={value}>
       {children}
-      {createReq && (
-        <CreateEntityDialog
-          request={createReq}
-          onClose={() => setCreateReq(undefined)}
+
+      {createReq?.kind === "credential" && (
+        <CredentialDialog mode="create" onClose={closeCreate} />
+      )}
+      {createReq?.kind === "external_location" && (
+        <ExternalLocationDialog mode="create" onClose={closeCreate} />
+      )}
+      {createReq &&
+        createReq.kind !== "credential" &&
+        createReq.kind !== "external_location" && (
+          <CreateEntityDialog
+            request={createReq as CreateRequest}
+            onClose={closeCreate}
+          />
+        )}
+
+      {editReq?.kind === "credential" && (
+        <CredentialDialog mode="edit" name={editReq.name} onClose={closeEdit} />
+      )}
+      {editReq?.kind === "external_location" && (
+        <ExternalLocationDialog
+          mode="edit"
+          name={editReq.name}
+          onClose={closeEdit}
         />
       )}
-      {editReq && (
-        <EditEntityDialog
-          request={editReq}
-          onClose={() => setEditReq(undefined)}
-        />
-      )}
+      {editReq &&
+        editReq.kind !== "credential" &&
+        editReq.kind !== "external_location" && (
+          <EditEntityDialog
+            request={editReq as EditRequest}
+            onClose={closeEdit}
+          />
+        )}
+
       {deleteReq && (
         <DeleteEntityDialog
           request={deleteReq}

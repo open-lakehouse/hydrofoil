@@ -1,8 +1,12 @@
-import type { VolumeType } from "@open-lakehouse/uc-client";
-import { useState } from "react";
+import type { CreateSchema, VolumeType } from "@open-lakehouse/uc-client";
+import type { RJSFSchema, UiSchema } from "@rjsf/utils";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import type { CreateRequest } from "@/components/catalog/dialog-types";
+import { SchemaForm } from "@/components/forms/SchemaForm";
+import { cloneSchema, formSchemas } from "@/components/forms/schemas";
+import { StorageLocationPicker } from "@/components/storage/StorageLocationPicker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,8 +41,157 @@ export function CreateEntityDialog({
   request: CreateRequest;
   onClose: () => void;
 }) {
+  if (request.kind === "catalog" || request.kind === "schema") {
+    return <NamespaceCreateDialog request={request} onClose={onClose} />;
+  }
+  return <LeafCreateDialog request={request} onClose={onClose} />;
+}
+
+const NAMESPACE_FORM_ID = "namespace-create-form";
+
+type LooseSchema = Record<string, unknown>;
+
+interface NamespaceFormData {
+  name?: string;
+  catalog_name?: string;
+  comment?: string;
+}
+
+/** Reduce a catalog/schema create schema to the name + comment fields. */
+function tailorNamespaceSchema(base: RJSFSchema): RJSFSchema {
+  const schema = cloneSchema(base);
+  const props = (schema.properties ?? {}) as Record<string, LooseSchema>;
+  // The key-value `properties` map is an object field; drop it (not surfaced).
+  delete props.properties;
+  return schema;
+}
+
+// Hidden fields are still part of the schema (so injected values validate) but
+// not rendered; storage is handled by the dedicated picker below the form.
+const NAMESPACE_HIDDEN_UI: UiSchema = {
+  catalog_name: { "ui:widget": "hidden" },
+  storage_root: { "ui:widget": "hidden" },
+  storage_location: { "ui:widget": "hidden" },
+  provider_name: { "ui:widget": "hidden" },
+  share_name: { "ui:widget": "hidden" },
+  comment: { "ui:placeholder": "Description (optional)" },
+  name: { "ui:placeholder": "my_object", "ui:autofocus": true },
+  "ui:order": ["name", "comment", "*"],
+};
+
+function NamespaceCreateDialog({
+  request,
+  onClose,
+}: {
+  request: Extract<CreateRequest, { kind: "catalog" | "schema" }>;
+  onClose: () => void;
+}) {
   const createCatalog = useCreateCatalog();
   const createSchema = useCreateSchema();
+
+  const [formData, setFormData] = useState<NamespaceFormData>(() =>
+    request.kind === "schema" ? { catalog_name: request.catalog } : {},
+  );
+  const [storageRoot, setStorageRoot] = useState<string>();
+
+  const schema = useMemo(
+    () =>
+      tailorNamespaceSchema(
+        request.kind === "catalog"
+          ? formSchemas.createCatalog
+          : formSchemas.createSchema,
+      ),
+    [request.kind],
+  );
+
+  const pending = createCatalog.isPending || createSchema.isPending;
+
+  function submit(data: NamespaceFormData) {
+    const handlers = {
+      onSuccess: () => {
+        toast.success(`Created ${request.kind} "${data.name}"`);
+        onClose();
+      },
+      onError: (error: unknown) => toast.error(parseUcError(error)),
+    };
+
+    if (request.kind === "catalog") {
+      createCatalog.mutate(
+        {
+          body: {
+            name: data.name ?? "",
+            comment: data.comment || undefined,
+            storage_root: storageRoot,
+          },
+        },
+        handlers,
+      );
+      return;
+    }
+
+    // Schemas use `storage_location` (per the protobuf source of truth); the
+    // generated REST client type lags behind, so widen the body locally.
+    const body: CreateSchema & { storage_location?: string } = {
+      name: data.name ?? "",
+      catalog_name: request.catalog,
+      comment: data.comment || undefined,
+      storage_location: storageRoot,
+    };
+    createSchema.mutate({ body }, handlers);
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{TITLES[request.kind]}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3 px-5 py-4">
+          {request.kind === "schema" && (
+            <p className="text-xs text-muted-foreground">
+              In <span className="font-mono">{request.catalog}</span>
+            </p>
+          )}
+
+          <SchemaForm<NamespaceFormData>
+            id={NAMESPACE_FORM_ID}
+            schema={schema}
+            uiSchema={NAMESPACE_HIDDEN_UI}
+            formData={formData}
+            disabled={pending}
+            onChange={setFormData}
+            onSubmit={submit}
+          />
+
+          <StorageLocationPicker onChange={setStorageRoot} />
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form={NAMESPACE_FORM_ID}
+            size="sm"
+            disabled={pending}
+          >
+            {pending ? "Creating…" : "Create"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LeafCreateDialog({
+  request,
+  onClose,
+}: {
+  request: Extract<CreateRequest, { kind: "volume" | "model" }>;
+  onClose: () => void;
+}) {
   const createVolume = useCreateVolume();
   const createModel = useCreateRegisteredModel();
 
@@ -47,11 +200,7 @@ export function CreateEntityDialog({
   const [volumeType, setVolumeType] = useState<VolumeType>("MANAGED");
   const [storageLocation, setStorageLocation] = useState("");
 
-  const pending =
-    createCatalog.isPending ||
-    createSchema.isPending ||
-    createVolume.isPending ||
-    createModel.isPending;
+  const pending = createVolume.isPending || createModel.isPending;
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -65,23 +214,7 @@ export function CreateEntityDialog({
       onError: (error: unknown) => toast.error(parseUcError(error)),
     };
 
-    if (request.kind === "catalog") {
-      createCatalog.mutate(
-        { body: { name, comment: comment || undefined } },
-        handlers,
-      );
-    } else if (request.kind === "schema") {
-      createSchema.mutate(
-        {
-          body: {
-            name,
-            catalog_name: request.catalog,
-            comment: comment || undefined,
-          },
-        },
-        handlers,
-      );
-    } else if (request.kind === "volume") {
+    if (request.kind === "volume") {
       createVolume.mutate(
         {
           body: {
@@ -111,12 +244,7 @@ export function CreateEntityDialog({
     }
   }
 
-  const parent =
-    request.kind === "schema"
-      ? request.catalog
-      : request.kind === "volume" || request.kind === "model"
-        ? `${request.catalog}.${request.schema}`
-        : undefined;
+  const parent = `${request.catalog}.${request.schema}`;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -127,11 +255,9 @@ export function CreateEntityDialog({
           </DialogHeader>
 
           <div className="space-y-3 px-5 py-4">
-            {parent && (
-              <p className="text-xs text-muted-foreground">
-                In <span className="font-mono">{parent}</span>
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground">
+              In <span className="font-mono">{parent}</span>
+            </p>
 
             <div className="space-y-1">
               <Label htmlFor="entity-name">Name</Label>

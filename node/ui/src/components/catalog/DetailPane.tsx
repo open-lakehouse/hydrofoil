@@ -1,26 +1,39 @@
-import { Database, FolderTree, Pencil, Trash2, X } from "lucide-react";
+import {
+  Database,
+  FolderTree,
+  Globe,
+  KeyRound,
+  Pencil,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CatalogDetail } from "./detail/CatalogDetail";
+import { CredentialDetail } from "./detail/CredentialDetail";
+import { ExternalLocationDetail } from "./detail/ExternalLocationDetail";
 import { FunctionDetail } from "./detail/FunctionDetail";
 import { ModelDetail } from "./detail/ModelDetail";
 import { SchemaDetail } from "./detail/SchemaDetail";
 import { TableDetail } from "./detail/TableDetail";
 import { VolumeDetail } from "./detail/VolumeDetail";
-import type { EditableKind } from "./dialog-types";
+import type { AnyEditRequest } from "./dialog-types";
 import { useCatalogDialogs } from "./dialogs";
 import { kindIcon } from "./groups";
 import { useCatalogSelection } from "./selection";
-import { type SelectableKind, splitFullName } from "./types";
+import { isObjectKind, type SelectableKind, splitFullName } from "./types";
 
-// Catalogs / schemas / volumes / models support PATCH; tables / functions don't.
-const EDITABLE: ReadonlySet<SelectableKind> = new Set<EditableKind>([
+// Catalogs / schemas / volumes / models / credentials / external locations
+// support PATCH; tables / functions don't.
+const EDITABLE: ReadonlySet<SelectableKind> = new Set<SelectableKind>([
   "catalog",
   "schema",
   "volume",
   "model",
+  "credential",
+  "external_location",
 ]);
 
 function detailIcon(kind: SelectableKind): ReactNode {
@@ -28,7 +41,13 @@ function detailIcon(kind: SelectableKind): ReactNode {
     return <Database className="h-4 w-4 text-muted-foreground" />;
   if (kind === "schema")
     return <FolderTree className="h-4 w-4 text-muted-foreground" />;
-  return kindIcon(kind, "h-4 w-4 text-muted-foreground");
+  if (kind === "credential")
+    return <KeyRound className="h-4 w-4 text-muted-foreground" />;
+  if (kind === "external_location")
+    return <Globe className="h-4 w-4 text-muted-foreground" />;
+  if (isObjectKind(kind))
+    return kindIcon(kind, "h-4 w-4 text-muted-foreground");
+  return null;
 }
 
 export function DetailPane() {
@@ -64,9 +83,9 @@ export function DetailPane() {
               className="h-7"
               onClick={() =>
                 dialogs.edit({
-                  kind: selection.kind as EditableKind,
+                  kind: selection.kind,
                   name: selection.fullName,
-                })
+                } as AnyEditRequest)
               }
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -113,6 +132,12 @@ export function DetailPane() {
         )}
         {selection.kind === "model" && (
           <ModelDetail fullName={selection.fullName} />
+        )}
+        {selection.kind === "credential" && (
+          <CredentialDetail name={selection.fullName} />
+        )}
+        {selection.kind === "external_location" && (
+          <ExternalLocationDetail name={selection.fullName} />
         )}
       </div>
     </div>

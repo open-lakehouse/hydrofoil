@@ -10,7 +10,8 @@
     }
   },
   "scripts": {
-    "gen:api": "openapi-typescript openapi/unity-catalog.yaml -o src/uc-api.d.ts"
+    "gen:api": "openapi-typescript openapi/unity-catalog.yaml -o src/uc-api.d.ts",
+    "gen:form-schemas": "node scripts/gen-form-schemas.mjs"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",

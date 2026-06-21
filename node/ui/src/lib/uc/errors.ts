@@ -5,8 +5,12 @@
 
 interface UcErrorBody {
   message?: string;
+  // UC servers are inconsistent: the OSS REST server returns camelCase
+  // `errorCode`, while some surfaces use snake_case `error_code`.
   error_code?: string;
+  errorCode?: string;
   detail?: string;
+  details?: string;
 }
 
 export function parseUcError(
@@ -22,11 +26,10 @@ export function parseUcError(
     // openapi-fetch puts the parsed JSON error body under `error` on the result,
     // but our query layer throws that body directly, so check both shapes.
     const candidate = body.error ?? body;
-    const message = candidate.message ?? candidate.detail;
+    const message = candidate.message ?? candidate.detail ?? candidate.details;
+    const code = candidate.error_code ?? candidate.errorCode;
     if (message) {
-      return candidate.error_code
-        ? `${candidate.error_code}: ${message}`
-        : message;
+      return code ? `${code}: ${message}` : message;
     }
     if (error instanceof Error && error.message) return error.message;
   }

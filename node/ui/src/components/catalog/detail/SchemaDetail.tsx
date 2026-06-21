@@ -17,7 +17,9 @@ export function SchemaDetail({ fullName }: { fullName: string }) {
     <MetaGrid>
       <Meta label="Owner" value={schema.owner} />
       <Meta label="Catalog" value={schema.catalog_name} />
-      <Meta label="Comment" value={schema.comment} />
+      <Meta label="Storage root" value={schema.storage_root} wide mono />
+      <Meta label="Storage location" value={schema.storage_location} wide mono />
+      <Meta label="Comment" value={schema.comment} wide />
     </MetaGrid>
   );
 }

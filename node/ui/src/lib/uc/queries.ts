@@ -54,6 +54,14 @@ const catalogsInit = {
   params: { query: { max_results: PAGE_SIZE } },
 } as const;
 
+const credentialsInit = {
+  params: { query: { max_results: PAGE_SIZE } },
+} as const;
+
+const externalLocationsInit = {
+  params: { query: { max_results: PAGE_SIZE } },
+} as const;
+
 function schemasInit(catalogName: string) {
   return {
     params: { query: { catalog_name: catalogName, max_results: PAGE_SIZE } },
@@ -143,6 +151,18 @@ export function functionDetailQuery(fullName: string) {
 export function modelDetailQuery(fullName: string) {
   return $api.queryOptions("get", "/models/{full_name}", {
     params: { path: { full_name: fullName } },
+  });
+}
+
+export function credentialDetailQuery(name: string) {
+  return $api.queryOptions("get", "/credentials/{name}", {
+    params: { path: { name } },
+  });
+}
+
+export function externalLocationDetailQuery(name: string) {
+  return $api.queryOptions("get", "/external-locations/{name}", {
+    params: { path: { name } },
   });
 }
 
@@ -320,6 +340,63 @@ export function useModels(
   return query;
 }
 
+// ── Metastore-level lists (credentials, external locations) ─────────────────
+//
+// Unlike the three-level namespace lists these have no catalog/schema params,
+// but follow the same infinite-query + detail-seeding pattern.
+
+export function useCredentials() {
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery("get", "/credentials", credentialsInit, {
+    pageParamName: "page_token",
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+    select: (data) => data.pages.flatMap((page) => page.credentials ?? []),
+  });
+
+  useEffect(() => {
+    for (const credential of query.data ?? []) {
+      if (credential.name) {
+        queryClient.setQueryData(
+          credentialDetailQuery(credential.name).queryKey,
+          credential,
+        );
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
+}
+
+export function useExternalLocations() {
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery(
+    "get",
+    "/external-locations",
+    externalLocationsInit,
+    {
+      pageParamName: "page_token",
+      initialPageParam: "",
+      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      select: (data) =>
+        data.pages.flatMap((page) => page.external_locations ?? []),
+    },
+  );
+
+  useEffect(() => {
+    for (const location of query.data ?? []) {
+      if (location.name) {
+        queryClient.setQueryData(
+          externalLocationDetailQuery(location.name).queryKey,
+          location,
+        );
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
+}
+
 // ── Prefetch-on-intent helpers ──────────────────────────────────────────────
 //
 // These mirror the hook `init` exactly, so the cache they warm is the SAME
@@ -375,4 +452,7 @@ export const ucListKeys = {
     ["get", "/functions", functionsInit(catalogName, schemaName)] as const,
   models: (catalogName: string, schemaName: string) =>
     ["get", "/models", modelsInit(catalogName, schemaName)] as const,
+  credentials: () => ["get", "/credentials", credentialsInit] as const,
+  externalLocations: () =>
+    ["get", "/external-locations", externalLocationsInit] as const,
 };

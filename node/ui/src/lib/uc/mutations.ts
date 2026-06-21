@@ -15,6 +15,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { $api } from "@/lib/api";
 import {
   catalogDetailQuery,
+  credentialDetailQuery,
+  externalLocationDetailQuery,
   modelDetailQuery,
   tableDetailQuery,
   volumeDetailQuery,
@@ -35,6 +37,20 @@ function listQuery(key: QueryKey, path: string): ListInit | undefined {
 export function invalidateCatalogs(queryClient: QueryClient) {
   return queryClient.invalidateQueries({
     predicate: (q) => !!listQuery(q.queryKey, "/catalogs"),
+  });
+}
+
+/** Invalidate the metastore credential list. */
+export function invalidateCredentials(queryClient: QueryClient) {
+  return queryClient.invalidateQueries({
+    predicate: (q) => !!listQuery(q.queryKey, "/credentials"),
+  });
+}
+
+/** Invalidate the metastore external-location list. */
+export function invalidateExternalLocations(queryClient: QueryClient) {
+  return queryClient.invalidateQueries({
+    predicate: (q) => !!listQuery(q.queryKey, "/external-locations"),
   });
 }
 
@@ -430,5 +446,107 @@ export function useDeleteRegisteredModel() {
     onMutate: ({ params }) => h.onMutate(params.path.full_name),
     onError: (_e, _v, ctx) => h.onError(ctx),
     onSettled: (_d, _e, { params }) => h.onSettled(params.path.full_name),
+  });
+}
+
+// ── Storage credentials & external locations (metastore-level) ───────────────
+
+/** Create a storage credential, then refresh the credential list. */
+export function useCreateCredential() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("post", "/credentials", {
+    onSuccess: () => invalidateCredentials(queryClient),
+  });
+}
+
+/** Update a credential's comment / IAM role / name. */
+export function useUpdateCredential() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/credentials/{name}", {
+    onSuccess: (data) => {
+      if (data?.name) {
+        queryClient.setQueryData(
+          credentialDetailQuery(data.name).queryKey,
+          data,
+        );
+      }
+      invalidateCredentials(queryClient);
+    },
+  });
+}
+
+/** Delete a credential. */
+export function useDeleteCredential() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("delete", "/credentials/{name}", {
+    onMutate: ({ params }) => {
+      const name = params.path.name;
+      const snapshots = optimisticRemove(
+        queryClient,
+        "/credentials",
+        "credentials",
+        (item) => item.name === name,
+      );
+      return { snapshots };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.snapshots) restore(queryClient, context.snapshots);
+    },
+    onSuccess: (_data, { params }) => {
+      queryClient.removeQueries({
+        queryKey: credentialDetailQuery(params.path.name).queryKey,
+      });
+    },
+    onSettled: () => invalidateCredentials(queryClient),
+  });
+}
+
+/** Create an external location, then refresh the external-location list. */
+export function useCreateExternalLocation() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("post", "/external-locations", {
+    onSuccess: () => invalidateExternalLocations(queryClient),
+  });
+}
+
+/** Update an external location's url / credential / comment / name. */
+export function useUpdateExternalLocation() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/external-locations/{name}", {
+    onSuccess: (data) => {
+      if (data?.name) {
+        queryClient.setQueryData(
+          externalLocationDetailQuery(data.name).queryKey,
+          data,
+        );
+      }
+      invalidateExternalLocations(queryClient);
+    },
+  });
+}
+
+/** Delete an external location. */
+export function useDeleteExternalLocation() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("delete", "/external-locations/{name}", {
+    onMutate: ({ params }) => {
+      const name = params.path.name;
+      const snapshots = optimisticRemove(
+        queryClient,
+        "/external-locations",
+        "external_locations",
+        (item) => item.name === name,
+      );
+      return { snapshots };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.snapshots) restore(queryClient, context.snapshots);
+    },
+    onSuccess: (_data, { params }) => {
+      queryClient.removeQueries({
+        queryKey: externalLocationDetailQuery(params.path.name).queryKey,
+      });
+    },
+    onSettled: () => invalidateExternalLocations(queryClient),
   });
 }

@@ -16,8 +16,8 @@ export function ModelDetail({ fullName }: { fullName: string }) {
   return (
     <MetaGrid>
       <Meta label="Owner" value={model.owner} />
-      <Meta label="Storage location" value={model.storage_location} />
-      <Meta label="Comment" value={model.comment} />
+      <Meta label="Storage location" value={model.storage_location} wide mono />
+      <Meta label="Comment" value={model.comment} wide />
     </MetaGrid>
   );
 }
