@@ -17,8 +17,14 @@ export function CatalogDetail({ name }: { name: string }) {
     <MetaGrid>
       <Meta label="Owner" value={catalog.owner} />
       <Meta label="Created by" value={catalog.created_by} />
-      <Meta label="Storage root" value={catalog.storage_root} />
-      <Meta label="Comment" value={catalog.comment} />
+      <Meta label="Storage root" value={catalog.storage_root} wide mono />
+      <Meta
+        label="Storage location"
+        value={catalog.storage_location}
+        wide
+        mono
+      />
+      <Meta label="Comment" value={catalog.comment} wide />
     </MetaGrid>
   );
 }

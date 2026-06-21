@@ -21,3 +21,12 @@ ui-build:
 # Regenerate the Unity Catalog OpenAPI TypeScript client
 gen-api:
     npm run gen:api --prefix uc-client
+
+# Regenerate the JSON Schemas backing the UI's schema-driven forms.
+# Drives the buf protoschema-jsonschema plugin against the unitycatalog-rs protos
+# (pinned to the same git rev as the Cargo deps). Requires `buf` + network.
+gen-forms:
+    npm run gen:form-schemas --prefix uc-client
+
+# Regenerate everything derived from the OpenAPI spec (client + form schemas)
+gen: gen-api gen-forms

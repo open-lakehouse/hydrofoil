@@ -1,6 +1,8 @@
 import { Database } from "lucide-react";
 import { useEffect } from "react";
 
+import { StorageTree } from "@/components/storage/StorageTree";
+
 import { CatalogTree } from "./CatalogTree";
 import { DetailPane } from "./DetailPane";
 import { CatalogDialogsProvider } from "./dialogs";
@@ -34,7 +36,10 @@ function ExplorerLayout() {
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
-        <CatalogTree />
+        <div className="flex min-h-0 flex-col border-r bg-sidebar">
+          <CatalogTree />
+          <StorageTree />
+        </div>
         <DetailPane />
       </div>
     </div>

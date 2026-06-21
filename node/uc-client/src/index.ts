@@ -31,15 +31,27 @@ export type FunctionInfo = Schemas["FunctionInfo"];
 /** A Unity Catalog registered model (schema-level). */
 export type RegisteredModelInfo = Schemas["RegisteredModelInfo"];
 
+/** A storage/service credential (metastore-level). */
+export type CredentialInfo = Schemas["CredentialInfo"];
+
+/** An external location: a storage path + the credential that authorizes it. */
+export type ExternalLocationInfo = Schemas["ExternalLocationInfo"];
+
 export type ListCatalogsResponse = Schemas["ListCatalogsResponse"];
 export type ListSchemasResponse = Schemas["ListSchemasResponse"];
 export type ListTablesResponse = Schemas["ListTablesResponse"];
 export type ListVolumesResponse = Schemas["ListVolumesResponseContent"];
 export type ListFunctionsResponse = Schemas["ListFunctionsResponse"];
-export type ListRegisteredModelsResponse = Schemas["ListRegisteredModelsResponse"];
+export type ListRegisteredModelsResponse =
+  Schemas["ListRegisteredModelsResponse"];
+export type ListCredentialsResponse = Schemas["ListCredentialsResponse"];
+export type ListExternalLocationsResponse =
+  Schemas["ListExternalLocationsResponse"];
 
 /** Request bodies for the create endpoints surfaced in the UI. */
 export type CreateCatalog = Schemas["CreateCatalog"];
 export type CreateSchema = Schemas["CreateSchema"];
 export type CreateVolumeRequestContent = Schemas["CreateVolumeRequestContent"];
 export type CreateRegisteredModel = Schemas["CreateRegisteredModel"];
+export type CreateCredentialRequest = Schemas["CreateCredentialRequest"];
+export type CreateExternalLocation = Schemas["CreateExternalLocation"];

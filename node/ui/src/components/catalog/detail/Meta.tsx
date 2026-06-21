@@ -1,8 +1,28 @@
-export function Meta({ label, value }: { label: string; value?: string }) {
+import { cn } from "@/lib/utils";
+
+export function Meta({
+  label,
+  value,
+  /** Span the full grid width on its own line (for long values). */
+  wide,
+  /** Render the value monospaced and break on any character (paths/URLs/ARNs). */
+  mono,
+}: {
+  label: string;
+  value?: string;
+  wide?: boolean;
+  mono?: boolean;
+}) {
   return (
-    <div className="min-w-0">
+    <div className={cn("min-w-0", wide && "col-span-full")}>
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="truncate" title={value}>
+      <dd
+        className={cn(
+          wide ? "break-words" : "truncate",
+          mono && "break-all font-mono text-xs",
+        )}
+        title={value}
+      >
         {value || "—"}
       </dd>
     </div>

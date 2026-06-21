@@ -20,8 +20,13 @@ export function TableDetail({ fullName }: { fullName: string }) {
         <Meta label="Owner" value={table.owner} />
         <Meta label="Type" value={table.table_type} />
         <Meta label="Format" value={table.data_source_format} />
-        <Meta label="Storage location" value={table.storage_location} />
-        <Meta label="Comment" value={table.comment} />
+        <Meta
+          label="Storage location"
+          value={table.storage_location}
+          wide
+          mono
+        />
+        <Meta label="Comment" value={table.comment} wide />
       </MetaGrid>
 
       <div className="mt-6">

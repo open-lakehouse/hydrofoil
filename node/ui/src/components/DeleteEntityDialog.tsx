@@ -15,6 +15,8 @@ import {
 import { parseUcError } from "@/lib/uc/errors";
 import {
   useDeleteCatalog,
+  useDeleteCredential,
+  useDeleteExternalLocation,
   useDeleteFunction,
   useDeleteRegisteredModel,
   useDeleteSchema,
@@ -43,6 +45,8 @@ export function DeleteEntityDialog({
   const deleteVolume = useDeleteVolume();
   const deleteFunction = useDeleteFunction();
   const deleteModel = useDeleteRegisteredModel();
+  const deleteCredential = useDeleteCredential();
+  const deleteExternalLocation = useDeleteExternalLocation();
 
   const [force, setForce] = useState(false);
 
@@ -52,7 +56,9 @@ export function DeleteEntityDialog({
     deleteTable.isPending ||
     deleteVolume.isPending ||
     deleteFunction.isPending ||
-    deleteModel.isPending;
+    deleteModel.isPending ||
+    deleteCredential.isPending ||
+    deleteExternalLocation.isPending;
 
   function confirm() {
     const handlers = {
@@ -100,6 +106,18 @@ export function DeleteEntityDialog({
       case "model":
         deleteModel.mutate(
           { params: { path: { full_name: request.name }, query: { force } } },
+          handlers,
+        );
+        break;
+      case "credential":
+        deleteCredential.mutate(
+          { params: { path: { name: request.name } } },
+          handlers,
+        );
+        break;
+      case "external_location":
+        deleteExternalLocation.mutate(
+          { params: { path: { name: request.name } } },
           handlers,
         );
         break;

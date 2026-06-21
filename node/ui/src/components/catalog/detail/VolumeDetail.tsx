@@ -17,8 +17,13 @@ export function VolumeDetail({ fullName }: { fullName: string }) {
     <MetaGrid>
       <Meta label="Owner" value={volume.owner} />
       <Meta label="Volume type" value={volume.volume_type} />
-      <Meta label="Storage location" value={volume.storage_location} />
-      <Meta label="Comment" value={volume.comment} />
+      <Meta
+        label="Storage location"
+        value={volume.storage_location}
+        wide
+        mono
+      />
+      <Meta label="Comment" value={volume.comment} wide />
     </MetaGrid>
   );
 }

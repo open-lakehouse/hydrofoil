@@ -46,4 +46,10 @@ dist-ssr
 *.local
 .hydro/
 
+# buf protoschema-jsonschema intermediate output (see node/uc-client/scripts/gen-form-schemas.mjs)
+.gen-jsonschema/
+
+# Local Unity Catalog dev data + rendered config (see scripts/dev-ui.sh)
+.uc-data/
+
 WALKTHROUGH.md

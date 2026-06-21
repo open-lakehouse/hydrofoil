@@ -1,0 +1,39 @@
+# Templated Unity Catalog server config for local development (`just dev-ui`).
+#
+# scripts/dev-ui.sh renders this per run, replacing @@UC_DATA_ROOT@@ with a fresh
+# temp directory, and starts the server with `--config <rendered>`.
+#
+# Why this exists: the dev server runs the in-memory backend, so metadata does
+# not persist across restarts (and there's no table-create surface yet). But by
+# allow-listing a local path here AND setting a metastore-level managed storage
+# root, you can create catalogs / schemas / volumes whose managed storage lives
+# under file://@@UC_DATA_ROOT@@ — including with "Managed (inherit from parent)",
+# which now resolves to the metastore root below.
+#
+# Edit this template (not the rendered copy) and restart `just dev-ui`.
+
+# In-memory backend: fast, zero-setup, non-persistent. (Default, set explicitly
+# for clarity.)
+backend:
+  engine: in-memory
+
+# Dev-only envelope-encryption KEK. When a config file is loaded, `encryption`
+# defaults to none and the server refuses to start without an active KEK, so we
+# pin the well-known dev key (identical to the server's built-in default).
+# NEVER use this key outside local development.
+encryption:
+  active:
+    id: dev
+    key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+
+# Allow file:// storage locations under the per-run data root (deny-by-default
+# otherwise). The path must exist at startup; dev-ui.sh creates it.
+local_storage:
+  allowed-roots:
+    - "@@UC_DATA_ROOT@@"
+
+# Metastore-level default managed storage root. A managed catalog created
+# without an explicit storage_root inherits this, so "Managed (inherit from
+# parent)" works out of the box. Must sit within an allowed local_storage root
+# (above).
+managed_storage_root: "file://@@UC_DATA_ROOT@@"
