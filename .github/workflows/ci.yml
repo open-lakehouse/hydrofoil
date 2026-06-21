@@ -209,13 +209,17 @@ jobs:
           cargo +nightly llvm-cov --no-report --doc --workspace --all-features
           cargo +nightly llvm-cov report --doctests --codecov --output-path codecov.json
 
-      # Tokenless public-repo upload; never fails CI on a flaky upload, and
-      # codecov.yml keeps the status informational so it can't block a PR.
+      # Codecov rejects tokenless uploads for this repo
+      # ("Token required - not valid tokenless upload"), so authenticate with
+      # the repository upload token stored as the CODECOV_TOKEN secret. Never
+      # fails CI on a flaky upload, and codecov.yml keeps the status
+      # informational so it can't block a PR.
       - name: Upload to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: codecov.json
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # The OpenLineage adapter's acceptance test against the Marquez reference
   # backend. Separate job: it needs Docker (testcontainers spins up Marquez +
