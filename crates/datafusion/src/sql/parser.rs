@@ -9,11 +9,12 @@ use sqlparser::parser::ParserError;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Word};
 use url::Url;
 
-use crate::sql::commands::{Mode, VacuumStatement};
-use crate::sql::unity::{
+use datafusion_unitycatalog::sql::{
     CreateCatalogStatement, CreateManagedTableStatement, CreateSchemaStatement,
     DropCatalogStatement, DropSchemaStatement, UnityCatalogStatement,
 };
+
+use crate::sql::commands::{Mode, VacuumStatement};
 
 /// Same as `sqlparser`
 const DEFAULT_RECURSION_LIMIT: usize = 50;

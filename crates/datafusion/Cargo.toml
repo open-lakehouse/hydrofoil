@@ -7,22 +7,21 @@ rust-version.workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = { workspace = true }
 datafusion = { workspace = true }
-futures = { workspace = true }
 ordered-float = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 sqlparser = { workspace = true }
 url = { workspace = true }
 
+# Owns the Unity Catalog DDL statement types + planner; this crate's parser
+# produces those statements and re-exports the types as its SQL facade.
 datafusion-unitycatalog = { workspace = true }
-unitycatalog-client = { workspace = true }
-unitycatalog-common = { workspace = true }
-unitycatalog-object-store = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 deltalake-core = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Used by the live-UC `unity_resolve` integration test (catalog resolution).
+unitycatalog-common = { workspace = true }
+unitycatalog-object-store = { workspace = true }
