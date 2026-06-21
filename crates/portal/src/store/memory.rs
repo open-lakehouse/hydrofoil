@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{StoreError, StoreResult};
 use crate::proto::files::v1::{DirectoryEntry, DirectoryMetadata, FileMetadata};
 use crate::proto::tags::v1::{EntityTagAssignment, TagPolicy};
-use crate::store::{FileStore, Page, TagStore};
+use crate::store::{FileStore, Page, TagStore, paginate};
 
 /// Composite key for an entity tag assignment.
 type AssignmentKey = (String, String, String);
@@ -48,29 +48,6 @@ fn now_millis() -> i64 {
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
-}
-
-/// Apply a simple paging window over an already-collected, sorted vec.
-///
-/// The page token is the index of the first un-returned element, encoded as a
-/// decimal string — adequate for an in-memory store with stable ordering.
-fn paginate<T>(mut items: Vec<T>, page: &Page) -> (Vec<T>, Option<String>) {
-    let start: usize = page
-        .page_token
-        .as_deref()
-        .and_then(|t| t.parse().ok())
-        .unwrap_or(0);
-    if start >= items.len() {
-        return (Vec::new(), None);
-    }
-    let mut rest = items.split_off(start);
-    match page.max_results {
-        Some(limit) if limit < rest.len() => {
-            rest.truncate(limit);
-            (rest, Some((start + limit).to_string()))
-        }
-        _ => (rest, None),
-    }
 }
 
 #[async_trait::async_trait]
@@ -322,6 +299,30 @@ impl FileStore for MemoryStore {
     }
 
     async fn delete_directory(&self, path: &str) -> StoreResult<()> {
+        // Databricks semantics: only an empty directory may be deleted; a
+        // non-empty one is rejected (the caller must delete its contents first).
+        let prefix = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        let has_child_file = self
+            .files
+            .read()
+            .unwrap()
+            .keys()
+            .any(|p| p.starts_with(&prefix));
+        let has_child_dir = self
+            .directories
+            .read()
+            .unwrap()
+            .keys()
+            .any(|p| p.as_str() != path && p.starts_with(&prefix));
+        if has_child_file || has_child_dir {
+            return Err(StoreError::FailedPrecondition(format!(
+                "directory {path:?} is not empty; delete its contents first"
+            )));
+        }
         self.directories
             .write()
             .unwrap()
@@ -560,6 +561,38 @@ mod tests {
         assert!(paths.contains(&"/data/a.txt"));
         assert!(paths.contains(&"/data/sub"));
         assert!(!paths.contains(&"/data/sub/b.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_directory_rejects_non_empty() {
+        let store = MemoryStore::new();
+        store.create_directory("/data").await.unwrap();
+        store
+            .put_file("/data/a.txt", None, b"a".to_vec())
+            .await
+            .unwrap();
+
+        // A directory with a child file cannot be deleted.
+        assert!(matches!(
+            store.delete_directory("/data").await,
+            Err(StoreError::FailedPrecondition(_))
+        ));
+
+        // A directory with a child directory cannot be deleted either.
+        store.create_directory("/empty").await.unwrap();
+        store.create_directory("/empty/child").await.unwrap();
+        assert!(matches!(
+            store.delete_directory("/empty").await,
+            Err(StoreError::FailedPrecondition(_))
+        ));
+
+        // Once emptied, the delete succeeds.
+        store.delete_directory("/empty/child").await.unwrap();
+        store.delete_directory("/empty").await.unwrap();
+        assert!(matches!(
+            store.stat_directory("/empty").await,
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]

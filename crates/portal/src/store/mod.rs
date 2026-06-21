@@ -5,8 +5,10 @@
 //! proto messages are used directly as the stored values.
 
 pub mod memory;
+pub mod unity;
 
 pub use memory::MemoryStore;
+pub use unity::UnityVolumeStore;
 
 use crate::error::StoreResult;
 use crate::proto::files::v1::{DirectoryEntry, DirectoryMetadata, FileMetadata};
@@ -17,6 +19,30 @@ use crate::proto::tags::v1::{EntityTagAssignment, TagPolicy};
 pub struct Page {
     pub max_results: Option<usize>,
     pub page_token: Option<String>,
+}
+
+/// Apply a simple paging window over an already-collected, sorted vec.
+///
+/// The page token is the index of the first un-returned element, encoded as a
+/// decimal string — adequate for stores with stable ordering that materialize
+/// the full listing before paging.
+pub(crate) fn paginate<T>(mut items: Vec<T>, page: &Page) -> (Vec<T>, Option<String>) {
+    let start: usize = page
+        .page_token
+        .as_deref()
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0);
+    if start >= items.len() {
+        return (Vec::new(), None);
+    }
+    let mut rest = items.split_off(start);
+    match page.max_results {
+        Some(limit) if limit < rest.len() => {
+            rest.truncate(limit);
+            (rest, Some((start + limit).to_string()))
+        }
+        _ => (rest, None),
+    }
 }
 
 /// Storage for governed tag definitions and their assignments to entities.

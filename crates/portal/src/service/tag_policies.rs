@@ -8,7 +8,7 @@ use crate::proto::tags::v1::{
 };
 use crate::service::AppState;
 use crate::services::tags::v1::TagPoliciesService;
-use crate::store::{Page, TagStore};
+use crate::store::Page;
 
 impl TagPoliciesService for AppState {
     async fn list_tag_policies(
@@ -20,7 +20,7 @@ impl TagPoliciesService for AppState {
             max_results: request.max_results.map(|n| n.max(0) as usize),
             page_token: request.page_token.map(str::to_owned),
         };
-        let (tag_policies, next_page_token) = self.store.list_policies(page).await?;
+        let (tag_policies, next_page_token) = self.tags.list_policies(page).await?;
         Response::ok(ListTagPoliciesResponse {
             tag_policies,
             next_page_token,
@@ -38,7 +38,7 @@ impl TagPoliciesService for AppState {
             .tag_policy
             .into_option()
             .ok_or_else(|| ConnectError::invalid_argument("tag_policy is required"))?;
-        Response::ok(self.store.create_policy(policy).await?)
+        Response::ok(self.tags.create_policy(policy).await?)
     }
 
     async fn get_tag_policy(
@@ -46,7 +46,7 @@ impl TagPoliciesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, GetTagPolicyRequest>,
     ) -> ServiceResult<TagPolicy> {
-        let policy = self.store.get_policy(request.tag_key).await?;
+        let policy = self.tags.get_policy(request.tag_key).await?;
         Response::ok(policy)
     }
 
@@ -61,10 +61,7 @@ impl TagPoliciesService for AppState {
             .into_option()
             .ok_or_else(|| ConnectError::invalid_argument("tag_policy is required"))?;
         let mask = parse_update_mask(req.update_mask.as_deref());
-        let updated = self
-            .store
-            .update_policy(&req.tag_key, policy, &mask)
-            .await?;
+        let updated = self.tags.update_policy(&req.tag_key, policy, &mask).await?;
         Response::ok(updated)
     }
 
@@ -73,7 +70,7 @@ impl TagPoliciesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, DeleteTagPolicyRequest>,
     ) -> ServiceResult<buffa_types::google::protobuf::Empty> {
-        self.store.delete_policy(request.tag_key).await?;
+        self.tags.delete_policy(request.tag_key).await?;
         Response::ok(buffa_types::google::protobuf::Empty::default())
     }
 }

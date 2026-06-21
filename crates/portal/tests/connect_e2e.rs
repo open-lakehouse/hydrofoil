@@ -14,7 +14,8 @@ use portal::store::MemoryStore;
 
 /// Bind to port 0, spawn the server, and return the base URI it listens on.
 async fn spawn_server() -> String {
-    let state = AppState::new(Arc::new(MemoryStore::new()));
+    let store = Arc::new(MemoryStore::new());
+    let state = AppState::new(Arc::clone(&store) as _, store as _);
     let connect = state.register_all(connectrpc::Router::new());
     let app = axum::Router::new().fallback_service(connect.into_axum_service());
 

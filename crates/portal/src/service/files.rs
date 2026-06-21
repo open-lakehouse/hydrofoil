@@ -14,7 +14,7 @@ use crate::proto::files::v1::{
 };
 use crate::service::AppState;
 use crate::services::files::v1::FilesService;
-use crate::store::{FileStore, Page};
+use crate::store::Page;
 
 /// Size of each chunk streamed back from `DownloadFile`.
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
@@ -41,7 +41,7 @@ impl FilesService for AppState {
 
         let path =
             path.ok_or_else(|| ConnectError::invalid_argument("first message must set `path`"))?;
-        let meta = self.store.put_file(&path, content_type, contents).await?;
+        let meta = self.files.put_file(&path, content_type, contents).await?;
         Response::ok(UploadFileResponse {
             path: meta.path,
             file_size: meta.file_size,
@@ -56,7 +56,7 @@ impl FilesService for AppState {
         request: ServiceRequest<'_, DownloadFileRequest>,
     ) -> ServiceResult<ServiceStream<DownloadFileResponse>> {
         let bytes = self
-            .store
+            .files
             .read_file(request.path, request.offset, request.length)
             .await?;
 
@@ -80,7 +80,7 @@ impl FilesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, DeleteFileRequest>,
     ) -> ServiceResult<buffa_types::google::protobuf::Empty> {
-        self.store.delete_file(request.path).await?;
+        self.files.delete_file(request.path).await?;
         Response::ok(buffa_types::google::protobuf::Empty::default())
     }
 
@@ -89,7 +89,7 @@ impl FilesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, GetFileMetadataRequest>,
     ) -> ServiceResult<FileMetadata> {
-        Response::ok(self.store.stat_file(request.path).await?)
+        Response::ok(self.files.stat_file(request.path).await?)
     }
 
     async fn create_directory(
@@ -97,7 +97,7 @@ impl FilesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, CreateDirectoryRequest>,
     ) -> ServiceResult<DirectoryMetadata> {
-        Response::ok(self.store.create_directory(request.path).await?)
+        Response::ok(self.files.create_directory(request.path).await?)
     }
 
     async fn delete_directory(
@@ -105,7 +105,7 @@ impl FilesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, DeleteDirectoryRequest>,
     ) -> ServiceResult<buffa_types::google::protobuf::Empty> {
-        self.store.delete_directory(request.path).await?;
+        self.files.delete_directory(request.path).await?;
         Response::ok(buffa_types::google::protobuf::Empty::default())
     }
 
@@ -118,7 +118,7 @@ impl FilesService for AppState {
             max_results: request.max_results.map(|n| n.max(0) as usize),
             page_token: request.page_token.map(str::to_owned),
         };
-        let (contents, next_page_token) = self.store.list_directory(request.path, page).await?;
+        let (contents, next_page_token) = self.files.list_directory(request.path, page).await?;
         Response::ok(ListDirectoryContentsResponse {
             contents,
             next_page_token,
@@ -131,6 +131,6 @@ impl FilesService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, GetDirectoryMetadataRequest>,
     ) -> ServiceResult<DirectoryMetadata> {
-        Response::ok(self.store.stat_directory(request.path).await?)
+        Response::ok(self.files.stat_directory(request.path).await?)
     }
 }

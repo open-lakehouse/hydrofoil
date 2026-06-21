@@ -14,18 +14,21 @@ use connectrpc::Router;
 
 use crate::services::files::v1::FilesServiceExt;
 use crate::services::tags::v1::{EntityTagAssignmentsServiceExt, TagPoliciesServiceExt};
-use crate::store::MemoryStore;
+use crate::store::{FileStore, TagStore};
 
-/// Shared, cheaply-cloneable handler state. Holds the backing store; one value
-/// implements all three portal service traits.
+/// Shared, cheaply-cloneable handler state. Holds the backing stores; one value
+/// implements all three portal service traits. Files and tags are backed
+/// independently so the files backend (e.g. Unity Catalog volumes) can be swapped
+/// without affecting tag storage.
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) store: Arc<MemoryStore>,
+    pub(crate) files: Arc<dyn FileStore>,
+    pub(crate) tags: Arc<dyn TagStore>,
 }
 
 impl AppState {
-    pub fn new(store: Arc<MemoryStore>) -> Self {
-        Self { store }
+    pub fn new(files: Arc<dyn FileStore>, tags: Arc<dyn TagStore>) -> Self {
+        Self { files, tags }
     }
 
     /// Register all portal services onto a ConnectRPC router.

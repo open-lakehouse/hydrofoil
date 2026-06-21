@@ -16,6 +16,15 @@ pub enum StoreError {
     /// The request was malformed (missing/invalid fields).
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// The operation is not allowed in the resource's current state (e.g.
+    /// deleting a non-empty directory).
+    #[error("failed precondition: {0}")]
+    FailedPrecondition(String),
+
+    /// An unexpected backend/IO failure (e.g. object-store or credential error).
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl From<StoreError> for ConnectError {
@@ -24,6 +33,8 @@ impl From<StoreError> for ConnectError {
             StoreError::NotFound(msg) => ConnectError::not_found(msg),
             StoreError::AlreadyExists(msg) => ConnectError::already_exists(msg),
             StoreError::InvalidArgument(msg) => ConnectError::invalid_argument(msg),
+            StoreError::FailedPrecondition(msg) => ConnectError::failed_precondition(msg),
+            StoreError::Internal(msg) => ConnectError::internal(msg),
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::proto::tags::v1::{
 };
 use crate::service::AppState;
 use crate::services::tags::v1::EntityTagAssignmentsService;
-use crate::store::{Page, TagStore};
+use crate::store::Page;
 
 impl EntityTagAssignmentsService for AppState {
     async fn list_entity_tag_assignments(
@@ -22,7 +22,7 @@ impl EntityTagAssignmentsService for AppState {
             page_token: request.page_token.map(str::to_owned),
         };
         let (tag_assignments, next_page_token) = self
-            .store
+            .tags
             .list_assignments(request.entity_type, request.entity_name, page)
             .await?;
         Response::ok(ListEntityTagAssignmentsResponse {
@@ -42,7 +42,7 @@ impl EntityTagAssignmentsService for AppState {
             .tag_assignment
             .into_option()
             .ok_or_else(|| ConnectError::invalid_argument("tag_assignment is required"))?;
-        Response::ok(self.store.create_assignment(assignment).await?)
+        Response::ok(self.tags.create_assignment(assignment).await?)
     }
 
     async fn get_entity_tag_assignment(
@@ -51,7 +51,7 @@ impl EntityTagAssignmentsService for AppState {
         request: ServiceRequest<'_, GetEntityTagAssignmentRequest>,
     ) -> ServiceResult<EntityTagAssignment> {
         let assignment = self
-            .store
+            .tags
             .get_assignment(request.entity_type, request.entity_name, request.tag_key)
             .await?;
         Response::ok(assignment)
@@ -68,7 +68,7 @@ impl EntityTagAssignmentsService for AppState {
             .into_option()
             .ok_or_else(|| ConnectError::invalid_argument("tag_assignment is required"))?;
         let updated = self
-            .store
+            .tags
             .update_assignment(&req.entity_type, &req.entity_name, &req.tag_key, assignment)
             .await?;
         Response::ok(updated)
@@ -79,7 +79,7 @@ impl EntityTagAssignmentsService for AppState {
         _ctx: RequestContext,
         request: ServiceRequest<'_, DeleteEntityTagAssignmentRequest>,
     ) -> ServiceResult<buffa_types::google::protobuf::Empty> {
-        self.store
+        self.tags
             .delete_assignment(request.entity_type, request.entity_name, request.tag_key)
             .await?;
         Response::ok(buffa_types::google::protobuf::Empty::default())
