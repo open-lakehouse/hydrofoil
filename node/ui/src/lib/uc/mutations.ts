@@ -13,7 +13,12 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { $api } from "@/lib/api";
-import { catalogDetailQuery, tableDetailQuery } from "./queries";
+import {
+  catalogDetailQuery,
+  modelDetailQuery,
+  tableDetailQuery,
+  volumeDetailQuery,
+} from "./queries";
 
 interface ListInit {
   params?: { query?: { catalog_name?: string; schema_name?: string } };
@@ -188,5 +193,242 @@ export function useCreateRegisteredModel() {
         invalidateModels(queryClient, data.catalog_name, data.schema_name);
       }
     },
+  });
+}
+
+// ── Optimistic list removal (for deletes) ───────────────────────────────────
+//
+// Deletes feel instant: we drop the row from every cached page of the matching
+// list immediately, snapshot what we removed, and restore it verbatim if the
+// request fails. `onSettled` then invalidates to reconcile with the server.
+
+interface InfiniteListSnapshot {
+  key: QueryKey;
+  data: unknown;
+}
+
+function optimisticRemove(
+  queryClient: QueryClient,
+  path: string,
+  listField: string,
+  matches: (item: { name?: string; full_name?: string }) => boolean,
+): InfiniteListSnapshot[] {
+  const entries = queryClient.getQueriesData({
+    predicate: (q) => !!listQuery(q.queryKey, path),
+  });
+  const snapshots: InfiniteListSnapshot[] = [];
+
+  for (const [key, data] of entries) {
+    if (!data) continue;
+    snapshots.push({ key, data });
+    const inf = data as { pages?: Record<string, unknown>[] };
+    if (!inf.pages) continue;
+    queryClient.setQueryData(key, {
+      ...inf,
+      pages: inf.pages.map((page) => ({
+        ...page,
+        [listField]: ((page[listField] as { name?: string }[]) ?? []).filter(
+          (item) => !matches(item),
+        ),
+      })),
+    });
+  }
+
+  return snapshots;
+}
+
+function restore(queryClient: QueryClient, snapshots: InfiniteListSnapshot[]) {
+  for (const { key, data } of snapshots) {
+    queryClient.setQueryData(key, data);
+  }
+}
+
+// ── Update (PATCH) mutations ─────────────────────────────────────────────────
+//
+// On success we write the returned info into its detail cache and invalidate the
+// parent list (a rename changes the row identity, so the list must refetch).
+
+/** Update a catalog's comment / name. */
+export function useUpdateCatalog() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/catalogs/{name}", {
+    onSuccess: (data) => {
+      if (data?.name) {
+        queryClient.setQueryData(catalogDetailQuery(data.name).queryKey, data);
+      }
+      invalidateCatalogs(queryClient);
+    },
+  });
+}
+
+/** Update a schema's comment / name. */
+export function useUpdateSchema() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/schemas/{full_name}", {
+    onSuccess: (data) => {
+      if (data?.catalog_name) invalidateSchemas(queryClient, data.catalog_name);
+    },
+  });
+}
+
+/** Update a volume's comment / name. */
+export function useUpdateVolume() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/volumes/{name}", {
+    onSuccess: (data) => {
+      if (data?.full_name) {
+        queryClient.setQueryData(
+          volumeDetailQuery(data.full_name).queryKey,
+          data,
+        );
+      }
+      if (data?.catalog_name && data?.schema_name) {
+        invalidateVolumes(queryClient, data.catalog_name, data.schema_name);
+      }
+    },
+  });
+}
+
+/** Update a registered model's comment / name. */
+export function useUpdateRegisteredModel() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("patch", "/models/{full_name}", {
+    onSuccess: (data) => {
+      if (data?.full_name) {
+        queryClient.setQueryData(
+          modelDetailQuery(data.full_name).queryKey,
+          data,
+        );
+      }
+      if (data?.catalog_name && data?.schema_name) {
+        invalidateModels(queryClient, data.catalog_name, data.schema_name);
+      }
+    },
+  });
+}
+
+// ── Delete mutations (optimistic) ────────────────────────────────────────────
+
+/** Delete a catalog (and purge its cached descendants). */
+export function useDeleteCatalog() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("delete", "/catalogs/{name}", {
+    onMutate: ({ params }) => {
+      const name = params.path.name;
+      const snapshots = optimisticRemove(
+        queryClient,
+        "/catalogs",
+        "catalogs",
+        (item) => item.name === name,
+      );
+      return { snapshots };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.snapshots) restore(queryClient, context.snapshots);
+    },
+    onSuccess: (_data, { params }) => {
+      removeCatalogDetail(queryClient, params.path.name);
+      removeCatalogDescendants(queryClient, params.path.name);
+    },
+    onSettled: () => invalidateCatalogs(queryClient),
+  });
+}
+
+/** Delete a schema. */
+export function useDeleteSchema() {
+  const queryClient = useQueryClient();
+  return $api.useMutation("delete", "/schemas/{full_name}", {
+    onMutate: ({ params }) => {
+      const fullName = params.path.full_name;
+      const name = fullName.split(".").pop();
+      const snapshots = optimisticRemove(
+        queryClient,
+        "/schemas",
+        "schemas",
+        (item) => item.name === name || item.full_name === fullName,
+      );
+      return { snapshots, catalog: fullName.split(".")[0] };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.snapshots) restore(queryClient, context.snapshots);
+    },
+    onSettled: (_data, _err, { params }) => {
+      invalidateSchemas(queryClient, params.path.full_name.split(".")[0]);
+    },
+  });
+}
+
+// Shared optimistic-delete wiring for a schema-scoped leaf list. The caller
+// supplies the canonical list path + the field that holds the rows, plus the
+// fully-qualified name being deleted.
+function leafDeleteHandlers(
+  queryClient: QueryClient,
+  listPath: string,
+  listField: string,
+) {
+  return {
+    onMutate: (fullName: string) => {
+      const name = fullName.split(".").pop();
+      const snapshots = optimisticRemove(
+        queryClient,
+        listPath,
+        listField,
+        (item) => item.full_name === fullName || item.name === name,
+      );
+      return { snapshots };
+    },
+    onError: (context: { snapshots?: InfiniteListSnapshot[] } | undefined) => {
+      if (context?.snapshots) restore(queryClient, context.snapshots);
+    },
+    onSettled: (fullName: string) => {
+      const [catalog, schema] = fullName.split(".");
+      if (catalog && schema) {
+        invalidateSchemaList(queryClient, listPath, catalog, schema);
+      }
+    },
+  };
+}
+
+/** Delete a table. */
+export function useDeleteTable() {
+  const queryClient = useQueryClient();
+  const h = leafDeleteHandlers(queryClient, "/tables", "tables");
+  return $api.useMutation("delete", "/tables/{full_name}", {
+    onMutate: ({ params }) => h.onMutate(params.path.full_name),
+    onError: (_e, _v, ctx) => h.onError(ctx),
+    onSettled: (_d, _e, { params }) => h.onSettled(params.path.full_name),
+  });
+}
+
+/** Delete a volume. */
+export function useDeleteVolume() {
+  const queryClient = useQueryClient();
+  const h = leafDeleteHandlers(queryClient, "/volumes", "volumes");
+  return $api.useMutation("delete", "/volumes/{name}", {
+    onMutate: ({ params }) => h.onMutate(params.path.name),
+    onError: (_e, _v, ctx) => h.onError(ctx),
+    onSettled: (_d, _e, { params }) => h.onSettled(params.path.name),
+  });
+}
+
+/** Delete a function. */
+export function useDeleteFunction() {
+  const queryClient = useQueryClient();
+  const h = leafDeleteHandlers(queryClient, "/functions", "functions");
+  return $api.useMutation("delete", "/functions/{name}", {
+    onMutate: ({ params }) => h.onMutate(params.path.name),
+    onError: (_e, _v, ctx) => h.onError(ctx),
+    onSettled: (_d, _e, { params }) => h.onSettled(params.path.name),
+  });
+}
+
+/** Delete a registered model. */
+export function useDeleteRegisteredModel() {
+  const queryClient = useQueryClient();
+  const h = leafDeleteHandlers(queryClient, "/models", "registered_models");
+  return $api.useMutation("delete", "/models/{full_name}", {
+    onMutate: ({ params }) => h.onMutate(params.path.full_name),
+    onError: (_e, _v, ctx) => h.onError(ctx),
+    onSettled: (_d, _e, { params }) => h.onSettled(params.path.full_name),
   });
 }

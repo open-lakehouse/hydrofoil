@@ -24,9 +24,18 @@ const serviceRoute = createRoute({
   path: "services/$serviceId",
 }).lazy(() => import("./routes/services.$serviceId.lazy").then((m) => m.Route));
 
+interface CatalogSearch {
+  // Selected object, encoded as `kind:fullName` (see components/catalog/selection.ts).
+  sel?: string;
+}
+
 const catalogRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "catalog",
+  // Selection is URL-addressable so detail views are deep-linkable.
+  validateSearch: (search: Record<string, unknown>): CatalogSearch => ({
+    sel: typeof search.sel === "string" ? search.sel : undefined,
+  }),
   // Warm the catalog list before the route component mounts (prefetch-on-intent
   // pairs with defaultPreload: "intent" in main.tsx).
   loader: ({ context }) => prefetchCatalogs(context.queryClient),

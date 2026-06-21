@@ -1,7 +1,19 @@
 import type { VolumeType } from "@open-lakehouse/uc-client";
-import { X } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
+
+import type { CreateRequest } from "@/components/catalog/dialog-types";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { parseUcError } from "@/lib/uc/errors";
 import {
   useCreateCatalog,
   useCreateRegisteredModel,
@@ -9,12 +21,7 @@ import {
   useCreateVolume,
 } from "@/lib/uc/mutations";
 
-// What the dialog should create, with any parent namespace context prefilled.
-export type CreateRequest =
-  | { kind: "catalog" }
-  | { kind: "schema"; catalog: string }
-  | { kind: "volume"; catalog: string; schema: string }
-  | { kind: "model"; catalog: string; schema: string };
+export type { CreateRequest };
 
 const TITLES: Record<CreateRequest["kind"], string> = {
   catalog: "New catalog",
@@ -46,21 +53,22 @@ export function CreateEntityDialog({
     createVolume.isPending ||
     createModel.isPending;
 
-  const error =
-    createCatalog.error ||
-    createSchema.error ||
-    createVolume.error ||
-    createModel.error;
-
   function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
-    const done = { onSuccess: () => onClose() };
+
+    const handlers = {
+      onSuccess: () => {
+        toast.success(`Created ${request.kind} "${name}"`);
+        onClose();
+      },
+      onError: (error: unknown) => toast.error(parseUcError(error)),
+    };
 
     if (request.kind === "catalog") {
       createCatalog.mutate(
         { body: { name, comment: comment || undefined } },
-        done,
+        handlers,
       );
     } else if (request.kind === "schema") {
       createSchema.mutate(
@@ -71,7 +79,7 @@ export function CreateEntityDialog({
             comment: comment || undefined,
           },
         },
-        done,
+        handlers,
       );
     } else if (request.kind === "volume") {
       createVolume.mutate(
@@ -86,7 +94,7 @@ export function CreateEntityDialog({
               volumeType === "EXTERNAL" ? storageLocation : undefined,
           },
         },
-        done,
+        handlers,
       );
     } else {
       createModel.mutate(
@@ -98,7 +106,7 @@ export function CreateEntityDialog({
             comment: comment || undefined,
           },
         },
-        done,
+        handlers,
       );
     }
   }
@@ -111,103 +119,82 @@ export function CreateEntityDialog({
         : undefined;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      role="dialog"
-      aria-modal="true"
-    >
-      <form
-        onSubmit={submit}
-        className="w-full max-w-md rounded-lg border bg-card shadow-lg"
-      >
-        <div className="flex items-center justify-between border-b px-5 py-3">
-          <h2 className="text-sm font-semibold">{TITLES[request.kind]}</h2>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{TITLES[request.kind]}</DialogTitle>
+          </DialogHeader>
 
-        <div className="space-y-3 px-5 py-4">
-          {parent && (
-            <p className="text-xs text-muted-foreground">
-              In <span className="font-mono">{parent}</span>
-            </p>
-          )}
+          <div className="space-y-3 px-5 py-4">
+            {parent && (
+              <p className="text-xs text-muted-foreground">
+                In <span className="font-mono">{parent}</span>
+              </p>
+            )}
 
-          <Field label="Name">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-              placeholder="my_object"
-            />
-          </Field>
+            <div className="space-y-1">
+              <Label htmlFor="entity-name">Name</Label>
+              <Input
+                id="entity-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="my_object"
+                autoFocus
+              />
+            </div>
 
-          {request.kind === "volume" && (
-            <>
-              <Field label="Volume type">
-                <select
-                  value={volumeType}
-                  onChange={(e) => setVolumeType(e.target.value as VolumeType)}
-                  className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-                >
-                  <option value="MANAGED">MANAGED</option>
-                  <option value="EXTERNAL">EXTERNAL</option>
-                </select>
-              </Field>
-              {volumeType === "EXTERNAL" && (
-                <Field label="Storage location">
-                  <input
-                    value={storageLocation}
-                    onChange={(e) => setStorageLocation(e.target.value)}
-                    className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-                    placeholder="s3://bucket/path"
-                  />
-                </Field>
-              )}
-            </>
-          )}
+            {request.kind === "volume" && (
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="volume-type">Volume type</Label>
+                  <select
+                    id="volume-type"
+                    value={volumeType}
+                    onChange={(e) =>
+                      setVolumeType(e.target.value as VolumeType)
+                    }
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="MANAGED">MANAGED</option>
+                    <option value="EXTERNAL">EXTERNAL</option>
+                  </select>
+                </div>
+                {volumeType === "EXTERNAL" && (
+                  <div className="space-y-1">
+                    <Label htmlFor="storage-location">Storage location</Label>
+                    <Input
+                      id="storage-location"
+                      value={storageLocation}
+                      onChange={(e) => setStorageLocation(e.target.value)}
+                      placeholder="s3://bucket/path"
+                    />
+                  </div>
+                )}
+              </>
+            )}
 
-          <Field label="Comment (optional)">
-            <input
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              className="w-full rounded border bg-background px-2 py-1.5 text-sm"
-              placeholder="Description"
-            />
-          </Field>
+            <div className="space-y-1">
+              <Label htmlFor="entity-comment">Comment (optional)</Label>
+              <Input
+                id="entity-comment"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Description"
+              />
+            </div>
+          </div>
 
-          {error ? (
-            <p className="text-sm text-destructive">
-              {(error as { message?: string })?.message ?? "Request failed."}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t px-5 py-3">
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" size="sm" disabled={pending || !name.trim()}>
-            {pending ? "Creating…" : "Create"}
-          </Button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="block space-y-1">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      {children}
-    </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={pending || !name.trim()}>
+              {pending ? "Creating…" : "Create"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

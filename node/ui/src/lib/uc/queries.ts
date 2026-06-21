@@ -116,6 +116,12 @@ export function catalogDetailQuery(name: string) {
   });
 }
 
+export function schemaDetailQuery(fullName: string) {
+  return $api.queryOptions("get", "/schemas/{full_name}", {
+    params: { path: { full_name: fullName } },
+  });
+}
+
 export function tableDetailQuery(fullName: string) {
   return $api.queryOptions("get", "/tables/{full_name}", {
     params: { path: { full_name: fullName } },
@@ -166,7 +172,8 @@ export function useCatalogs() {
 }
 
 export function useSchemas(catalogName: string | undefined) {
-  return $api.useInfiniteQuery(
+  const queryClient = useQueryClient();
+  const query = $api.useInfiniteQuery(
     "get",
     "/schemas",
     schemasInit(catalogName ?? ""),
@@ -178,6 +185,17 @@ export function useSchemas(catalogName: string | undefined) {
       select: (data) => data.pages.flatMap((page) => page.schemas ?? []),
     },
   );
+
+  useEffect(() => {
+    for (const schema of query.data ?? []) {
+      const fullName = schema.full_name || objectFullName(schema);
+      if (fullName) {
+        queryClient.setQueryData(schemaDetailQuery(fullName).queryKey, schema);
+      }
+    }
+  }, [query.data, queryClient]);
+
+  return query;
 }
 
 export function useTables(
