@@ -1,4 +1,4 @@
-import type { CreateSchema, VolumeType } from "@open-lakehouse/uc-client";
+import type { VolumeType } from "@open-lakehouse/uc-client";
 import type { RJSFSchema, UiSchema } from "@rjsf/utils";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -129,15 +129,17 @@ function NamespaceCreateDialog({
       return;
     }
 
-    // Schemas use `storage_location` (per the protobuf source of truth); the
-    // generated REST client type lags behind, so widen the body locally.
-    const body: CreateSchema & { storage_location?: string } = {
-      name: data.name ?? "",
-      catalog_name: request.catalog,
-      comment: data.comment || undefined,
-      storage_location: storageRoot,
-    };
-    createSchema.mutate({ body }, handlers);
+    createSchema.mutate(
+      {
+        body: {
+          name: data.name ?? "",
+          catalog_name: request.catalog,
+          comment: data.comment || undefined,
+          storage_root: storageRoot,
+        },
+      },
+      handlers,
+    );
   }
 
   return (

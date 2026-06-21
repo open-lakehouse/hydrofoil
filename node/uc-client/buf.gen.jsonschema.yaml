@@ -11,7 +11,7 @@
 version: v2
 inputs:
   - git_repo: https://github.com/unitycatalog-incubator/unitycatalog-rs
-    ref: 85bf1421336a0d6a7a158f93a44b444d3405c9cc
+    ref: 1877baed28954a800b9544b2f43d3341e41aa87b
     types:
       - unitycatalog.catalogs.v1.CreateCatalogRequest
       - unitycatalog.schemas.v1.CreateSchemaRequest

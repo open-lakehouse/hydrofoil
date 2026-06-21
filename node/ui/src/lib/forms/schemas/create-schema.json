@@ -30,8 +30,9 @@
       },
       "type": "object"
     },
-    "storage_location": {
-      "description": "Storage root URL for managed tables within the schema.",
+    "storage_root": {
+      "description": "If not set, managed securables under this schema fall back to the parent\n catalog's storage location. Example: `s3://bucket/ucroot`.",
+      "title": "Storage root URL for managed storage location of the schema.",
       "type": "string"
     }
   },
@@ -70,8 +71,9 @@
           },
           "type": "object"
         },
-        "storage_location": {
-          "description": "Storage root URL for managed tables within the schema.",
+        "storage_root": {
+          "description": "If not set, managed securables under this schema fall back to the parent\n catalog's storage location. Example: `s3://bucket/ucroot`.",
+          "title": "Storage root URL for managed storage location of the schema.",
           "type": "string"
         }
       },
