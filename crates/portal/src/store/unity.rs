@@ -16,7 +16,10 @@
 
 use std::sync::Arc;
 
-use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt, path::Path as StorePath};
+use object_store::{
+    Attribute, Attributes, GetOptions, GetRange, ObjectStore, ObjectStoreExt, PutOptions,
+    path::Path as StorePath,
+};
 use unitycatalog_object_store::{UnityObjectStoreFactory, VolumeOperation};
 
 use crate::error::{StoreError, StoreResult};
@@ -55,18 +58,29 @@ impl FileStore for UnityVolumeStore {
     async fn put_file(
         &self,
         path: &str,
-        _content_type: Option<String>,
+        content_type: Option<String>,
         contents: Vec<u8>,
     ) -> StoreResult<FileMetadata> {
         let (store, parsed) = self.resolve(path, VolumeOperation::ReadWrite).await?;
         let location = parsed.store_path()?;
+
+        // Persist the caller-supplied content type as an object attribute so it
+        // round-trips on `stat_file` / `get_file_metadata`.
+        let mut attributes = Attributes::new();
+        if let Some(ct) = content_type.filter(|c| !c.is_empty()) {
+            attributes.insert(Attribute::ContentType, ct.into());
+        }
+        let opts = PutOptions {
+            attributes,
+            ..Default::default()
+        };
         store
-            .put(&location, contents.into())
+            .put_opts(&location, contents.into(), opts)
             .await
             .map_err(map_store_err)?;
-        // Re-stat for accurate size / mtime / etag from the backend.
-        let meta = store.head(&location).await.map_err(map_store_err)?;
-        Ok(file_metadata(path, &meta))
+
+        // Re-stat for accurate size / mtime / etag / content type from the backend.
+        self.stat_file(path).await
     }
 
     async fn read_file(
@@ -107,8 +121,18 @@ impl FileStore for UnityVolumeStore {
     async fn stat_file(&self, path: &str) -> StoreResult<FileMetadata> {
         let (store, parsed) = self.resolve(path, VolumeOperation::Read).await?;
         let location = parsed.store_path()?;
-        let meta = store.head(&location).await.map_err(map_store_err)?;
-        Ok(file_metadata(path, &meta))
+        // A HEAD-style `get_opts` returns the object metadata *and* its
+        // attributes (content type) without transferring the body — `head`
+        // alone does not carry attributes.
+        let opts = GetOptions {
+            head: true,
+            ..Default::default()
+        };
+        let result = store
+            .get_opts(&location, opts)
+            .await
+            .map_err(map_store_err)?;
+        Ok(file_metadata(path, &result.meta, &result.attributes))
     }
 
     async fn delete_file(&self, path: &str) -> StoreResult<()> {
@@ -311,12 +335,20 @@ fn byte_range(offset: Option<i64>, length: Option<i64>) -> StoreResult<Option<Ge
     }
 }
 
-fn file_metadata(path: &str, meta: &object_store::ObjectMeta) -> FileMetadata {
+fn file_metadata(
+    path: &str,
+    meta: &object_store::ObjectMeta,
+    attributes: &Attributes,
+) -> FileMetadata {
+    let content_type = attributes
+        .get(&Attribute::ContentType)
+        .map(|v| v.as_ref().to_string())
+        .unwrap_or_default();
     FileMetadata {
         path: path.to_string(),
         file_size: meta.size as i64,
         last_modified: meta.last_modified.timestamp_millis(),
-        content_type: String::new(),
+        content_type,
         etag: meta.e_tag.clone().unwrap_or_default(),
         ..Default::default()
     }
