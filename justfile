@@ -29,6 +29,15 @@ lineage-deployed:
 scratch:
     uvx --directory notebooks/ marimo edit --sandbox duckdb_flight.py
 
+# run the node/ UI (Vite, :3002) against a locally-built Unity Catalog server
+# from the sibling unitycatalog-rs checkout. Builds + starts the `uc` server
+# (in-memory, REST on :8080), waits for it, then starts the UI with its `/api`
+# proxy pointed straight at UC (no Envoy gateway). Reuses a UC server already on
+# the port instead of rebinding. Override the checkout/ports with UC_REPO /
+# UC_PORT / UI_PORT. Both servers are torn down on exit.
+dev-ui:
+    ./scripts/dev-ui.sh
+
 # mint per-user UC tokens for the demo notebooks and write notebooks/.env.
 # For each email in UC_DEMO_USERS (default alice@example.com,bob@example.com),
 # calls the sibling unitycatalog-quickstart minter and writes UC_TOKEN_<USER>=…
@@ -68,6 +77,14 @@ env-down env_name="live" *args:
 
 build_policy:
     cd crates/policy && buf generate
+
+# Regenerate the portal crate's buffa message types + connect-rust service stubs.
+# One-time plugin install (local binaries; no remote BSR plugin yet):
+#   cargo install --locked connectrpc-codegen     # protoc-gen-connect-rust
+#   cargo install --locked protoc-gen-buffa protoc-gen-buffa-packaging
+portal-gen:
+    cd crates/portal && buf generate
+    cargo fmt -p portal
 
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \

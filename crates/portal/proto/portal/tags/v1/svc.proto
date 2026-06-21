@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package portal.tags.v1;
+
+import "google/protobuf/empty.proto";
+import "portal/tags/v1/models.proto";
+
+// ---------------------------------------------------------------------------
+// Tag policies
+// ---------------------------------------------------------------------------
+
+message ListTagPoliciesRequest {
+  // The maximum number of results per page that should be returned.
+  optional int32 max_results = 1;
+
+  // Opaque pagination token to go to the next page based on a previous query.
+  optional string page_token = 2;
+}
+
+message ListTagPoliciesResponse {
+  // The tag policies returned.
+  repeated TagPolicy tag_policies = 1;
+
+  // The next_page_token value to include in the next List request.
+  optional string next_page_token = 2;
+}
+
+message CreateTagPolicyRequest {
+  // The tag policy to create.
+  TagPolicy tag_policy = 1;
+}
+
+message GetTagPolicyRequest {
+  // The key of the governed tag.
+  string tag_key = 1;
+}
+
+message UpdateTagPolicyRequest {
+  // The key of the governed tag to update.
+  string tag_key = 1;
+
+  // The tag policy with the updated fields.
+  TagPolicy tag_policy = 2;
+
+  // The list of fields to update, as a comma-separated string.
+  optional string update_mask = 3;
+}
+
+message DeleteTagPolicyRequest {
+  // The key of the governed tag to delete.
+  string tag_key = 1;
+}
+
+// Manage governed tag definitions (tag policies).
+service TagPoliciesService {
+  // List tag policies.
+  rpc ListTagPolicies(ListTagPoliciesRequest) returns (ListTagPoliciesResponse);
+
+  // Create a new governed tag definition.
+  rpc CreateTagPolicy(CreateTagPolicyRequest) returns (TagPolicy);
+
+  // Get the governed tag definition for the specified tag key.
+  rpc GetTagPolicy(GetTagPolicyRequest) returns (TagPolicy);
+
+  // Update the governed tag definition that matches the supplied tag key.
+  rpc UpdateTagPolicy(UpdateTagPolicyRequest) returns (TagPolicy);
+
+  // Delete the governed tag definition that matches the supplied tag key.
+  rpc DeleteTagPolicy(DeleteTagPolicyRequest) returns (google.protobuf.Empty);
+}
+
+// ---------------------------------------------------------------------------
+// Entity tag assignments
+// ---------------------------------------------------------------------------
+
+message ListEntityTagAssignmentsRequest {
+  // The type of the entity whose tag assignments to list.
+  string entity_type = 1;
+
+  // The fully qualified name of the entity whose tag assignments to list.
+  string entity_name = 2;
+
+  // The maximum number of results per page that should be returned.
+  optional int32 max_results = 3;
+
+  // Opaque pagination token to go to the next page based on a previous query.
+  optional string page_token = 4;
+}
+
+message ListEntityTagAssignmentsResponse {
+  // The tag assignments returned.
+  repeated EntityTagAssignment tag_assignments = 1;
+
+  // The next_page_token value to include in the next List request.
+  optional string next_page_token = 2;
+}
+
+message CreateEntityTagAssignmentRequest {
+  // The tag assignment to create.
+  EntityTagAssignment tag_assignment = 1;
+}
+
+message GetEntityTagAssignmentRequest {
+  // The type of the entity to which the tag is assigned.
+  string entity_type = 1;
+
+  // The fully qualified name of the entity to which the tag is assigned.
+  string entity_name = 2;
+
+  // The key of the tag.
+  string tag_key = 3;
+}
+
+message UpdateEntityTagAssignmentRequest {
+  // The type of the entity to which the tag is assigned.
+  string entity_type = 1;
+
+  // The fully qualified name of the entity to which the tag is assigned.
+  string entity_name = 2;
+
+  // The key of the tag to update.
+  string tag_key = 3;
+
+  // The tag assignment with the updated fields.
+  EntityTagAssignment tag_assignment = 4;
+
+  // The list of fields to update, as a comma-separated string.
+  optional string update_mask = 5;
+}
+
+message DeleteEntityTagAssignmentRequest {
+  // The type of the entity to which the tag is assigned.
+  string entity_type = 1;
+
+  // The fully qualified name of the entity to which the tag is assigned.
+  string entity_name = 2;
+
+  // The key of the tag to delete.
+  string tag_key = 3;
+}
+
+// Manage assignments of tags to lakehouse entities.
+service EntityTagAssignmentsService {
+  // List the tag assignments for the specified entity.
+  rpc ListEntityTagAssignments(ListEntityTagAssignmentsRequest) returns (ListEntityTagAssignmentsResponse);
+
+  // Assign a tag to a lakehouse entity.
+  rpc CreateEntityTagAssignment(CreateEntityTagAssignmentRequest) returns (EntityTagAssignment);
+
+  // Get the tag assignment for the specified entity and tag key.
+  rpc GetEntityTagAssignment(GetEntityTagAssignmentRequest) returns (EntityTagAssignment);
+
+  // Update the tag assignment for the specified entity and tag key.
+  rpc UpdateEntityTagAssignment(UpdateEntityTagAssignmentRequest) returns (EntityTagAssignment);
+
+  // Delete the tag assignment for the specified entity and tag key.
+  rpc DeleteEntityTagAssignment(DeleteEntityTagAssignmentRequest) returns (google.protobuf.Empty);
+}

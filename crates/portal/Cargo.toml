@@ -1,0 +1,27 @@
+[package]
+name = "portal"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+connectrpc = { version = "0.7", features = ["server", "axum", "client"] }
+buffa = { version = "0.7", features = ["json"] }
+buffa-types = { version = "0.7", features = ["json"] }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.8"
+futures = { workspace = true }
+http-body = "1"
+object_store = { workspace = true }
+unitycatalog-object-store = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
