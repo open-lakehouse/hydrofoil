@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "ui",
-    "uc-client"
+    "uc-client",
+    "desktop"
   ],
   "scripts": {
     "lint": "biome check .",
