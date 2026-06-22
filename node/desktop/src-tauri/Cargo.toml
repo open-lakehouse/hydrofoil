@@ -38,4 +38,4 @@ http = "1"
 futures = "0.3"
 # HTTP client for the Unity Catalog REST proxy (forwards the UI's /api calls to
 # the spawned uc server on its dynamic port). rustls to avoid a system TLS dep.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

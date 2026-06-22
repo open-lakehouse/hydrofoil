@@ -357,20 +357,25 @@ fn uc_data_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.uc-data")
 }
 
-/// Write the UC server config (SQLite, persisted in `.uc-data/`) and return its
-/// path. We supply the config explicitly because a provided config file with no
-/// `encryption` block deserializes to `None` (the dev-KEK default only applies to
-/// a config-LESS launch), which the server rejects — so we include the dev KEK.
+/// Write the UC server config (SQLite + local `file://` managed storage, all
+/// under `.uc-data/`) and return its path. We supply the config explicitly
+/// because a provided config file with no `encryption` block deserializes to
+/// `None` (the dev-KEK default only applies to a config-LESS launch), which the
+/// server rejects — so we include the dev KEK.
 ///
-/// Deliberately minimal: no `managed_storage_root` / `local-storage` yet. The
-/// server rejects a `file:///abs/path` managed root (it builds an object-store
-/// URL from an empty authority → "Invalid argument"); local managed storage
-/// needs a different form we'll sort out when we seed a managed catalog. The
-/// catalog REST surface this round needs doesn't require it.
+/// `managed_storage_root` is `file://<.uc-data/storage>` so catalog data persists
+/// on disk (inspectable). A managed catalog requires a resolvable storage root,
+/// and the local `file://` root must be covered by `local_storage.allowed-roots`
+/// (deny-by-default governance). NOTE the key casing — this is the easy trap:
+/// `Config` fields are snake_case (`local_storage`, `managed_storage_root`) but
+/// the nested `LocalStorageConfig` is kebab-case (`allowed-roots`). Using the
+/// wrong case silently drops the allow-root → "local storage is not enabled".
 fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
     std::fs::create_dir_all(data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
     let canonical = std::fs::canonicalize(data_dir).map_err(|e| e.to_string())?;
     let db_path = canonical.join("catalog.db");
+    let storage_root = canonical.join("storage");
+    std::fs::create_dir_all(&storage_root).map_err(|e| e.to_string())?;
 
     let config = format!(
         "host: 127.0.0.1\n\
@@ -381,8 +386,13 @@ fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, Str
          encryption:\n\
          \x20\x20active:\n\
          \x20\x20\x20\x20id: dev\n\
-         \x20\x20\x20\x20key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n",
+         \x20\x20\x20\x20key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n\
+         local_storage:\n\
+         \x20\x20allowed-roots:\n\
+         \x20\x20\x20\x20- {root}\n\
+         managed_storage_root: \"file://{root}\"\n",
         db = db_path.display(),
+        root = storage_root.display(),
     );
     let config_path = canonical.join("config.yaml");
     std::fs::write(&config_path, config).map_err(|e| format!("writing config: {e}"))?;
@@ -437,10 +447,59 @@ async fn spawn_uc_sidecar(app: &tauri::AppHandle) -> Result<String, String> {
             _ => continue,
         };
         if let Some(addr) = parse_uc_addr(&line) {
-            return Ok(format!("http://{addr}/api/2.1/unity-catalog/"));
+            let endpoint = format!("http://{addr}/api/2.1/unity-catalog/");
+            // First-run seed so the catalog browser + IntelliSense have data.
+            if let Err(e) = seed_uc(&endpoint).await {
+                eprintln!("[uc] seed skipped: {e}");
+            }
+            return Ok(endpoint);
         }
     }
     Err("uc server stream ended before announcing its address".into())
+}
+
+/// First-run seed: if the catalog is empty, create a default `main.default` so
+/// the catalog browser and SQL IntelliSense have something to show. Idempotent —
+/// skips if any catalog already exists (so it doesn't clobber user-created data
+/// across restarts). `endpoint` ends with `/api/2.1/unity-catalog/`.
+async fn seed_uc(endpoint: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let base = endpoint.trim_end_matches('/');
+
+    let existing: serde_json::Value = client
+        .get(format!("{base}/catalogs"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let has_catalogs = existing
+        .get("catalogs")
+        .and_then(|c| c.as_array())
+        .is_some_and(|a| !a.is_empty());
+    if has_catalogs {
+        return Ok(());
+    }
+
+    client
+        .post(format!("{base}/catalogs"))
+        .json(&serde_json::json!({ "name": "main", "comment": "Default catalog" }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| format!("create catalog: {e}"))?;
+    client
+        .post(format!("{base}/schemas"))
+        .json(&serde_json::json!({ "name": "default", "catalog_name": "main" }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| format!("create schema: {e}"))?;
+    eprintln!("[uc] seeded catalog main.default");
+    Ok(())
 }
 
 /// Extract `host:port` from a `listening on http://host:port` startup line.
