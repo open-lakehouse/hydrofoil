@@ -23,7 +23,7 @@ ui-build:
 # gateway). For a no-gateway, UC-only setup use `just dev-desktop` from the repo
 # root, which starts a local UC server and points the proxy at it.
 desktop-dev:
-    npm run tauri:dev --prefix desktop
+    OPEN_LAKEHOUSE_UC_URL= npm run tauri:dev --prefix desktop
 
 # Build the Tauri desktop app bundle
 desktop-build:

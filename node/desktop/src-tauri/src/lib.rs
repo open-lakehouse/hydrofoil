@@ -223,13 +223,27 @@ async fn files_download(
 /// streaming put — the bytes are handed to `put_file_stream` as one chunk, so the
 /// store still does a (multipart) streaming upload without the desktop path ever
 /// reconstructing Connect `StreamMessage` framing.
+///
+/// The destination `path` and optional `content_type` ride as request *headers*,
+/// not as command-signature args: Tauri resolves signature args from the IPC
+/// payload, which here is the raw bytes, so a `path: String` param would fail with
+/// "expected a value for key path but the IPC call used a bytes payload". Reading
+/// them off `request.headers()` keeps the zero-copy raw body.
 #[tauri::command]
 async fn files_upload(
     state: State<'_, AppState>,
-    path: String,
-    content_type: Option<String>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<serde_json::Value, String> {
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let path = header("path").ok_or_else(|| "missing `path` header".to_string())?;
+    let content_type = header("content_type");
+
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
         return Err("upload body must be raw bytes".into());
     };
@@ -245,12 +259,16 @@ async fn files_upload(
 }
 
 /// Resolve the Unity Catalog endpoint: `OPEN_LAKEHOUSE_UC_URL` if set, else the
-/// dev default. (When a UC sidecar binary is bundled, the spawn path overrides
-/// this with the sidecar's chosen port — see [`spawn_uc_sidecar`].)
+/// dev default. Setting it to the empty string explicitly disables UC, which
+/// makes the file store fall back to the in-memory backend (no UC, no cloud
+/// creds) — handy for local smoke tests. (When a UC sidecar binary is bundled,
+/// the spawn path overrides this with the sidecar's chosen port — see
+/// [`spawn_uc_sidecar`].)
 fn resolve_uc_endpoint() -> Option<String> {
     match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
-        Ok(url) if !url.is_empty() => Some(url),
-        _ => Some(DEFAULT_UC_URL.to_string()),
+        Ok(url) if url.is_empty() => None,
+        Ok(url) => Some(url),
+        Err(_) => Some(DEFAULT_UC_URL.to_string()),
     }
 }
 

@@ -30,7 +30,7 @@ import {
 } from "@bufbuild/protobuf";
 import type { Transport } from "@connectrpc/connect";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { filesUnary } from "./tauri-files";
+import { filesStream, filesUnary } from "./tauri-files";
 
 const TAGS_PREFIX = "portal.tags.v1.";
 const QUERY_PREFIX = "hydrofoil.query.v1.";
@@ -56,6 +56,14 @@ function methodPath(method: {
 function headerPairs(header: HeadersInit | undefined): [string, string][] {
   if (!header) return [];
   return [...new Headers(header).entries()];
+}
+
+/** Turn a stream of init-shapes into a stream of full messages. */
+async function* materialize<I extends DescMessage>(
+  schema: I,
+  input: AsyncIterable<MessageInitShape<I>>,
+): AsyncIterable<MessageShape<I>> {
+  for await (const msg of input) yield create(schema, msg);
 }
 
 export const tauriTransport: Transport = {
@@ -105,12 +113,19 @@ export const tauriTransport: Transport = {
   ) {
     const group = serviceGroup(method.parent.typeName);
     if (group === "files") {
-      // The only Files streaming RPCs (UploadFile / DownloadFile / ListDirectory
-      // Stream) are served via dedicated files_* commands, not the generic
-      // streaming transport. Wire them in ./tauri-files if/when the UI needs them.
-      throw new Error(
-        `tauri-transport: streaming Files RPC ${method.name} not routed; use the files_* command path`,
-      );
+      // Files streaming RPCs (DownloadFile / UploadFile) are served off the
+      // FileStore via the native files_download / files_upload commands. The
+      // bridge in ./tauri-files materializes the request frames and adapts the
+      // native command to the connect output-message stream.
+      const messages = filesStream(method, materialize(method.input, input));
+      return {
+        stream: true as const,
+        service: method.parent,
+        method,
+        header: new Headers(),
+        message: messages,
+        trailer: new Headers(),
+      };
     }
 
     // Server-streaming only (QueryService.RunQuery): take the single request

@@ -173,7 +173,7 @@ export function useCatalogs() {
   const query = $api.useInfiniteQuery("get", "/catalogs", catalogsInit, {
     pageParamName: "page_token",
     initialPageParam: "",
-    getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+    getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
     select: (data) => data.pages.flatMap((page) => page.catalogs ?? []),
   });
 
@@ -201,7 +201,7 @@ export function useSchemas(catalogName: string | undefined) {
       enabled: !!catalogName,
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) => data.pages.flatMap((page) => page.schemas ?? []),
     },
   );
@@ -231,7 +231,7 @@ export function useTables(
       enabled: !!catalogName && !!schemaName,
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) => data.pages.flatMap((page) => page.tables ?? []),
     },
   );
@@ -261,7 +261,7 @@ export function useVolumes(
       enabled: !!catalogName && !!schemaName,
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) => data.pages.flatMap((page) => page.volumes ?? []),
     },
   );
@@ -291,7 +291,7 @@ export function useFunctions(
       enabled: !!catalogName && !!schemaName,
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) => data.pages.flatMap((page) => page.functions ?? []),
     },
   );
@@ -321,7 +321,7 @@ export function useModels(
       enabled: !!catalogName && !!schemaName,
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) =>
         data.pages.flatMap((page) => page.registered_models ?? []),
     },
@@ -350,7 +350,7 @@ export function useCredentials() {
   const query = $api.useInfiniteQuery("get", "/credentials", credentialsInit, {
     pageParamName: "page_token",
     initialPageParam: "",
-    getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+    getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
     select: (data) => data.pages.flatMap((page) => page.credentials ?? []),
   });
 
@@ -377,7 +377,7 @@ export function useExternalLocations() {
     {
       pageParamName: "page_token",
       initialPageParam: "",
-      getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
+      getNextPageParam: (lastPage) => lastPage?.next_page_token || undefined,
       select: (data) =>
         data.pages.flatMap((page) => page.external_locations ?? []),
     },
@@ -413,8 +413,8 @@ export function prefetchCatalogs(queryClient: QueryClient) {
       return data;
     },
     initialPageParam: "",
-    getNextPageParam: (lastPage: { next_page_token?: string }) =>
-      lastPage.next_page_token || undefined,
+    getNextPageParam: (lastPage: { next_page_token?: string } | undefined) =>
+      lastPage?.next_page_token || undefined,
   });
 }
 
@@ -435,8 +435,8 @@ export function prefetchSchemas(queryClient: QueryClient, catalogName: string) {
       return data;
     },
     initialPageParam: "",
-    getNextPageParam: (lastPage: { next_page_token?: string }) =>
-      lastPage.next_page_token || undefined,
+    getNextPageParam: (lastPage: { next_page_token?: string } | undefined) =>
+      lastPage?.next_page_token || undefined,
   });
 }
 
