@@ -9,11 +9,19 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "binaries/uc-server",
+          "name": "uc-server",
           "sidecar": true,
-          "args": ["--port", { "validator": "\\d+" }]
+          "args": [
+            "server",
+            "--config",
+            { "validator": ".+" },
+            "--port",
+            { "validator": "\\d+" },
+            "--quiet"
+          ]
         }
       ]
-    }
+    },
+    "shell:allow-kill"
   ]
 }

@@ -25,14 +25,12 @@ use http::HeaderMap;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
-/// Default Unity Catalog REST endpoint for local dev (the `scripts/dev-desktop.sh`
-/// UC server). Overridable with `OPEN_LAKEHOUSE_UC_URL`.
-const DEFAULT_UC_URL: &str = "http://localhost:8080/api/2.1/unity-catalog/";
-
 /// Managed state: the in-process executors plus the resolved UC endpoint.
 struct AppState {
     hosted: Arc<Hosted>,
-    #[allow(dead_code)] // surfaced to commands/diagnostics; not yet read directly
+    /// Resolved Unity Catalog REST base (the spawned sidecar's dynamic endpoint),
+    /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
+    /// disabled (files run in-memory); the proxy then errors.
     unity_endpoint: Option<String>,
 }
 
@@ -265,77 +263,236 @@ async fn files_upload(
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
 
-/// Resolve the Unity Catalog endpoint: `OPEN_LAKEHOUSE_UC_URL` if set, else the
-/// dev default. Setting it to the empty string explicitly disables UC, which
-/// makes the file store fall back to the in-memory backend (no UC, no cloud
-/// creds) — handy for local smoke tests. (When a UC sidecar binary is bundled,
-/// the spawn path overrides this with the sidecar's chosen port — see
-/// [`spawn_uc_sidecar`].)
-fn resolve_uc_endpoint() -> Option<String> {
-    match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
-        Ok(url) if url.is_empty() => None,
-        Ok(url) => Some(url),
-        Err(_) => Some(DEFAULT_UC_URL.to_string()),
-    }
+/// JSON response shape for `proxy_request` (matches `ProxyResponse` in
+/// tauri-fetch.ts).
+#[derive(serde::Serialize)]
+struct ProxyResponse {
+    status: u16,
+    body: String,
+    headers: Vec<(String, String)>,
 }
 
-/// Spawn a bundled Unity Catalog sidecar (`binaries/uc-server`), scrape the port
-/// it binds from its stdout, and return the resolved REST endpoint. The child
-/// handle is stored in managed state so [`run`]'s exit hook can kill it.
+/// The UI's UC REST base, as the OpenAPI client addresses it. The webview sends
+/// requests under this prefix (relative URLs resolve against the app origin); we
+/// strip it and re-root the remainder at the spawned sidecar's endpoint.
+const UI_UC_PREFIX: &str = "/api/2.1/unity-catalog";
+
+/// Forward a Unity Catalog REST request from the UI to the spawned `uc` sidecar
+/// on its dynamic port. A transparent byte proxy: the UI's OpenAPI client is the
+/// typed layer, so this hop only needs to re-root the URL and pass method /
+/// headers / body / status through. Non-UC URLs are rejected (the JS side only
+/// routes UC paths here).
+#[tauri::command]
+async fn proxy_request(
+    state: State<'_, AppState>,
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: String,
+) -> Result<ProxyResponse, String> {
+    let endpoint = state
+        .unity_endpoint
+        .as_deref()
+        .ok_or("Unity Catalog is not running")?;
+
+    // The incoming URL may be absolute (webview origin) or relative
+    // (`/api/2.1/unity-catalog/...`, the UI's relative baseUrl). Parse against a
+    // dummy base so both forms work, then extract the path + query and re-root
+    // under the sidecar endpoint.
+    let base = reqwest::Url::parse("http://localhost").unwrap();
+    let parsed = base
+        .join(&url)
+        .map_err(|e| format!("bad proxy url {url}: {e}"))?;
+    let path = parsed.path();
+    let rel = path
+        .strip_prefix(UI_UC_PREFIX)
+        .ok_or_else(|| format!("not a Unity Catalog path: {path}"))?
+        .trim_start_matches('/');
+    // `endpoint` ends with `/api/2.1/unity-catalog/`; append the relative path + query.
+    let mut target = format!("{}{rel}", endpoint.trim_end_matches('/').to_string() + "/");
+    if let Some(q) = parsed.query() {
+        target.push('?');
+        target.push_str(q);
+    }
+
+    let client = reqwest::Client::new();
+    let verb = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("bad method {method}: {e}"))?;
+    let mut req = client.request(verb, &target);
+    for (k, v) in headers {
+        // Skip hop-by-hop / origin headers that don't apply to the re-rooted call.
+        let lk = k.to_ascii_lowercase();
+        if lk == "host" || lk == "origin" || lk == "content-length" {
+            continue;
+        }
+        req = req.header(k, v);
+    }
+    if !body.is_empty() {
+        req = req.body(body);
+    }
+
+    let resp = req.send().await.map_err(|e| format!("uc proxy: {e}"))?;
+    let status = resp.status().as_u16();
+    let resp_headers = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let resp_body = resp.text().await.map_err(|e| format!("uc proxy body: {e}"))?;
+    Ok(ProxyResponse {
+        status,
+        body: resp_body,
+        headers: resp_headers,
+    })
+}
+
+/// The managed child handle for the spawned UC server, so the exit hook can kill
+/// it. `None` once taken/killed.
+struct UcSidecar(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+/// The in-repo data directory for the UC server (gitignored): SQLite DB + config
+/// live here so they survive restarts and are inspectable in the working tree.
+fn uc_data_dir() -> std::path::PathBuf {
+    // .../node/desktop/src-tauri/../.uc-data → node/desktop/.uc-data
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.uc-data")
+}
+
+/// Write the UC server config (SQLite, persisted in `.uc-data/`) and return its
+/// path. We supply the config explicitly because a provided config file with no
+/// `encryption` block deserializes to `None` (the dev-KEK default only applies to
+/// a config-LESS launch), which the server rejects — so we include the dev KEK.
 ///
-/// SCAFFOLD: not yet invoked — no UC binary is bundled. To enable, add
-/// `bundle.externalBin: ["binaries/uc-server"]` to `tauri.conf.json`, drop the
-/// target-triple-suffixed binary under `src-tauri/binaries/`, and call this from
-/// `setup()` instead of [`resolve_uc_endpoint`]. The capability already allows
-/// the spawn (`shell:allow-spawn` for `binaries/uc-server`).
-#[allow(dead_code)]
+/// Deliberately minimal: no `managed_storage_root` / `local-storage` yet. The
+/// server rejects a `file:///abs/path` managed root (it builds an object-store
+/// URL from an empty authority → "Invalid argument"); local managed storage
+/// needs a different form we'll sort out when we seed a managed catalog. The
+/// catalog REST surface this round needs doesn't require it.
+fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
+    let canonical = std::fs::canonicalize(data_dir).map_err(|e| e.to_string())?;
+    let db_path = canonical.join("catalog.db");
+
+    let config = format!(
+        "host: 127.0.0.1\n\
+         port: 0\n\
+         backend:\n\
+         \x20\x20engine: sqlite\n\
+         \x20\x20path: {db}\n\
+         encryption:\n\
+         \x20\x20active:\n\
+         \x20\x20\x20\x20id: dev\n\
+         \x20\x20\x20\x20key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n",
+        db = db_path.display(),
+    );
+    let config_path = canonical.join("config.yaml");
+    std::fs::write(&config_path, config).map_err(|e| format!("writing config: {e}"))?;
+    Ok(config_path)
+}
+
+/// Spawn the local `uc` server (SQLite, port 0), scrape the bound port from its
+/// startup line, and return the REST endpoint. Stores the child in managed state
+/// so the exit hook can kill it.
 async fn spawn_uc_sidecar(app: &tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
 
+    let config_path = write_uc_config(&uc_data_dir())?;
+
+    // Spawn as a Tauri sidecar: the binary lives at
+    // `src-tauri/binaries/uc-server-<target-triple>` (declared in tauri.conf.json
+    // `externalBin`; `just uc-setup` symlinks the sibling build there). Tauri
+    // resolves the triple-suffixed path itself, so we avoid the shell scope's
+    // `cmd`-string path resolution entirely.
     let (mut rx, child) = app
         .shell()
         .sidecar("uc-server")
-        .map_err(|e| e.to_string())?
-        .args(["--port", "0"])
+        .map_err(|e| format!("uc-server sidecar not found (run `just uc-setup`?): {e}"))?
+        .args([
+            "server",
+            "--config",
+            &config_path.to_string_lossy(),
+            "--port",
+            "0",
+            "--quiet",
+        ])
         .spawn()
-        .map_err(|e| format!("failed to spawn uc-server sidecar: {e}"))?;
+        .map_err(|e| format!("failed to spawn uc server: {e}"))?;
 
-    // Hold the child so the exit hook can kill it.
-    app.manage(std::sync::Mutex::new(Some(child)));
+    app.manage(UcSidecar(std::sync::Mutex::new(Some(child))));
 
-    // Wait for the sidecar to announce its port on stdout (expects a line like
-    // `listening on http://127.0.0.1:<port>` — adjust to the real UC output).
+    // The server prints `✅listening on http://<host>:<port>` (status::success);
+    // colors are auto-disabled when piped. Scrape the address from that line,
+    // tolerating an emoji/ANSI prefix.
     while let Some(event) = rx.recv().await {
-        if let CommandEvent::Stdout(bytes) = event {
-            let line = String::from_utf8_lossy(&bytes);
-            if let Some(port) = parse_uc_port(&line) {
-                return Ok(format!("http://127.0.0.1:{port}/api/2.1/unity-catalog/"));
+        let line = match event {
+            CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
+                String::from_utf8_lossy(&bytes).into_owned()
             }
+            CommandEvent::Terminated(payload) => {
+                return Err(format!(
+                    "uc server exited before announcing its address (code {:?})",
+                    payload.code
+                ));
+            }
+            _ => continue,
+        };
+        if let Some(addr) = parse_uc_addr(&line) {
+            return Ok(format!("http://{addr}/api/2.1/unity-catalog/"));
         }
     }
-    Err("uc-server exited before announcing a port".into())
+    Err("uc server stream ended before announcing its address".into())
 }
 
-/// Parse the port from a UC sidecar stdout line. SCAFFOLD: match the real output.
-#[allow(dead_code)]
-fn parse_uc_port(line: &str) -> Option<u16> {
-    line.rsplit(':')
-        .next()
-        .and_then(|tail| tail.trim().split('/').next())
-        .and_then(|s| s.trim().parse().ok())
+/// Extract `host:port` from a `listening on http://host:port` startup line.
+fn parse_uc_addr(line: &str) -> Option<String> {
+    let idx = line.find("http://")?;
+    let rest = &line[idx + "http://".len()..];
+    // Cut at the first char that can't be part of `host:port` (whitespace, slash,
+    // or a trailing ANSI escape).
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '/' || c == '\u{1b}')
+        .unwrap_or(rest.len());
+    let addr = rest[..end].trim();
+    if addr.contains(':') {
+        Some(addr.to_string())
+    } else {
+        None
+    }
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // TODO(uc-sidecar): when a `binaries/uc-server` sidecar is bundled,
-            // spawn it here, scrape its `--port` from stdout, store the child in
-            // managed state, and override the endpoint below. Until then we point
-            // at OPEN_LAKEHOUSE_UC_URL / the dev UC. Kill the child on
-            // RunEvent::Exit (see `run()` tail when wired).
-            let unity_endpoint = resolve_uc_endpoint();
+            // Resolve the UC endpoint. `OPEN_LAKEHOUSE_UC_URL` (incl. empty for
+            // "no UC → in-memory files") takes precedence; otherwise spawn and
+            // manage the local `uc` server (SQLite persisted under .uc-data/).
+            let unity_endpoint = match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
+                Ok(url) if url.is_empty() => {
+                    eprintln!("[uc] OPEN_LAKEHOUSE_UC_URL is empty → files in-memory, no UC");
+                    None
+                }
+                Ok(url) => {
+                    eprintln!("[uc] using OPEN_LAKEHOUSE_UC_URL={url}");
+                    Some(url)
+                }
+                Err(_) => {
+                    eprintln!("[uc] spawning local uc sidecar…");
+                    let handle = app.handle().clone();
+                    match tauri::async_runtime::block_on(spawn_uc_sidecar(&handle)) {
+                        Ok(endpoint) => {
+                            eprintln!("uc server listening at {endpoint}");
+                            Some(endpoint)
+                        }
+                        Err(e) => {
+                            // Don't abort the app: fall back to the in-memory file
+                            // store so the editor still runs without UC.
+                            eprintln!("uc sidecar failed, files in-memory: {e}");
+                            None
+                        }
+                    }
+                }
+            };
 
             let cfg = HostConfig {
                 unity_endpoint: unity_endpoint.clone(),
@@ -364,7 +521,18 @@ pub fn run() {
             files_delete_dir,
             files_download,
             files_upload,
+            proxy_request,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Kill the spawned UC server when the app exits.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(sidecar) = app.try_state::<UcSidecar>() {
+                    if let Some(child) = sidecar.0.lock().unwrap().take() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+        });
 }

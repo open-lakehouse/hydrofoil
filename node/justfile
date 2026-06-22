@@ -18,11 +18,38 @@ ui-dev:
 ui-build:
     npm run build --prefix ui
 
-# Run the Tauri desktop app in dev (boots the desktop Vite server + native
-# window). Proxies /api to GATEWAY_URL (default http://localhost:9080, the Envoy
-# gateway). For a no-gateway, UC-only setup use `just dev-desktop` from the repo
-# root, which starts a local UC server and points the proxy at it.
+# Absolute path to the sibling unitycatalog-rs repo + the built uc binary,
+# derived from this justfile's location (node/ → repo root → its sibling) so
+# tasks work from any cwd. Override the binary with OPEN_LAKEHOUSE_UC_BIN.
+uc_repo := justfile_directory() / ".." / ".." / "unitycatalog-rs"
+uc_binaries := justfile_directory() / "desktop" / "src-tauri" / "binaries"
+
+# Build the sibling unitycatalog-rs `uc` server and symlink it as the Tauri
+# sidecar binary (binaries/uc-server-<target-triple>, per tauri.conf.json
+# externalBin). Run once (and after moving/rebuilding uc). Override the source
+# binary with OPEN_LAKEHOUSE_UC_BIN. Tauri resolves the triple-suffixed sidecar
+# itself, so no absolute-path scope wrangling.
+[script('bash', '-eu')]
+uc-setup:
+    cargo build -p unitycatalog-cli --release --bin uc \
+        --manifest-path "{{uc_repo}}/Cargo.toml"
+    src="${OPEN_LAKEHOUSE_UC_BIN:-{{uc_repo}}/target/release/uc}"
+    uc_bin="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
+    triple="$(rustc -vV | sed -n 's/^host: //p')"
+    mkdir -p "{{uc_binaries}}"
+    ln -sf "$uc_bin" "{{uc_binaries}}/uc-server-$triple"
+    echo "linked {{uc_binaries}}/uc-server-$triple -> $uc_bin"
+
+# Run the Tauri desktop app in dev with the embedded Unity Catalog server (SQLite
+# persisted under node/desktop/.uc-data/). Requires `just uc-setup` first. The
+# desktop spawns + manages `uc` and points the in-process host at it; UC REST is
+# proxied to it through tauriFetch.
 desktop-dev:
+    npm run tauri:dev --prefix desktop
+
+# Run the desktop app with NO Unity Catalog — files use the in-memory store. Handy
+# for quick smoke tests that don't need a catalog.
+desktop-dev-mem:
     OPEN_LAKEHOUSE_UC_URL= npm run tauri:dev --prefix desktop
 
 # Build the Tauri desktop app bundle

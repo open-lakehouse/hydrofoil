@@ -52,4 +52,8 @@ dist-ssr
 # Local Unity Catalog dev data + rendered config (see scripts/dev-ui.sh)
 .uc-data/
 
+# Tauri sidecar binaries (symlinked to the local uc build by `just uc-setup`;
+# triple-suffixed, machine-specific).
+node/desktop/src-tauri/binaries/
+
 WALKTHROUGH.md
