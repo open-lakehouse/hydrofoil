@@ -32,7 +32,7 @@ import {
   ensureModel,
   getEntry,
 } from "@/lib/editor/models";
-import { RunController } from "@/lib/editor/runController";
+import type { RunController } from "@/lib/editor/runController";
 import {
   initialSessionState,
   type OpenTab,
@@ -40,6 +40,7 @@ import {
   type TabId,
 } from "@/lib/editor/sessionReducer";
 import { connectFileStore } from "@/lib/files/store";
+import { ResultSessionRegistry } from "@/lib/query/resultSessions";
 
 const CONTENT_TYPE_BY_LANG: Record<string, string> = {
   sql: "text/plain",
@@ -86,8 +87,16 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
   // Etags by path, read by autosave's write-if-match (kept in a ref so the
   // autosave instance is stable across renders).
   const etagsRef = useRef<Map<string, string>>(new Map());
-  // Per-tab SQL run controllers, so each tab's results survive tab switches.
-  const runControllersRef = useRef<Map<TabId, RunController>>(new Map());
+  // The environment-scoped result-session registry owns the per-tab run
+  // controllers (each tab's results survive tab switches). It is created here so
+  // it shares this provider's lifetime — the gate remounts the provider on an
+  // environment switch (key=env.id), which disposes the old registry and its
+  // in-flight streams, scoping results to the environment.
+  const sessionsRef = useRef<ResultSessionRegistry | null>(null);
+  if (sessionsRef.current === null) {
+    sessionsRef.current = new ResultSessionRegistry();
+  }
+  const sessions = sessionsRef.current;
   // Mirror of activeId for stable callbacks (runActive) that shouldn't re-create
   // on every activation.
   const activeIdRef = useRef<TabId | null>(null);
@@ -155,19 +164,21 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const close = useCallback(async (id: TabId) => {
-    // Best-effort flush before discarding the buffer (dirty-confirm UI lands in
-    // the autosave/dirty step; for now an unsaved close still persists).
-    await autosaveRef.current?.flush(id);
-    autosaveRef.current?.cancel(id);
-    listenersRef.current.get(id)?.dispose();
-    listenersRef.current.delete(id);
-    etagsRef.current.delete(id);
-    runControllersRef.current.get(id)?.dispose();
-    runControllersRef.current.delete(id);
-    disposeModel(id);
-    dispatch({ type: "CLOSE_TAB", id });
-  }, []);
+  const close = useCallback(
+    async (id: TabId) => {
+      // Best-effort flush before discarding the buffer (dirty-confirm UI lands in
+      // the autosave/dirty step; for now an unsaved close still persists).
+      await autosaveRef.current?.flush(id);
+      autosaveRef.current?.cancel(id);
+      listenersRef.current.get(id)?.dispose();
+      listenersRef.current.delete(id);
+      etagsRef.current.delete(id);
+      sessions.release(id);
+      disposeModel(id);
+      dispatch({ type: "CLOSE_TAB", id });
+    },
+    [sessions],
+  );
 
   const reorder = useCallback(
     (from: number, to: number) => dispatch({ type: "REORDER_TABS", from, to }),
@@ -179,14 +190,10 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const runController = useCallback((path: TabId) => {
-    let ctrl = runControllersRef.current.get(path);
-    if (!ctrl) {
-      ctrl = new RunController();
-      runControllersRef.current.set(path, ctrl);
-    }
-    return ctrl;
-  }, []);
+  const runController = useCallback(
+    (path: TabId): RunController => sessions.controller(path),
+    [sessions],
+  );
 
   // Save-on-run: flush the buffer, then execute its current text. We run what's
   // in the model (the live buffer), so the flush is for persistence, not to
@@ -217,22 +224,23 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [state.tabs]);
 
-  // On provider unmount, flush then dispose every model + listener.
+  // On provider unmount, flush then dispose every model + listener. The session
+  // registry (and its in-flight streams) is disposed here too — on an
+  // environment switch this provider remounts, tearing the old environment's
+  // results down.
   const autosave = autosaveRef.current;
   useEffect(() => {
     const listeners = listenersRef.current;
-    const runControllers = runControllersRef.current;
     return () => {
       void autosave?.flushAll().finally(() => {
         autosave?.dispose();
         for (const d of listeners.values()) d.dispose();
         listeners.clear();
-        for (const c of runControllers.values()) c.dispose();
-        runControllers.clear();
+        sessions.dispose();
         disposeAll();
       });
     };
-  }, [autosave]);
+  }, [autosave, sessions]);
 
   const value = useMemo<EditorSessionValue>(
     () => ({

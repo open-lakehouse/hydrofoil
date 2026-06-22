@@ -1,11 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, CheckCircle2, Plus } from "lucide-react";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnvironmentContext";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  type ActiveEnvironment,
   type Environment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
@@ -53,7 +55,7 @@ function EnvironmentPicker({
   // Re-open the already-running environment (no restart).
   onOpen: () => void;
   // A (possibly different) environment was brought online — switch to the app.
-  onActivated: (env: Environment) => void;
+  onActivated: (env: ActiveEnvironment) => void;
 }) {
   const host = getEnvironmentHost();
   const environments = useQuery({
@@ -74,8 +76,8 @@ function EnvironmentPicker({
     setError(null);
     setBusy(env.id);
     try {
-      await host.select(env.id);
-      onActivated(env);
+      const active = await host.select(env.id);
+      onActivated(active);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(null);
@@ -92,8 +94,8 @@ function EnvironmentPicker({
       setName("");
       // Newly created environments are selected immediately so the user lands in
       // the app — create + open is the common first-run path.
-      await host.select(env.id);
-      onActivated(env);
+      const active = await host.select(env.id);
+      onActivated(active);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(null);
@@ -194,6 +196,7 @@ function EnvironmentPicker({
 // reports an active id and the overview is never shown.
 export function EnvironmentGate() {
   const host = getEnvironmentHost();
+  const queryClient = useQueryClient();
   // The active environment at startup (the host may have activated one via an
   // escape hatch, e.g. OPEN_LAKEHOUSE_UC_URL). Drives the initial view.
   const initial = useQuery({
@@ -201,9 +204,9 @@ export function EnvironmentGate() {
     queryFn: () => host.active(),
   });
 
-  // Local overrides layered over the startup query: the running env id and
+  // Local overrides layered over the startup query: the running environment and
   // whether the app (vs. the overview) is showing. `undefined` = defer to query.
-  const [activeId, setActiveId] = useState<string | null | undefined>(
+  const [active, setActive] = useState<ActiveEnvironment | null | undefined>(
     undefined,
   );
   const [showApp, setShowApp] = useState<boolean | undefined>(undefined);
@@ -217,10 +220,10 @@ export function EnvironmentGate() {
     );
   }
 
-  const runningId = activeId !== undefined ? activeId : (initial.data ?? null);
+  const running = active !== undefined ? active : (initial.data ?? null);
   // Default the view to the app when something is running at startup, else the
   // overview; explicit navigation overrides.
-  const viewingApp = showApp !== undefined ? showApp : runningId !== null;
+  const viewingApp = showApp !== undefined ? showApp : running !== null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -231,14 +234,27 @@ export function EnvironmentGate() {
           viewingApp && host.managed ? () => setShowApp(false) : undefined
         }
       />
-      {viewingApp ? (
-        <AppShell />
+      {viewingApp && running ? (
+        // The app and all env-scoped state mount under the active environment.
+        // Re-keying on the id unmounts/remounts the subtree on a switch, so no
+        // env-A state survives into env B (see the switch protocol in the ADR).
+        <ActiveEnvironmentProvider key={running.id} environment={running}>
+          <AppShell />
+        </ActiveEnvironmentProvider>
       ) : (
         <EnvironmentPicker
-          activeId={runningId}
+          activeId={running?.id ?? null}
           onOpen={() => setShowApp(true)}
           onActivated={(env) => {
-            setActiveId(env.id);
+            // Switch protocol: a newly-selected environment must not inherit the
+            // previous one's server-state cache (catalogs, schemas, tables). Drop
+            // it so the app re-fetches against the new environment. The
+            // `key={env.id}` remount below handles component-held state
+            // (per-tab run controllers, volume selection); per-env sessionStorage
+            // namespacing handles the rest. Skip the clear when re-selecting the
+            // already-running environment (no actual switch).
+            if (env.id !== running?.id) queryClient.clear();
+            setActive(env);
             setShowApp(true);
           }}
         />

@@ -13,6 +13,8 @@ import {
   useState,
 } from "react";
 
+import { useActiveEnvironment } from "@/components/environment/ActiveEnvironmentContext";
+
 interface FileExpansionValue {
   isOpen: (path: string) => boolean;
   toggle: (path: string) => void;
@@ -23,12 +25,16 @@ const FileExpansionContext = createContext<FileExpansionValue | undefined>(
   undefined,
 );
 
-const STORAGE_KEY = "editor.tree.expanded";
+// Namespaced per environment (see catalog ExpansionContext): one env's open
+// directories must not leak into another's tree on switch.
+function storageKey(envId: string): string {
+  return `editor.tree.expanded:${envId}`;
+}
 
-function loadInitial(): Set<string> {
+function loadInitial(envId: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(storageKey(envId));
     if (raw) return new Set(JSON.parse(raw) as string[]);
   } catch {
     // ignore malformed storage
@@ -36,36 +42,48 @@ function loadInitial(): Set<string> {
   return new Set();
 }
 
-function persist(paths: Set<string>) {
+function persist(envId: string, paths: Set<string>) {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...paths]));
+    window.sessionStorage.setItem(
+      storageKey(envId),
+      JSON.stringify([...paths]),
+    );
   } catch {
     // storage may be unavailable (private mode etc.)
   }
 }
 
 export function FileExpansionProvider({ children }: { children: ReactNode }) {
-  const [expanded, setExpanded] = useState<Set<string>>(loadInitial);
+  const envId = useActiveEnvironment().id;
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    loadInitial(envId),
+  );
 
-  const toggle = useCallback((path: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      persist(next);
-      return next;
-    });
-  }, []);
+  const toggle = useCallback(
+    (path: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        persist(envId, next);
+        return next;
+      });
+    },
+    [envId],
+  );
 
-  const expand = useCallback((paths: string[]) => {
-    setExpanded((prev) => {
-      if (paths.every((p) => prev.has(p))) return prev;
-      const next = new Set(prev);
-      for (const p of paths) next.add(p);
-      persist(next);
-      return next;
-    });
-  }, []);
+  const expand = useCallback(
+    (paths: string[]) => {
+      setExpanded((prev) => {
+        if (paths.every((p) => prev.has(p))) return prev;
+        const next = new Set(prev);
+        for (const p of paths) next.add(p);
+        persist(envId, next);
+        return next;
+      });
+    },
+    [envId],
+  );
 
   const value = useMemo<FileExpansionValue>(
     () => ({ isOpen: (p) => expanded.has(p), toggle, expand }),

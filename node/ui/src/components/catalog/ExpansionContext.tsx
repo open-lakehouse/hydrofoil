@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 
+import { useActiveEnvironment } from "@/components/environment/ActiveEnvironmentContext";
 import type { ObjectKind } from "./types";
 
 export const nodeId = {
@@ -30,12 +31,16 @@ interface ExpansionValue {
 
 const ExpansionContext = createContext<ExpansionValue | undefined>(undefined);
 
-const STORAGE_KEY = "catalog.expanded";
+// Namespaced per environment: switching environments must not leak one env's
+// expanded catalog nodes into another (and returning restores its own state).
+function storageKey(envId: string): string {
+  return `catalog.expanded:${envId}`;
+}
 
-function loadInitial(): Set<string> {
+function loadInitial(envId: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(storageKey(envId));
     if (raw) return new Set(JSON.parse(raw) as string[]);
   } catch {
     // ignore malformed storage
@@ -43,36 +48,45 @@ function loadInitial(): Set<string> {
   return new Set();
 }
 
-function persist(ids: Set<string>) {
+function persist(envId: string, ids: Set<string>) {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+    window.sessionStorage.setItem(storageKey(envId), JSON.stringify([...ids]));
   } catch {
     // storage may be unavailable (private mode etc.)
   }
 }
 
 export function ExpansionProvider({ children }: { children: ReactNode }) {
-  const [expanded, setExpanded] = useState<Set<string>>(loadInitial);
+  const envId = useActiveEnvironment().id;
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    loadInitial(envId),
+  );
 
-  const toggle = useCallback((id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      persist(next);
-      return next;
-    });
-  }, []);
+  const toggle = useCallback(
+    (id: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        persist(envId, next);
+        return next;
+      });
+    },
+    [envId],
+  );
 
-  const expand = useCallback((ids: string[]) => {
-    setExpanded((prev) => {
-      if (ids.every((id) => prev.has(id))) return prev;
-      const next = new Set(prev);
-      for (const id of ids) next.add(id);
-      persist(next);
-      return next;
-    });
-  }, []);
+  const expand = useCallback(
+    (ids: string[]) => {
+      setExpanded((prev) => {
+        if (ids.every((id) => prev.has(id))) return prev;
+        const next = new Set(prev);
+        for (const id of ids) next.add(id);
+        persist(envId, next);
+        return next;
+      });
+    },
+    [envId],
+  );
 
   const value = useMemo<ExpansionValue>(
     () => ({ isOpen: (id) => expanded.has(id), toggle, expand }),

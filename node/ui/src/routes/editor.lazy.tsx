@@ -16,9 +16,8 @@ import { ResultsPane } from "@/components/editor/ResultsPane";
 import { TabStrip } from "@/components/editor/TabStrip";
 import { useTabPersistence } from "@/components/editor/useTabPersistence";
 import { VolumeSwitcher } from "@/components/editor/VolumeSwitcher";
-import { getEnvironmentHost } from "@/lib/client/environments";
+import { useActiveEnvironment } from "@/components/environment/ActiveEnvironmentContext";
 import {
-  HOME_VOLUME,
   loadAddedVolumes,
   persistAddedVolumes,
   type Volume,
@@ -47,14 +46,13 @@ function Workspace() {
   const isSql = activeTab?.language === "sql";
   const isMarkdown = activeTab?.language === "markdown";
 
-  // The set of selectable volumes: the local Home (when the host provides it,
-  // i.e. desktop) plus any UC volumes the user has browsed to (persisted).
-  const hasHome = getEnvironmentHost().hasHome;
-  const [added, setAdded] = useState<Volume[]>(() => loadAddedVolumes());
-  const volumes = useMemo(
-    () => (hasHome ? [HOME_VOLUME, ...added] : added),
-    [hasHome, added],
-  );
+  // The set of selectable volumes: the active environment's built-in volumes
+  // (the local Home on desktop) plus any UC volumes the user has browsed to
+  // (persisted, namespaced per environment).
+  const env = useActiveEnvironment();
+  const builtin = env.volumes;
+  const [added, setAdded] = useState<Volume[]>(() => loadAddedVolumes(env.id));
+  const volumes = useMemo(() => [...builtin, ...added], [builtin, added]);
 
   // The active volume's root lives in the URL (`?volume=`), defaulting to the
   // first available volume. The FileTree re-roots whenever this changes.
@@ -78,12 +76,12 @@ function Workspace() {
         const next = prev.some((v) => v.id === volume.id)
           ? prev
           : [...prev, volume];
-        persistAddedVolumes(next);
+        persistAddedVolumes(env.id, next);
         return next;
       });
       selectVolume(volume.root);
     },
-    [selectVolume],
+    [selectVolume, env.id],
   );
 
   return (

@@ -13,15 +13,21 @@
 
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
+import { useActiveEnvironment } from "@/components/environment/ActiveEnvironmentContext";
 import { useEditorSession } from "./EditorSessionContext";
 
 const FROM = "/editor";
-const STORAGE_KEY = "editor.openTabs";
 
-function loadOpenPaths(): string[] {
+// Namespaced per environment: open tabs reference an environment's file paths
+// (`/home/…`, `/Volumes/…`), so they must not be restored under another env.
+function storageKey(envId: string): string {
+  return `editor.openTabs:${envId}`;
+}
+
+function loadOpenPaths(envId: string): string[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(storageKey(envId));
     if (raw) return JSON.parse(raw) as string[];
   } catch {
     // ignore malformed storage
@@ -29,9 +35,9 @@ function loadOpenPaths(): string[] {
   return [];
 }
 
-function saveOpenPaths(paths: string[]) {
+function saveOpenPaths(envId: string, paths: string[]) {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
+    window.sessionStorage.setItem(storageKey(envId), JSON.stringify(paths));
   } catch {
     // storage may be unavailable
   }
@@ -44,6 +50,7 @@ function saveOpenPaths(paths: string[]) {
 export function useTabPersistence() {
   const { tabs, activeId, editorReady, openFile, activate } =
     useEditorSession();
+  const envId = useActiveEnvironment().id;
   const navigate = useNavigate({ from: FROM });
   const urlPath = useSearch({ from: FROM, select: (s) => s.path });
   const restoredRef = useRef(false);
@@ -53,7 +60,7 @@ export function useTabPersistence() {
     if (restoredRef.current || !editorReady) return;
     restoredRef.current = true;
 
-    const persisted = loadOpenPaths();
+    const persisted = loadOpenPaths(envId);
     const target = urlPath ?? persisted[persisted.length - 1];
     if (persisted.length === 0 && !target) return;
 
@@ -76,13 +83,16 @@ export function useTabPersistence() {
         }
       }
     })();
-  }, [editorReady, urlPath, openFile, activate]);
+  }, [editorReady, urlPath, openFile, activate, envId]);
 
   // Persist the open-tab set/order whenever it changes (after restore).
   useEffect(() => {
     if (!restoredRef.current) return;
-    saveOpenPaths(tabs.map((t) => t.id));
-  }, [tabs]);
+    saveOpenPaths(
+      envId,
+      tabs.map((t) => t.id),
+    );
+  }, [tabs, envId]);
 
   // Keep `?path=` in sync with the active tab (after restore).
   useEffect(() => {

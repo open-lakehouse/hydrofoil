@@ -44,13 +44,17 @@ export function ucVolume(parts: {
 }
 
 // Added UC volumes persist across reloads (like the open-tab set), so the
-// switcher remembers what the user has browsed to.
-const STORAGE_KEY = "editor.volumes.added";
+// switcher remembers what the user has browsed to. The key is namespaced per
+// environment so switching environments doesn't leak one env's volumes into
+// another, and returning to an environment restores its own set.
+function storageKey(envId: string): string {
+  return `editor.volumes.added:${envId}`;
+}
 
-export function loadAddedVolumes(): Volume[] {
+export function loadAddedVolumes(envId: string): Volume[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(storageKey(envId));
     if (raw) return JSON.parse(raw) as Volume[];
   } catch {
     // ignore malformed storage
@@ -58,9 +62,9 @@ export function loadAddedVolumes(): Volume[] {
   return [];
 }
 
-export function persistAddedVolumes(volumes: Volume[]): void {
+export function persistAddedVolumes(envId: string, volumes: Volume[]): void {
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(volumes));
+    window.sessionStorage.setItem(storageKey(envId), JSON.stringify(volumes));
   } catch {
     // storage may be unavailable (private mode etc.)
   }

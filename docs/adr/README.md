@@ -22,6 +22,7 @@ that it draws on or refines.
 | [0012](0012-client-forwarded-lineage-metadata.md) | Client-forwarded lineage metadata over gRPC headers (Spark-parity job facets + `hydrofoil` run facet) | Accepted |
 | [0013](0013-column-level-lineage-positional-resolution.md) | Column-level lineage via positional plan resolution (facet on outputs, whole-facet degradation) | Accepted |
 | [0014](0014-openlineage-planner-vs-rule.md) | OpenLineage installs its terminal node via a registered `ExtensionPlanner` (plan-carried marker; planner keeps only the `&SessionState`-bound START/context half) | Accepted |
+| [0015](0015-client-environment-scope.md) | Client-side environment is a first-class scope for UI state (capability descriptor, `ActiveEnvironment` provider, switch protocol, env-scoped result sessions, `ArrowResultStore.inspect()`) | Accepted |
 
 Related design docs: [`session-management.md`](../session-management.md),
 [`open-lineage-design.md`](../open-lineage-design.md),

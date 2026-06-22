@@ -11,16 +11,31 @@ import { Button } from "@/components/ui/button";
 import type { TabId } from "@/lib/editor/sessionReducer";
 import { useEditorSession } from "./EditorSessionContext";
 
+/** Human-readable byte size for the result-footprint chip (e.g. "1.2 MB"). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  return `${value.toFixed(1)} ${units[i]}`;
+}
+
 export function ResultsPane({ activePath }: { activePath: TabId }) {
   const { runController, runActive } = useEditorSession();
   const controller = runController(activePath);
 
   // Re-render whenever this tab's controller updates (chunk appended, done…).
   const snapshot = useSyncExternalStore(controller.subscribe, controller.get);
-  const { store, version, running, error } = snapshot;
+  const { store, version, running, error, meta } = snapshot;
 
   const rowCount = store?.rowCount ?? 0;
   const hasColumns = !!store && store.columnCount > 0;
+  // A compact summary of the last completed run (footprint + timing).
+  const info = !running && meta?.info ? meta.info : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -53,6 +68,17 @@ export function ResultsPane({ activePath }: { activePath: TabId }) {
           <span className="text-xs text-muted-foreground">
             {rowCount} row{rowCount === 1 ? "" : "s"}
             {running ? "…" : ""}
+          </span>
+        )}
+        {info && (
+          <span
+            className="text-[11px] text-muted-foreground"
+            title={`${info.columnCount} columns, ${info.batchCount} batch${
+              info.batchCount === 1 ? "" : "es"
+            }`}
+          >
+            {formatBytes(info.byteLength)}
+            {meta?.durationMs != null ? ` · ${meta.durationMs} ms` : ""}
           </span>
         )}
         <span className="ml-auto text-[11px] text-muted-foreground">
