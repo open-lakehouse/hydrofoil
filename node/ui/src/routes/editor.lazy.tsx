@@ -5,9 +5,11 @@ import {
 } from "@/components/editor/EditorSessionContext";
 import { FileTree } from "@/components/editor/fileTree/FileTree";
 import { FileExpansionProvider } from "@/components/editor/fileTree/fileExpansion";
+import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { MonacoHost } from "@/components/editor/MonacoHost";
 import { ResultsPane } from "@/components/editor/ResultsPane";
 import { TabStrip } from "@/components/editor/TabStrip";
+import { useTabPersistence } from "@/components/editor/useTabPersistence";
 import { Button } from "@/components/ui/button";
 import { useInvalidateDirectory } from "@/lib/files/queries";
 import { connectFileStore } from "@/lib/files/store";
@@ -31,8 +33,10 @@ function EditorPage() {
 function Workspace() {
   const { tabs, activeId, openFile } = useEditorSession();
   const invalidate = useInvalidateDirectory();
+  useTabPersistence();
   const activeTab = tabs.find((t) => t.id === activeId);
   const isSql = activeTab?.language === "sql";
+  const isMarkdown = activeTab?.language === "markdown";
 
   async function seed() {
     const enc = (s: string) => new TextEncoder().encode(s);
@@ -80,16 +84,26 @@ function Workspace() {
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <TabStrip />
-        {/* SQL tabs split editor (top) / results (bottom); other tabs are
-            editor-only. The single MonacoHost is shared across both layouts. */}
-        <div className="min-h-0 flex-1">
-          <MonacoHost />
-        </div>
-        {isSql && activeId && (
-          <div className="h-2/5 min-h-0 border-t">
-            <ResultsPane activePath={activeId} />
+        {/* The single MonacoHost is shared across layouts. SQL tabs stack the
+            editor over a results pane; markdown tabs place a preview beside the
+            editor; other tabs are editor-only. */}
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1">
+              <MonacoHost />
+            </div>
+            {isSql && activeId && (
+              <div className="h-2/5 min-h-0 border-t">
+                <ResultsPane activePath={activeId} />
+              </div>
+            )}
           </div>
-        )}
+          {isMarkdown && activeId && (
+            <div className="min-h-0 w-1/2 shrink-0">
+              <MarkdownPreview activePath={activeId} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

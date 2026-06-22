@@ -22,6 +22,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
 } from "react";
 import { type Autosave, createAutosave } from "@/lib/editor/autosave";
 import { languageOf } from "@/lib/editor/language";
@@ -49,6 +50,8 @@ const CONTENT_TYPE_BY_LANG: Record<string, string> = {
 interface EditorSessionValue {
   tabs: OpenTab[];
   activeId: TabId | null;
+  /** True once the Monaco editor has mounted (openFile needs it). */
+  editorReady: boolean;
   /** Open (or focus, if already open) a file in a tab. */
   openFile: (path: string) => Promise<void>;
   activate: (id: TabId) => void;
@@ -73,6 +76,7 @@ const EditorSessionContext = createContext<EditorSessionValue | undefined>(
 
 export function EditorSessionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
+  const [editorReady, setEditorReady] = useState(false);
 
   const monacoRef = useRef<typeof Monaco | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -107,6 +111,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     (monaco: typeof Monaco, editor: Monaco.editor.IStandaloneCodeEditor) => {
       monacoRef.current = monaco;
       editorRef.current = editor;
+      setEditorReady(true);
     },
     [],
   );
@@ -233,6 +238,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     () => ({
       tabs: state.tabs,
       activeId: state.activeId,
+      editorReady,
       openFile,
       activate,
       close,
@@ -245,6 +251,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     [
       state.tabs,
       state.activeId,
+      editorReady,
       openFile,
       activate,
       close,
