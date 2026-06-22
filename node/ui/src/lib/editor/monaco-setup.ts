@@ -20,57 +20,54 @@
 
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-// Base Monaco editor worker (syntax, basic language features).
+// Base Monaco editor worker (the editorWorkerService — diff/links/etc.). Wired
+// via Vite's `?worker` import, which works for this worker.
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import GenericSQLWorker from "monaco-sql-languages/esm/languages/generic/generic.worker?worker";
-// SQL dialect workers from monaco-sql-languages. The query engine speaks
-// PostgreSQL, so `pgsql` is the primary dialect; `genericsql` is the fallback
-// parser.
-import PgSQLWorker from "monaco-sql-languages/esm/languages/pgsql/pgsql.worker?worker";
 
 // Register the SQL language contributions (tokenizer + ANTLR-backed language
 // features). These call monaco's `registerLanguage` / `setupLanguageFeatures`
-// at import time, so they must run after the loader has the monaco instance but
-// they only touch the language registry, not workers.
+// at import time, but only touch the language registry, not workers.
 import "monaco-sql-languages/esm/languages/pgsql/pgsql.contribution";
 import "monaco-sql-languages/esm/languages/generic/generic.contribution";
 import { LanguageIdEnum, setupLanguageFeatures } from "monaco-sql-languages";
 import { registerSqlCompletion } from "./catalogCompletion";
 
+// On the monaco-sql-languages worker: it creates its worker via
+// `editor.createWebWorker({moduleId})`, whose ESM module loading is NOT reached
+// through `MonacoEnvironment.getWorker` and doesn't resolve under Vite — the
+// pgsql worker is never requested (verified) and its features fail with
+// "Missing requestHandler: doValidation". `vite-plugin-monaco-editor` is the
+// supported bridge, but it breaks the Vite 8 + monaco 0.55 build
+// (resolveMonacoPath does a require.resolve without `.js`, which Node ESM
+// rejects). So we DISABLE its worker-based completion + diagnostics and run
+// completion ourselves on the main thread (see registerSqlCompletion). The
+// pgsql *tokenizer* (highlighting) needs no worker and still works.
+
 let done = false;
 
 /**
- * Idempotently configure the Monaco loader + workers. Safe to call repeatedly
- * (e.g. from a component mount under React StrictMode); only the first call has
- * any effect.
+ * Idempotently configure the Monaco loader + workers + SQL features. Safe to
+ * call repeatedly (e.g. from a component mount under React StrictMode); only the
+ * first call has any effect.
  */
 export function ensureMonacoSetup(): void {
   if (done) return;
   done = true;
 
-  // Worker factory. Monaco passes the *language id* as `label` for language
-  // workers (see monaco-sql-languages workerManager), and `editorWorkerService`
-  // / no label for the base worker.
+  // The base editor worker is required for core editor services; it loads fine
+  // via `?worker`. (The SQL dialect workers are intentionally not wired — see
+  // the note above.)
   self.MonacoEnvironment = {
-    getWorker(_workerId: string, label: string) {
-      switch (label) {
-        case "pgsql":
-          return new PgSQLWorker();
-        case "genericsql":
-          return new GenericSQLWorker();
-        default:
-          return new EditorWorker();
-      }
+    getWorker() {
+      return new EditorWorker();
     },
   };
 
   // Use the bundled monaco rather than the CDN default.
   loader.config({ monaco });
 
-  // Disable monaco-sql-languages' worker-based completion + diagnostics: their
-  // worker (editor.createWebWorker with a module id) doesn't load under Vite, so
-  // they fail with "Missing requestHandler". We keep only the pgsql tokenizer
-  // (highlighting) and provide completion ourselves on the main thread.
+  // Disable monaco-sql-languages' worker-based features (their worker can't load
+  // under Vite); keep only the pgsql tokenizer. Completion is ours, main-thread.
   setupLanguageFeatures(LanguageIdEnum.PG, {
     completionItems: false,
     diagnostics: false,
