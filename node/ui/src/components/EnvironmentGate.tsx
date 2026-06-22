@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, Plus } from "lucide-react";
+import { CheckCircle2, Plus } from "lucide-react";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnvironmentContext";
+import { EnvironmentSwitcher } from "@/components/environment/EnvironmentSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,27 +15,34 @@ import {
 import { cn } from "@/lib/utils";
 
 // The persistent top header — always visible, over both the picker and the app.
-// When an environment is active and the app view is showing, a back button
-// returns to the environment overview WITHOUT stopping the environment.
-function ShellHeader({ onBack }: { onBack?: () => void }) {
+// In the app view (on managed hosts) the active-environment switcher sits to the
+// right of the label: a chip summarizing the running environment that also
+// switches environments and offers "Manage environments" (returns to the
+// overview WITHOUT stopping the running environment).
+function ShellHeader({
+  active,
+  onSwitch,
+  onManage,
+}: {
+  active?: ActiveEnvironment | null;
+  onSwitch?: (id: string) => Promise<void>;
+  onManage?: () => void;
+}) {
+  const showSwitcher =
+    active && onSwitch && onManage && getEnvironmentHost().managed;
   return (
     <header className="sticky top-0 z-50 flex h-12 shrink-0 items-center justify-between border-b bg-background/80 px-4 backdrop-blur-sm">
-      <div className="flex items-center gap-2">
-        {onBack ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onBack}
-            className="-ml-2 h-7 gap-1.5 px-2 text-muted-foreground"
-            title="Back to environments"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Environments
-          </Button>
-        ) : null}
+      <div className="flex items-center gap-3">
         <span className="text-sm font-semibold tracking-tight">
           Open Lakehouse
         </span>
+        {showSwitcher ? (
+          <EnvironmentSwitcher
+            active={active}
+            onSwitch={onSwitch}
+            onManage={onManage}
+          />
+        ) : null}
       </div>
       <ThemeToggle />
     </header>
@@ -225,14 +233,34 @@ export function EnvironmentGate() {
   // overview; explicit navigation overrides.
   const viewingApp = showApp !== undefined ? showApp : running !== null;
 
+  // Adopt a brought-online environment as the running one and show the app.
+  // Switch protocol: a newly-selected environment must not inherit the previous
+  // one's server-state cache (catalogs, schemas, tables) — drop it so the app
+  // re-fetches against the new environment. The `key={env.id}` remount handles
+  // component-held state (per-tab run controllers, volume selection); per-env
+  // sessionStorage namespacing handles the rest. Skip the clear when this is the
+  // already-running environment (re-open, not a switch).
+  const adopt = (env: ActiveEnvironment) => {
+    if (env.id !== running?.id) queryClient.clear();
+    setActive(env);
+    setShowApp(true);
+  };
+
+  // Switch directly to another environment from the in-app switcher: bring it
+  // online via the host, then adopt it.
+  const switchTo = async (id: string) => {
+    if (id === running?.id) return;
+    adopt(await host.select(id));
+  };
+
   return (
     <div className="flex min-h-screen flex-col">
       <ShellHeader
-        onBack={
-          // Only offer "back" when there's a running app to step out of and the
-          // host actually manages environments (no overview to return to on web).
-          viewingApp && host.managed ? () => setShowApp(false) : undefined
-        }
+        active={viewingApp ? running : null}
+        onSwitch={switchTo}
+        // "Manage environments" returns to the overview WITHOUT stopping the
+        // running environment (it stays highlighted there).
+        onManage={() => setShowApp(false)}
       />
       {viewingApp && running ? (
         // The app and all env-scoped state mount under the active environment.
@@ -245,18 +273,7 @@ export function EnvironmentGate() {
         <EnvironmentPicker
           activeId={running?.id ?? null}
           onOpen={() => setShowApp(true)}
-          onActivated={(env) => {
-            // Switch protocol: a newly-selected environment must not inherit the
-            // previous one's server-state cache (catalogs, schemas, tables). Drop
-            // it so the app re-fetches against the new environment. The
-            // `key={env.id}` remount below handles component-held state
-            // (per-tab run controllers, volume selection); per-env sessionStorage
-            // namespacing handles the rest. Skip the clear when re-selecting the
-            // already-running environment (no actual switch).
-            if (env.id !== running?.id) queryClient.clear();
-            setActive(env);
-            setShowApp(true);
-          }}
+          onActivated={adopt}
         />
       )}
     </div>
