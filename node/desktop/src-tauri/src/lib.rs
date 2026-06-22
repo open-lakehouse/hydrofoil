@@ -107,17 +107,24 @@ async fn connect_stream(
     state: State<'_, AppState>,
     service: String,
     path: String,
-    message: String,
+    message: Vec<u8>,
     headers: Vec<(String, String)>,
     on_chunk: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
     let ctx = request_context(&path, headers);
+    // The request arrives as proto-encoded bytes and the response chunks are
+    // proto too (the Arrow IPC travels as raw binary). `call_server_streaming`
+    // uses one codec for both, so the request MUST be Proto, not JSON — sending
+    // JSON here yields "failed to decode proto request: unexpected end of
+    // buffer". The request is tiny (just the query text), so carrying it as a
+    // byte array costs nothing.
+    //
     // `call_server_streaming` returns a `'static` future + stream (no router
     // borrow), so it is sound to build under the `State` borrow and await after.
     let fut = state.router(&service)?.call_server_streaming(
         &path,
         ctx,
-        Bytes::from(message.into_bytes()),
+        Bytes::from(message),
         CodecFormat::Proto,
     );
     let response = fut.await.map_err(|e| e.to_string())?;

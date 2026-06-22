@@ -26,6 +26,7 @@ import {
   fromJsonString,
   type MessageInitShape,
   type MessageShape,
+  toBinary,
   toJsonString,
 } from "@bufbuild/protobuf";
 import type { Transport } from "@connectrpc/connect";
@@ -155,8 +156,11 @@ export const tauriTransport: Transport = {
 
     const completion = invoke<void>("connect_stream", {
       service: group,
+      // Proto-encoded request bytes: the streaming dispatcher uses one codec for
+      // both request and the binary (Arrow) response, so the request must be
+      // Proto, not JSON. The Rust side takes a Vec<u8>.
+      message: Array.from(toBinary(method.input, requestMessage)),
       path: methodPath(method),
-      message: toJsonString(method.input, requestMessage),
       headers: headerPairs(header),
       onChunk: channel,
     })

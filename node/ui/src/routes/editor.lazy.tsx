@@ -1,8 +1,13 @@
 import { createLazyRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import {
+  EditorSessionProvider,
+  useEditorSession,
+} from "@/components/editor/EditorSessionContext";
 import { FileTree } from "@/components/editor/fileTree/FileTree";
 import { FileExpansionProvider } from "@/components/editor/fileTree/fileExpansion";
 import { MonacoHost } from "@/components/editor/MonacoHost";
+import { ResultsPane } from "@/components/editor/ResultsPane";
+import { TabStrip } from "@/components/editor/TabStrip";
 import { Button } from "@/components/ui/button";
 import { useInvalidateDirectory } from "@/lib/files/queries";
 import { connectFileStore } from "@/lib/files/store";
@@ -13,18 +18,25 @@ export const Route = createLazyRoute("/editor")({
 
 const ROOT = "/work";
 
-// INTERIM: file tree (left) + Monaco (right). The tabs/results layers replace
-// the single-editor right pane in the next steps. A "seed" button populates the
-// in-memory store so the tree has something to browse during desktop validation.
 function EditorPage() {
-  const [activePath, setActivePath] = useState<string | undefined>();
+  return (
+    <EditorSessionProvider>
+      <FileExpansionProvider>
+        <Workspace />
+      </FileExpansionProvider>
+    </EditorSessionProvider>
+  );
+}
+
+function Workspace() {
+  const { tabs, activeId, openFile } = useEditorSession();
   const invalidate = useInvalidateDirectory();
+  const activeTab = tabs.find((t) => t.id === activeId);
+  const isSql = activeTab?.language === "sql";
 
   async function seed() {
     const enc = (s: string) => new TextEncoder().encode(s);
-    // The memory store's unary listing only surfaces directories that were
-    // explicitly created (it doesn't synthesize them from deeper file prefixes),
-    // so create the dirs before writing into them.
+    // The memory store's unary listing only surfaces explicitly-created dirs.
     await connectFileStore.createDir(ROOT);
     await connectFileStore.createDir(`${ROOT}/queries`);
     await connectFileStore.writeFile(
@@ -48,34 +60,37 @@ function EditorPage() {
   }
 
   return (
-    <FileExpansionProvider>
-      <div className="flex h-full">
-        <div className="flex w-64 shrink-0 flex-col border-r">
-          <FileTree
-            root={ROOT}
-            activePath={activePath}
-            onOpenFile={setActivePath}
-          />
-          <div className="border-t p-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full text-xs"
-              onClick={seed}
-            >
-              Seed sample files
-            </Button>
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b px-3 py-2 text-xs text-muted-foreground">
-            {activePath ?? "No file selected"}
-          </div>
-          <div className="min-h-0 flex-1">
-            <MonacoHost />
-          </div>
+    <div className="flex h-full">
+      <div className="flex w-64 shrink-0 flex-col border-r">
+        <FileTree
+          root={ROOT}
+          activePath={activeId ?? undefined}
+          onOpenFile={(path) => void openFile(path)}
+        />
+        <div className="border-t p-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full text-xs"
+            onClick={seed}
+          >
+            Seed sample files
+          </Button>
         </div>
       </div>
-    </FileExpansionProvider>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TabStrip />
+        {/* SQL tabs split editor (top) / results (bottom); other tabs are
+            editor-only. The single MonacoHost is shared across both layouts. */}
+        <div className="min-h-0 flex-1">
+          <MonacoHost />
+        </div>
+        {isSql && activeId && (
+          <div className="h-2/5 min-h-0 border-t">
+            <ResultsPane activePath={activeId} />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
