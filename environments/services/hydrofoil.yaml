@@ -34,7 +34,7 @@ services:
       - "50051"
       # HTTP query surface: POST /query (buffered) + the ConnectRPC QueryService
       # (server-streaming SQL). Envoy routes /hydrofoil.query.v1.QueryService/*
-      # here (see docker/envoy/envoy.yaml).
+      # here (see the active envoy config under config/<env>/envoy.yaml).
       - "9082"
     # No healthcheck: the distroless runtime has no shell, curl, or wget, so the
     # CMD-SHELL probes the other services use can't run here. Validate liveness

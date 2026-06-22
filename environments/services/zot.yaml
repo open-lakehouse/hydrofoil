@@ -1,0 +1,59 @@
+# zot — OCI registry, backed by SeaweedFS S3.
+#
+# Used to host the Cedar policy bundle that Hydrofoil pulls via
+# HYDROFOIL_POLICY_REF (e.g. localhost:10100/hydrofoil/demo-policy:latest).
+# The registry is published on host :10100 and depends on `seaweedfs` for its
+# S3 storage backend, so any stack that includes this file must also include
+# ./services/seaweedfs.yaml.
+#
+# Profile-gated (`oci`) so it only starts when a stack opts in. No env file
+# currently wires it into a default stack; bring it up explicitly when working
+# the policy-registry path.
+services:
+  # Create the bucket zot writes into. The bucket name must match the
+  # `bucket` in docker/zot/config.json (oci-registry).
+  zot-init:
+    image: amazon/aws-cli:2.35.9
+    restart: on-failure
+    profiles: [oci]
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Waiting for SeaweedFS S3...";
+        until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 2; done;
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://oci-registry 2>&1 || true;
+        echo "Bucket ready.";
+
+  zot:
+    image: ghcr.io/project-zot/zot:v2.1.9
+    restart: unless-stopped
+    profiles: [oci]
+    depends_on:
+      zot-init:
+        condition: service_completed_successfully
+    # zot reads its S3 storage driver config from config.json (region/bucket/
+    # endpoint are baked there); it still needs AWS creds in the environment to
+    # sign requests to SeaweedFS.
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+    ports:
+      # Host 10100 is what HYDROFOIL_POLICY_REF / the policy_demo flow expect.
+      - "${ZOT_PORT:-10100}:5000"
+    volumes:
+      - ./.data/oci_registry:/var/lib/registry
+      - ./docker/zot/config.json:/etc/zot/config.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/v2/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

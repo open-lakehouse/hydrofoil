@@ -27,7 +27,7 @@
 # (`adbc.flight.sql.rpc.call_header.<name>`), settable at connect time
 # (DatabaseOptions) and *between queries on one connection*
 # (ConnectionOptions via conn.adbc_connection.set_options) — the same channel
-# policy_demo.py uses for the principal.
+# _demo_auth.py uses to forward the principal.
 #
 # ── Prerequisites ───────────────────────────────────────────────────────────
 #   1. The live stack up, and hydrofoil running ON THE HOST with lineage wired:
@@ -39,7 +39,7 @@
 #      The containerized hydrofoil on :50051 runs the released image, which
 #      predates these metadata headers — don't point this notebook at it.
 #   2. The S3-backed demo table demo.managed_demo.events resolvable via Unity
-#      Catalog (the same table duckdb_flight.py queries).
+#      Catalog.
 #
 # Run on the host:
 #   uvx --directory notebooks/ marimo edit --sandbox lineage_metadata.py
