@@ -2083,7 +2083,7 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "jsonschema",
- "olai-http",
+ "olai-http 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2333,7 +2333,7 @@ dependencies = [
 [[package]]
 name = "datafusion-unitycatalog"
 version = "0.1.0"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=1877baed28954a800b9544b2f43d3341e41aa87b#1877baed28954a800b9544b2f43d3341e41aa87b"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
 dependencies = [
  "async-trait",
  "buoyant_kernel",
@@ -3209,10 +3209,13 @@ dependencies = [
  "arrow-flight",
  "async-trait",
  "axum 0.8.9",
+ "buffa",
+ "buffa-types",
  "buoyant_kernel",
  "bytes",
  "cedar-oci",
  "config",
+ "connectrpc",
  "dashmap",
  "datafusion",
  "datafusion-cedar",
@@ -3222,6 +3225,7 @@ dependencies = [
  "deltalake-core",
  "deltalake-datafusion",
  "futures",
+ "http-body",
  "hydrofoil-common",
  "instrumented-object-store",
  "itertools",
@@ -4431,10 +4435,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-http"
+version = "0.0.1"
+source = "git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d#173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "humantime",
+ "hyper",
+ "percent-encoding",
+ "quick-xml 0.37.5",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "ring",
+ "rust-ini",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "olai-store"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21a1bb3cc10fafde18e543ec08e9c600e7f76f61d99635a7e384328740d80947"
+source = "git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d#173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4442,6 +4473,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 
@@ -4931,6 +4963,7 @@ dependencies = [
  "axum 0.8.9",
  "buffa",
  "buffa-types",
+ "bytes",
  "config",
  "connectrpc",
  "futures",
@@ -6821,10 +6854,10 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unitycatalog-client"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=1877baed28954a800b9544b2f43d3341e41aa87b#1877baed28954a800b9544b2f43d3341e41aa87b"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
 dependencies = [
  "futures",
- "olai-http",
+ "olai-http 0.0.1 (git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d)",
  "percent-encoding",
  "reqwest 0.12.28",
  "serde",
@@ -6839,7 +6872,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-common"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=1877baed28954a800b9544b2f43d3341e41aa87b#1877baed28954a800b9544b2f43d3341e41aa87b"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -6850,7 +6883,7 @@ dependencies = [
  "futures",
  "http",
  "itertools",
- "olai-http",
+ "olai-http 0.0.1 (git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d)",
  "olai-store",
  "pbjson",
  "pbjson-types",
@@ -6869,12 +6902,12 @@ dependencies = [
 [[package]]
 name = "unitycatalog-object-store"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=1877baed28954a800b9544b2f43d3341e41aa87b#1877baed28954a800b9544b2f43d3341e41aa87b"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
 dependencies = [
  "async-trait",
  "chrono",
  "object_store",
- "olai-http",
+ "olai-http 0.0.1 (git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d)",
  "thiserror",
  "tokio",
  "unitycatalog-client",

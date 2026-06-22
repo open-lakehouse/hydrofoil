@@ -7,9 +7,12 @@
 # Azure external locations + storage credentials are registered via the REST API
 # at seed time (scripts/azurite-seed.sh), not here.
 
-# In-memory backend: fast, zero-setup, non-persistent. Re-seed after each restart.
+# SQLite backend with an in-memory database: zero-setup, non-persistent (the
+# replacement for the former bespoke in-memory backend). Re-seed after each
+# restart. Use a file path instead of ":memory:" to persist across restarts.
 backend:
-  engine: in-memory
+  engine: sqlite
+  path: ":memory:"
 
 # Metastore-level managed storage root. A managed catalog created without an
 # explicit storage_root inherits this, so managed tables land under the Azurite
