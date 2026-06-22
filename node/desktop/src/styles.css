@@ -1,0 +1,13 @@
+/* Desktop CSS entry.
+ *
+ * Re-exports the UI's stylesheet (theme, base layer, plugins) and — crucially —
+ * tells Tailwind v4 where the markup lives. Tailwind v4 auto-detects content
+ * relative to the build root, which here is node/desktop; it would otherwise
+ * never scan node/ui/src, so none of the utility classes the UI components use
+ * (bg-background, flex, p-4, …) would be generated and the app renders unthemed.
+ *
+ * The UI's own globals.css stays free of any @source so it remains portable; the
+ * desktop is the consumer that knows it's pulling the UI in from a sibling dir.
+ */
+@import "../../ui/src/app/globals.css";
+@source "../../ui/src";

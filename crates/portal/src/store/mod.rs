@@ -10,6 +10,9 @@ pub mod unity;
 pub use memory::MemoryStore;
 pub use unity::UnityVolumeStore;
 
+use bytes::Bytes;
+use futures::stream::BoxStream;
+
 use crate::error::StoreResult;
 use crate::proto::files::v1::{DirectoryEntry, DirectoryMetadata, FileMetadata};
 use crate::proto::tags::v1::{EntityTagAssignment, TagPolicy};
@@ -19,6 +22,33 @@ use crate::proto::tags::v1::{EntityTagAssignment, TagPolicy};
 pub struct Page {
     pub max_results: Option<usize>,
     pub page_token: Option<String>,
+}
+
+/// A lazy stream of a file's bytes — chunks arrive in file order and are never
+/// fully buffered (see [`FileStore::read_file_stream`]).
+pub type ByteStream = BoxStream<'static, StoreResult<Bytes>>;
+
+/// A lazy stream of directory entries (see [`FileStore::list_files_stream`]).
+pub type EntryStream = BoxStream<'static, StoreResult<DirectoryEntry>>;
+
+/// Fine-grained options for a streaming list (see [`FileStore::list_files_opts`]).
+///
+/// This is the low-level listing knob: unlike the unary, hierarchical
+/// [`FileStore::list_directory`] (which rolls subdirectories up as entries and
+/// returns one bounded page), this drives `object_store`'s streaming list
+/// directly.
+#[derive(Debug, Default, Clone)]
+pub struct ListOpts {
+    /// List recursively (flat: every object under the prefix). When `false`, a
+    /// `/` delimiter groups immediate children and rolls subdirectories up as
+    /// directory entries — the hierarchical view.
+    pub recursive: bool,
+    /// Resume listing strictly *after* this absolute path (exclusive). Maps to
+    /// `object_store::ObjectStore::list_with_offset`; lets a caller page through
+    /// a large listing without re-walking what it has already seen.
+    pub start_after: Option<String>,
+    /// Stop after yielding this many entries (applied by the stream consumer).
+    pub max_results: Option<usize>,
 }
 
 /// Apply a simple paging window over an already-collected, sorted vec.
@@ -101,22 +131,78 @@ pub trait FileStore: Send + Sync + 'static {
         content_type: Option<String>,
         contents: Vec<u8>,
     ) -> StoreResult<FileMetadata>;
-    /// Read a (possibly partial) range of a file's bytes.
+
+    /// Stream a file's bytes to storage without buffering the whole payload.
+    ///
+    /// Chunks are consumed from `chunks` in arrival order and uploaded
+    /// incrementally (a multipart upload on cloud backends), so an arbitrarily
+    /// large file is never fully materialized in memory. The natural sink for a
+    /// client-streaming `UploadFile`.
+    ///
+    /// A failed item in `chunks` aborts the upload (best-effort cleanup of any
+    /// already-uploaded parts) and surfaces as the returned `Err`.
+    async fn put_file_stream(
+        &self,
+        path: &str,
+        content_type: Option<String>,
+        chunks: ByteStream,
+    ) -> StoreResult<FileMetadata>;
+    /// Read a (possibly partial) range of a file's bytes into memory.
+    ///
+    /// Buffers the whole range; prefer [`read_file_stream`](Self::read_file_stream)
+    /// for transfers (e.g. `DownloadFile`) so bytes are never fully materialized.
     async fn read_file(
         &self,
         path: &str,
         offset: Option<i64>,
         length: Option<i64>,
     ) -> StoreResult<Vec<u8>>;
+    /// Stream a (possibly partial) range of a file's bytes as ordered chunks,
+    /// without buffering the whole range. Backed by the object store's own
+    /// chunked GET — the natural source for a server-streaming `DownloadFile`.
+    ///
+    /// Errors raised while *opening* the read (not found, bad range, credential
+    /// failure) surface as the returned `Err`; errors mid-transfer surface as a
+    /// failed item in the stream.
+    async fn read_file_stream(
+        &self,
+        path: &str,
+        offset: Option<i64>,
+        length: Option<i64>,
+    ) -> StoreResult<ByteStream>;
     async fn stat_file(&self, path: &str) -> StoreResult<FileMetadata>;
     async fn delete_file(&self, path: &str) -> StoreResult<()>;
 
     async fn create_directory(&self, path: &str) -> StoreResult<DirectoryMetadata>;
     async fn delete_directory(&self, path: &str) -> StoreResult<()>;
     async fn stat_directory(&self, path: &str) -> StoreResult<DirectoryMetadata>;
+    /// Unary, hierarchical, paged listing of a directory's immediate children
+    /// (subdirectories rolled up as entries). Backed by a single
+    /// delimiter-listing call; suitable for a bounded UI page.
     async fn list_directory(
         &self,
         path: &str,
         page: Page,
     ) -> StoreResult<(Vec<DirectoryEntry>, Option<String>)>;
+
+    /// Stream every file under a directory recursively, as a lazy stream of
+    /// entries (no in-memory accumulation of the full listing). Convenience for
+    /// the common "list everything under here" case — equivalent to
+    /// [`list_files_opts`](Self::list_files_opts) with `recursive: true`.
+    async fn list_files_stream(&self, path: &str) -> StoreResult<EntryStream> {
+        self.list_files_opts(
+            path,
+            ListOpts {
+                recursive: true,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Stream directory entries with fine-grained [`ListOpts`] — recursive vs.
+    /// delimited, resume-after-path (`start_after`), and a max-results cap.
+    /// Backed by `object_store`'s streaming list (`list` / `list_with_offset`),
+    /// so it scales to large directories without buffering the whole listing.
+    async fn list_files_opts(&self, path: &str, opts: ListOpts) -> StoreResult<EntryStream>;
 }

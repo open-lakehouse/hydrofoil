@@ -1,3 +1,8 @@
+// Handlers implement the generated ConnectRPC service traits with plain
+// `async fn`, whose concrete return types refine the trait's `impl Encodable +
+// Send` — the idiomatic connect-rust pattern (see `crate::query_service`).
+#![allow(refining_impl_trait)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,6 +11,22 @@ use mimalloc::MiMalloc;
 use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware::{filters, server::OtelGrpcLayer};
 use unitycatalog_object_store::UnityObjectStoreFactory;
+
+/// buffa + connect-rust generated code for `hydrofoil.query.v1` (the
+/// QueryService). Proto source lives in `proto/hydrofoil-query`; regenerate with
+/// `just hydrofoil-gen`.
+mod generated {
+    /// buffa-generated message types (owned structs + zero-copy views).
+    #[path = "buffa/mod.rs"]
+    pub mod buffa;
+    /// connect-rust-generated service traits, dispatchers, and clients.
+    #[path = "connect/mod.rs"]
+    pub mod connect;
+}
+
+/// Convenience re-exports for the generated message and service trees.
+pub(crate) use generated::buffa::hydrofoil::query as proto;
+pub(crate) use generated::connect::hydrofoil::query as services;
 
 mod agent;
 mod catalog;
@@ -18,6 +39,8 @@ mod identity;
 mod lineage;
 mod planner;
 mod policy;
+mod query;
+mod query_service;
 mod server;
 mod session;
 mod stream;

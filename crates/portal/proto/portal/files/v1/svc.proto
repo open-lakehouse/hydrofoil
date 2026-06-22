@@ -109,6 +109,28 @@ message ListDirectoryContentsResponse {
   optional string next_page_token = 2;
 }
 
+// Request for the server-streaming directory listing.
+//
+// Unlike the unary, paged ListDirectoryContents (one bounded page, suitable for
+// a UI), this streams entries lazily so a directory with many files is never
+// fully materialized.
+message ListDirectoryStreamRequest {
+  // Directory whose contents to list.
+  string path = 1;
+
+  // When true, list every file beneath `path` recursively (flat entries, no
+  // subdirectory rollup). When false (default), list immediate children with
+  // subdirectories rolled up as directory entries.
+  bool recursive = 2;
+
+  // Resume listing strictly after this absolute path (exclusive). Lets a caller
+  // page through a large listing without re-walking what it has already seen.
+  optional string start_after = 3;
+
+  // Stop after yielding this many entries. Optional; unset lists everything.
+  optional int32 max_results = 4;
+}
+
 // File and directory operations.
 //
 // Binary transfer uses streaming RPCs: UploadFile is a client stream (chunks in)
@@ -134,8 +156,13 @@ service FilesService {
   // Delete a directory.
   rpc DeleteDirectory(DeleteDirectoryRequest) returns (google.protobuf.Empty);
 
-  // List the contents of a directory.
+  // List the contents of a directory. Unary + paged: returns one bounded page,
+  // suitable for a UI. For a large directory, prefer StreamDirectory.
   rpc ListDirectoryContents(ListDirectoryContentsRequest) returns (ListDirectoryContentsResponse);
+
+  // Stream the contents of a directory. Server-streaming: entries arrive lazily
+  // so a directory with many files is never fully materialized.
+  rpc ListDirectoryStream(ListDirectoryStreamRequest) returns (stream DirectoryEntry);
 
   // Get directory metadata (the proto analog of an HTTP HEAD on a directory).
   rpc GetDirectoryMetadata(GetDirectoryMetadataRequest) returns (DirectoryMetadata);

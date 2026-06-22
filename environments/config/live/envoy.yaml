@@ -28,6 +28,17 @@ static_resources:
                       domains:
                         - "*"
                       routes:
+                        # Hydrofoil ConnectRPC QueryService (server-streaming
+                        # SQL). Connect RPC paths are rooted at the fully-qualified
+                        # service name; plain HTTP POST, no gRPC-web filter needed.
+                        # Disable the per-route timeout — a streamed query runs long.
+                        - match:
+                            prefix: "/hydrofoil.query.v1.QueryService/"
+                          route:
+                            cluster: hydrofoil
+                            timeout: 0s
+                          decorator:
+                            operation: hydrofoil_query
                         # Unity Catalog REST API (Databricks-parallel root path).
                         - match:
                             prefix: "/api/2.1/unity-catalog"
@@ -111,4 +122,18 @@ static_resources:
                     socket_address:
                       address: marimo
                       port_value: 2718
+
+    # Hydrofoil HTTP query surface (POST /query + ConnectRPC QueryService).
+    - name: hydrofoil
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hydrofoil
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: hydrofoil
+                      port_value: 9082
                           

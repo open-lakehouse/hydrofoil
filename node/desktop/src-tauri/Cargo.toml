@@ -1,0 +1,26 @@
+[package]
+name = "open-lakehouse-desktop"
+version = "0.1.0"
+description = "Open Lakehouse desktop shell"
+edition = "2021"
+
+# Standalone workspace: the empty table detaches this crate from the repo-root
+# Cargo workspace (members = ["crates/*"]) so Tauri's webview dependency graph is
+# never pulled into the server/CI builds. Reusing a server crate later is still
+# possible via a path dependency, e.g.:
+#   portal = { path = "../../../crates/portal" }
+# (a path dep works across workspace boundaries without joining the workspace).
+[workspace]
+
+[lib]
+# Tauri v2 mobile-ready convention: the binary defers to this lib's run().
+name = "open_lakehouse_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

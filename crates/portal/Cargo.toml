@@ -12,6 +12,8 @@ buffa-types = { version = "0.7", features = ["json"] }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = "0.8"
+bytes = { workspace = true }
+config = { workspace = true }
 futures = { workspace = true }
 http-body = "1"
 object_store = { workspace = true }
@@ -25,3 +27,4 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tempfile = "3"

@@ -36,6 +36,7 @@ pub mod __buffa {
         reg.register_json_any(super::__DIRECTORY_ENTRY_JSON_ANY);
         reg.register_json_any(super::__LIST_DIRECTORY_CONTENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_DIRECTORY_CONTENTS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__LIST_DIRECTORY_STREAM_REQUEST_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -94,5 +95,9 @@ pub use self::__buffa::view::ListDirectoryContentsRequestOwnedView;
 pub use self::__buffa::view::ListDirectoryContentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ListDirectoryContentsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListDirectoryStreamRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListDirectoryStreamRequestOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

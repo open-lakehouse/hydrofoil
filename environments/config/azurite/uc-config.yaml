@@ -1,0 +1,30 @@
+# Unity Catalog server config for the Azurite credential-vending stack.
+#
+# Started on the HOST from the sibling unitycatalog-rs checkout, e.g.:
+#   cargo run -p unitycatalog-cli -- server --rest --port 8081 \
+#     --config environments/config/azurite/uc-config.yaml
+#
+# Azure external locations + storage credentials are registered via the REST API
+# at seed time (scripts/azurite-seed.sh), not here.
+
+# SQLite backend with an in-memory database: zero-setup, non-persistent (the
+# replacement for the former bespoke in-memory backend). Re-seed after each
+# restart. Use a file path instead of ":memory:" to persist across restarts.
+backend:
+  engine: sqlite
+  path: ":memory:"
+
+# Metastore-level managed storage root. A managed catalog created without an
+# explicit storage_root inherits this, so managed tables land under the Azurite
+# container. Must be covered by a registered external location + credential
+# (scripts/azurite-seed.sh registers azurite://lakehouse), which is how the
+# server vends a SAS to write the table's _delta_log.
+managed_storage_root: "azurite://lakehouse/__managed"
+
+# Dev-only envelope-encryption KEK (identical to the server's built-in default).
+# Required when a config file is loaded. NEVER use outside local development —
+# it wraps the Azurite storage account key held by the vending server.
+encryption:
+  active:
+    id: dev
+    key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=

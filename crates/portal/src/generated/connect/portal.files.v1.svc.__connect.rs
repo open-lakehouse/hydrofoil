@@ -72,6 +72,18 @@ pub type OwnedListDirectoryContentsResponseView = ::buffa::view::OwnedView<
         'static,
     >,
 >;
+///Shorthand for `OwnedView<ListDirectoryStreamRequestView<'static>>`.
+pub type OwnedListDirectoryStreamRequestView = ::buffa::view::OwnedView<
+    crate::generated::buffa::portal::files::v1::__buffa::view::ListDirectoryStreamRequestView<
+        'static,
+    >,
+>;
+///Shorthand for `OwnedView<DirectoryEntryView<'static>>`.
+pub type OwnedDirectoryEntryView = ::buffa::view::OwnedView<
+    crate::generated::buffa::portal::files::v1::__buffa::view::DirectoryEntryView<
+        'static,
+    >,
+>;
 ///Shorthand for `OwnedView<GetDirectoryMetadataRequestView<'static>>`.
 pub type OwnedGetDirectoryMetadataRequestView = ::buffa::view::OwnedView<
     crate::generated::buffa::portal::files::v1::__buffa::view::GetDirectoryMetadataRequestView<
@@ -210,6 +222,28 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<crate::generated::buffa::portal::files::v1::DirectoryEntry>
+for crate::generated::buffa::portal::files::v1::__buffa::view::DirectoryEntryView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::generated::buffa::portal::files::v1::DirectoryEntry>
+for ::buffa::view::OwnedView<
+    crate::generated::buffa::portal::files::v1::__buffa::view::DirectoryEntryView<
+        'static,
+    >,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 /// Full service name for this service.
 pub const FILES_SERVICE_SERVICE_NAME: &str = "portal.files.v1.FilesService";
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `UploadFile` RPC.
@@ -273,6 +307,15 @@ pub const FILES_SERVICE_DELETE_DIRECTORY_SPEC: ::connectrpc::Spec = ::connectrpc
 pub const FILES_SERVICE_LIST_DIRECTORY_CONTENTS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/portal.files.v1.FilesService/ListDirectoryContents",
         ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListDirectoryStream` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const FILES_SERVICE_LIST_DIRECTORY_STREAM_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/portal.files.v1.FilesService/ListDirectoryStream",
+        ::connectrpc::StreamType::ServerStream,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `GetDirectoryMetadata` RPC.
@@ -476,7 +519,8 @@ pub trait FilesService: Send + Sync + 'static {
             > + Send + use<'a, Self>,
         >,
     > + Send;
-    /// List the contents of a directory.
+    /// List the contents of a directory. Unary + paged: returns one bounded page,
+    /// suitable for a UI. For a large directory, prefer StreamDirectory.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
     ///
@@ -497,6 +541,30 @@ pub trait FilesService: Send + Sync + 'static {
             impl ::connectrpc::Encodable<
                 crate::generated::buffa::portal::files::v1::ListDirectoryContentsResponse,
             > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Stream the contents of a directory. Server-streaming: entries arrive lazily
+    /// so a directory with many files is never fully materialized.
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call (until the response stream is returned);
+    /// message fields are read directly on it (zero-copy). Data the
+    /// returned stream needs must be copied out or converted via
+    /// `.to_owned_message()`.
+    fn list_directory_stream(
+        &self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            ::connectrpc::ServiceStream<
+                impl ::connectrpc::Encodable<
+                    crate::generated::buffa::portal::files::v1::DirectoryEntry,
+                > + Send + use<Self>,
+            >,
         >,
     > + Send;
     /// Get directory metadata (the proto analog of an HTTP HEAD on a directory).
@@ -741,6 +809,34 @@ impl<S: FilesService> FilesServiceExt for S {
                 },
             )
             .with_spec(FILES_SERVICE_LIST_DIRECTORY_CONTENTS_SPEC)
+            .route_view_server_stream::<
+                _,
+                _,
+                crate::generated::buffa::portal::files::v1::DirectoryEntry,
+            >(
+                FILES_SERVICE_SERVICE_NAME,
+                "ListDirectoryStream",
+                ::connectrpc::view_streaming_handler_fn({
+                    let svc = ::std::sync::Arc::clone(&self);
+                    move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::generated::buffa::portal::files::v1::__buffa::view::ListDirectoryStreamRequestView<
+                                'static,
+                            >,
+                        >|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_directory_stream(ctx, sreq).await
+                        }
+                    }
+                }),
+            )
+            .with_spec(FILES_SERVICE_LIST_DIRECTORY_STREAM_SPEC)
             .route_view(
                 FILES_SERVICE_SERVICE_NAME,
                 "GetDirectoryMetadata",
@@ -855,6 +951,12 @@ impl<T: FilesService> ::connectrpc::Dispatcher for FilesServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
                         .with_spec(FILES_SERVICE_LIST_DIRECTORY_CONTENTS_SPEC),
+                )
+            }
+            "ListDirectoryStream" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::server_streaming()
+                        .with_spec(FILES_SERVICE_LIST_DIRECTORY_STREAM_SPEC),
                 )
             }
             "GetDirectoryMetadata" => {
@@ -1034,6 +1136,31 @@ impl<T: FilesService> ::connectrpc::Dispatcher for FilesServiceServer<T> {
                         resp
                             .map_body(|s| ::connectrpc::dispatcher::codegen::encode_response_stream::<
                                 crate::generated::buffa::portal::files::v1::DownloadFileResponse,
+                                _,
+                                _,
+                            >(s, format)),
+                    )
+                })
+            }
+            "ListDirectoryStream" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+                    >(request, format)?;
+                    let req: crate::generated::buffa::portal::files::v1::__buffa::view::ListDirectoryStreamRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+                    >::from_parts(&req, &body);
+                    let resp = svc.list_directory_stream(ctx, req).await?;
+                    Ok(
+                        resp
+                            .map_body(|s| ::connectrpc::dispatcher::codegen::encode_response_stream::<
+                                crate::generated::buffa::portal::files::v1::DirectoryEntry,
                                 _,
                                 _,
                             >(s, format)),
@@ -1469,6 +1596,49 @@ where
                 &self.config,
                 FILES_SERVICE_SERVICE_NAME,
                 "ListDirectoryContents",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListDirectoryStream RPC. Sends a request to /portal.files.v1.FilesService/ListDirectoryStream.
+    pub async fn list_directory_stream(
+        &self,
+        request: crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+    ) -> Result<
+        ::connectrpc::client::ServerStream<
+            T::ResponseBody,
+            crate::generated::buffa::portal::files::v1::__buffa::view::DirectoryEntryView<
+                'static,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_directory_stream_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListDirectoryStream RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_directory_stream_with_options(
+        &self,
+        request: crate::generated::buffa::portal::files::v1::ListDirectoryStreamRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::ServerStream<
+            T::ResponseBody,
+            crate::generated::buffa::portal::files::v1::__buffa::view::DirectoryEntryView<
+                'static,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_server_stream(
+                &self.transport,
+                &self.config,
+                FILES_SERVICE_SERVICE_NAME,
+                "ListDirectoryStream",
                 request,
                 options,
             )

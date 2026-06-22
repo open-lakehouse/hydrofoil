@@ -7,10 +7,13 @@ use std::collections::BTreeMap;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bytes::Bytes;
+use futures::StreamExt;
+
 use crate::error::{StoreError, StoreResult};
 use crate::proto::files::v1::{DirectoryEntry, DirectoryMetadata, FileMetadata};
 use crate::proto::tags::v1::{EntityTagAssignment, TagPolicy};
-use crate::store::{FileStore, Page, TagStore, paginate};
+use crate::store::{ByteStream, EntryStream, FileStore, ListOpts, Page, TagStore, paginate};
 
 /// Composite key for an entity tag assignment.
 type AssignmentKey = (String, String, String);
@@ -241,6 +244,22 @@ impl FileStore for MemoryStore {
         Ok(meta)
     }
 
+    async fn put_file_stream(
+        &self,
+        path: &str,
+        content_type: Option<String>,
+        mut chunks: ByteStream,
+    ) -> StoreResult<FileMetadata> {
+        // The in-memory backing has no multipart sink, so collect the stream and
+        // delegate to `put_file`. (The streaming win lives in the cloud-backed
+        // `UnityVolumeStore`; this keeps the trait object usable in tests.)
+        let mut contents = Vec::new();
+        while let Some(chunk) = chunks.next().await {
+            contents.extend_from_slice(&chunk?);
+        }
+        self.put_file(path, content_type, contents).await
+    }
+
     async fn read_file(
         &self,
         path: &str,
@@ -263,6 +282,20 @@ impl FileStore for MemoryStore {
             _ => file.bytes.len(),
         };
         Ok(file.bytes[start..end].to_vec())
+    }
+
+    async fn read_file_stream(
+        &self,
+        path: &str,
+        offset: Option<i64>,
+        length: Option<i64>,
+    ) -> StoreResult<ByteStream> {
+        // The bytes already live in memory, so there's nothing to stream from a
+        // backend: read the range and hand it back as a single chunk. (The trait
+        // contract is satisfied; the streaming benefit is real only for the
+        // object-store-backed `UnityVolumeStore`.)
+        let bytes = self.read_file(path, offset, length).await?;
+        Ok(futures::stream::once(async move { Ok(Bytes::from(bytes)) }).boxed())
     }
 
     async fn stat_file(&self, path: &str) -> StoreResult<FileMetadata> {
@@ -381,6 +414,74 @@ impl FileStore for MemoryStore {
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(paginate(entries, &page))
+    }
+
+    async fn list_files_opts(&self, path: &str, opts: ListOpts) -> StoreResult<EntryStream> {
+        let prefix = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+
+        // The in-memory store has no streaming backend, so collect into a sorted
+        // vec and replay it as a stream — the trait contract holds; the streaming
+        // win is real only for `UnityVolumeStore`.
+        //
+        // Recursive: every key under the prefix, as file entries (object stores
+        // are flat — a recursive listing has no folders). Non-recursive: mirror
+        // `list_with_delimiter` — emit direct-child files, and roll deeper keys up
+        // into their immediate subfolder as a single `is_directory` entry (the
+        // common-prefix / folder view).
+        let mut entries: Vec<DirectoryEntry> = Vec::new();
+        let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        {
+            let files = self.files.read().unwrap();
+            for (file_path, file) in files.iter() {
+                let Some(rest) = file_path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if rest.is_empty() {
+                    continue;
+                }
+                if opts.recursive {
+                    entries.push(DirectoryEntry {
+                        path: file_path.clone(),
+                        is_directory: false,
+                        file_size: file.bytes.len() as i64,
+                        last_modified: file.last_modified,
+                        ..Default::default()
+                    });
+                } else if let Some((dir, _)) = rest.split_once('/') {
+                    // Deeper key → its immediate subfolder is a common prefix.
+                    if seen_dirs.insert(dir.to_string()) {
+                        entries.push(DirectoryEntry {
+                            path: format!("{prefix}{dir}"),
+                            is_directory: true,
+                            ..Default::default()
+                        });
+                    }
+                } else {
+                    // Direct-child file.
+                    entries.push(DirectoryEntry {
+                        path: file_path.clone(),
+                        is_directory: false,
+                        file_size: file.bytes.len() as i64,
+                        last_modified: file.last_modified,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // `start_after` resumes strictly after an absolute path (exclusive).
+        if let Some(after) = opts.start_after.as_deref() {
+            entries.retain(|e| e.path.as_str() > after);
+        }
+        if let Some(n) = opts.max_results {
+            entries.truncate(n);
+        }
+        Ok(futures::stream::iter(entries.into_iter().map(Ok)).boxed())
     }
 }
 
@@ -593,6 +694,102 @@ mod tests {
             store.stat_directory("/empty").await,
             Err(StoreError::NotFound(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn read_file_stream_returns_the_range() {
+        let store = MemoryStore::new();
+        store
+            .put_file("/data/a.txt", None, b"hello world".to_vec())
+            .await
+            .unwrap();
+
+        // Whole file.
+        let mut s = store
+            .read_file_stream("/data/a.txt", None, None)
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        while let Some(chunk) = s.next().await {
+            buf.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(buf, b"hello world");
+
+        // Offset + length.
+        let mut s = store
+            .read_file_stream("/data/a.txt", Some(6), Some(5))
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        while let Some(chunk) = s.next().await {
+            buf.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(buf, b"world");
+    }
+
+    #[tokio::test]
+    async fn list_files_stream_is_recursive() {
+        let store = MemoryStore::new();
+        for p in ["/d/a.txt", "/d/sub/b.txt", "/d/sub/deep/c.txt"] {
+            store.put_file(p, None, b"x".to_vec()).await.unwrap();
+        }
+
+        let mut s = store.list_files_stream("/d").await.unwrap();
+        let mut paths = Vec::new();
+        while let Some(e) = s.next().await {
+            paths.push(e.unwrap().path);
+        }
+        // Recursive: every file under the prefix, no subdirectory rollup.
+        assert_eq!(paths, vec!["/d/a.txt", "/d/sub/b.txt", "/d/sub/deep/c.txt"]);
+    }
+
+    #[tokio::test]
+    async fn list_files_opts_non_recursive_offset_and_cap() {
+        let store = MemoryStore::new();
+        for p in ["/d/a.txt", "/d/b.txt", "/d/c.txt", "/d/sub/deep.txt"] {
+            store.put_file(p, None, b"x".to_vec()).await.unwrap();
+        }
+
+        // Non-recursive: direct-child files plus the immediate subfolder rolled
+        // up as a single `is_directory` entry (the common-prefix / folder view).
+        let mut s = store
+            .list_files_opts("/d", ListOpts::default())
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        while let Some(e) = s.next().await {
+            entries.push(e.unwrap());
+        }
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["/d/a.txt", "/d/b.txt", "/d/c.txt", "/d/sub"]);
+        // The subfolder is flagged as a directory; the files are not.
+        let sub = entries.iter().find(|e| e.path == "/d/sub").unwrap();
+        assert!(sub.is_directory, "subfolder should be a directory entry");
+        assert!(
+            entries
+                .iter()
+                .filter(|e| e.path != "/d/sub")
+                .all(|e| !e.is_directory),
+            "files must not be directories"
+        );
+
+        // `start_after` resumes strictly after a path; `max_results` caps.
+        let mut s = store
+            .list_files_opts(
+                "/d",
+                ListOpts {
+                    recursive: false,
+                    start_after: Some("/d/a.txt".into()),
+                    max_results: Some(1),
+                },
+            )
+            .await
+            .unwrap();
+        let mut paths = Vec::new();
+        while let Some(e) = s.next().await {
+            paths.push(e.unwrap().path);
+        }
+        assert_eq!(paths, vec!["/d/b.txt"]);
     }
 
     #[test]

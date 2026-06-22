@@ -29,8 +29,13 @@ services:
         target: /etc/hydrofoil/config.toml
     ports:
       - "${HYDROFOIL_PORT:-50051}:50051"
+      - "${HYDROFOIL_HTTP_PORT:-9082}:9082"
     expose:
       - "50051"
+      # HTTP query surface: POST /query (buffered) + the ConnectRPC QueryService
+      # (server-streaming SQL). Envoy routes /hydrofoil.query.v1.QueryService/*
+      # here (see docker/envoy/envoy.yaml).
+      - "9082"
     # No healthcheck: the distroless runtime has no shell, curl, or wget, so the
     # CMD-SHELL probes the other services use can't run here. Validate liveness
     # from the host instead with a Flight SQL client against

@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use connectrpc::client::{ClientConfig, HttpClient};
-use portal::proto::files::v1::{DownloadFileRequest, UploadFileRequest};
+use portal::proto::files::v1::{
+    DownloadFileRequest, ListDirectoryStreamRequest, UploadFileRequest,
+};
 use portal::proto::tags::v1::{CreateTagPolicyRequest, TagPolicy};
 use portal::service::AppState;
 use portal::services::files::v1::FilesServiceClient;
@@ -106,4 +108,49 @@ async fn streaming_upload_then_download() {
         downloaded.extend_from_slice(&msg.to_owned_message().chunk);
     }
     assert_eq!(downloaded, body);
+}
+
+#[tokio::test]
+async fn stream_directory_lists_entries() {
+    let base = spawn_server().await;
+    let client = files_client(&base);
+
+    // Upload a few files under a common directory.
+    for name in ["a.txt", "b.txt", "sub/c.txt"] {
+        let requests = vec![
+            UploadFileRequest {
+                path: format!("/data/dir/{name}"),
+                ..Default::default()
+            },
+            UploadFileRequest {
+                chunk: b"x".to_vec(),
+                ..Default::default()
+            },
+        ];
+        client.upload_file(requests).await.unwrap();
+    }
+
+    // Server-streaming recursive list: collect every entry beneath the dir.
+    let mut stream = client
+        .list_directory_stream(ListDirectoryStreamRequest {
+            path: "/data/dir".into(),
+            recursive: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut paths = Vec::new();
+    while let Some(msg) = stream.message().await.unwrap() {
+        paths.push(msg.to_owned_message().path);
+    }
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec![
+            "/data/dir/a.txt".to_string(),
+            "/data/dir/b.txt".to_string(),
+            "/data/dir/sub/c.txt".to_string(),
+        ]
+    );
 }

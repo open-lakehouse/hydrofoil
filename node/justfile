@@ -18,6 +18,17 @@ ui-dev:
 ui-build:
     npm run build --prefix ui
 
+# Run the Tauri desktop app in dev (boots the desktop Vite server + native
+# window). Proxies /api to GATEWAY_URL (default http://localhost:9080, the Envoy
+# gateway). For a no-gateway, UC-only setup use `just dev-desktop` from the repo
+# root, which starts a local UC server and points the proxy at it.
+desktop-dev:
+    npm run tauri:dev --prefix desktop
+
+# Build the Tauri desktop app bundle
+desktop-build:
+    npm run tauri:build --prefix desktop
+
 # Regenerate the Unity Catalog OpenAPI TypeScript client
 gen-api:
     npm run gen:api --prefix uc-client

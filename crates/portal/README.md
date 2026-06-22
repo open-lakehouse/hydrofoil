@@ -25,8 +25,33 @@ they are **not** Unity Catalog APIs. Here they live as standalone Connect APIs.
   later.
 - **`src/service/`** — `AppState` implements the generated service traits, delegating
   to the store.
-- **`src/main.rs`** — serves all services on one axum router via
-  `Router::into_axum_service()`.
+- **`src/config.rs`** — layered configuration (defaults → file → `PORTAL__*`
+  env), matching the other workspace services.
+- **`src/main.rs`** — loads the config, builds the stores, and serves all
+  services on one axum router via `Router::into_axum_service()`.
+
+## Configuration
+
+Like hydrofoil / lineage-service, portal is configured by layering (lowest
+precedence first): struct defaults, an optional config file, then `PORTAL__*`
+environment overrides. The config file path is the binary's first positional
+argument, or the `PORTAL_CONFIG` env var; with neither, it runs on defaults.
+
+```toml
+# portal.toml
+port = 8080            # PORTAL__PORT
+
+[files]
+backend = "memory"     # "memory" (default) or "unity"; PORTAL__FILES__BACKEND
+# For backend = "unity", the UC REST base URL (must end in /api/2.1/unity-catalog/).
+# endpoint = "http://unity-catalog:8081/api/2.1/unity-catalog/"
+# region   = "us-east-1"
+```
+
+The Unity endpoint/token/region are also read from the bare `UNITY_ENDPOINT`,
+`UNITY_TOKEN`, and `UNITY_REGION` (or `AWS_REGION`) env vars — the token is a
+secret and is never read from the file. Setting `UNITY_ENDPOINT` selects the
+`unity` backend even if the file leaves `backend` at its `memory` default.
 
 ## Code generation
 
@@ -50,8 +75,10 @@ When connect-rust ships a remote BSR plugin, switch the `local:` entries in
 ## Run it
 
 ```sh
-PORTAL_PORT=8080 cargo run -p portal
-curl localhost:8080/health      # -> OK
+cargo run -p portal                       # defaults: :8080, in-memory files
+cargo run -p portal -- portal.toml        # from a config file
+PORTAL__PORT=9000 cargo run -p portal     # env override
+curl localhost:8080/health                # -> OK
 ```
 
 Connect's unary RPCs are JSON-over-POST, so they are directly curl-able:

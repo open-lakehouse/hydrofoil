@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+// Hydrofoil's SQL query surface for web/UI clients.
+//
+// Flight SQL (gRPC) is the canonical query service but is impractical from a
+// browser. This ConnectRPC service serves the same engine path over the Connect
+// protocol (plain HTTP POST, server-streaming over fetch — no gRPC-web filter),
+// so a web UI can submit arbitrary SQL and render results progressively.
+//
+// Result framing: `RunQuery` server-streams `RunQueryResponse` messages, one per
+// produced record batch. Each message's `arrow_ipc` is a SELF-CONTAINED Arrow
+// IPC stream (schema message + one batch + EOS), so each message decodes
+// independently (`tableFromIPC`) and the client concatenates rows. The first
+// batch's bytes carry the schema; a query with no rows still yields exactly one
+// schema-only message.
+package hydrofoil.query.v1;
+
+// A single SQL query to run.
+message RunQueryRequest {
+  // The SQL to execute. Required.
+  string sql = 1;
+
+  // Optional row cap. Clamped server-side to the server's max limit; when
+  // omitted the server applies its default limit. Mirrors POST /query.
+  optional uint32 limit = 2;
+
+  // Optional session default namespace for bare table names. Fully-qualified
+  // `catalog.schema.table` references in `sql` resolve regardless. Accepted for
+  // parity with POST /query; bare-name defaulting is not yet wired.
+  optional string catalog = 3;
+  optional string schema = 4;
+}
+
+// One chunk of the result stream: a self-contained Arrow IPC stream for one
+// record batch (see the service docs for framing).
+message RunQueryResponse {
+  // Arrow IPC stream bytes for one record batch (schema + batch + EOS). The
+  // first message's bytes carry the schema, so an empty result still yields one
+  // schema-only message.
+  bytes arrow_ipc = 1;
+
+  // Rows in this chunk, so the client can show progress without decoding.
+  uint64 num_rows = 2;
+}
+
+// SQL query execution for web/UI clients.
+service QueryService {
+  // Run a SQL query, streaming Arrow IPC chunks (one per record batch).
+  rpc RunQuery(RunQueryRequest) returns (stream RunQueryResponse);
+}

@@ -2,6 +2,8 @@ version: v2
 modules:
   - path: proto/hydrofoil-policy
     name: buf.build/hydrofoil/policy
+  - path: proto/hydrofoil-query
+    name: buf.build/hydrofoil/query
   - path: proto/delta-connect
     name: buf.build/delta/connect
   - path: proto/spark-connect

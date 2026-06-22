@@ -2,6 +2,10 @@
 _default:
     just --list
 
+# node/ workspace recipes (UI, uc-client, desktop). Run e.g. `just node ui-dev`
+# or `just node desktop-dev`; list them with `just node --list`.
+mod node
+
 # run the hydrofoil server on the host against the local config (which points at
 # the compose stack's host-published ports). Override the config path with
 # `HYDROFOIL_CONFIG=… just hydro`, or individual fields with `HYDROFOIL__*` env
@@ -37,6 +41,15 @@ scratch:
 # UC_PORT / UI_PORT. Both servers are torn down on exit.
 dev-ui:
     ./scripts/dev-ui.sh
+
+# run the Tauri desktop app against a locally-built Unity Catalog server — the
+# same backend as `dev-ui`, wrapped in the native window. Starts the `uc` server
+# (in-memory, REST on :8080), waits for it, then runs `tauri dev` (desktop Vite on
+# :3003) with its `/api` proxy pointed straight at UC (no Envoy gateway). Reuses a
+# UC server already on the port. Override with UC_REPO / UC_PORT. UC + Tauri are
+# torn down on exit.
+dev-desktop:
+    ./scripts/dev-desktop.sh
 
 # mint per-user UC tokens for the demo notebooks and write notebooks/.env.
 # For each email in UC_DEMO_USERS (default alice@example.com,bob@example.com),
@@ -85,6 +98,13 @@ build_policy:
 portal-gen:
     cd crates/portal && buf generate
     cargo fmt -p portal
+
+# Regenerate hydrofoil's QueryService buffa message types + connect-rust stubs.
+# Proto source lives in proto/hydrofoil-query (root tree); codegen config is the
+# crate-local crates/hydrofoil/buf.gen.yaml. Same plugins as `portal-gen`.
+hydrofoil-gen:
+    cd crates/hydrofoil && buf generate
+    cargo fmt -p hydrofoil
 
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \
