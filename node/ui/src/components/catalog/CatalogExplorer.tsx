@@ -1,4 +1,3 @@
-import { Database } from "lucide-react";
 import { useEffect } from "react";
 
 import { StorageTree } from "@/components/storage/StorageTree";
@@ -25,16 +24,6 @@ function ExplorerLayout() {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] flex-col">
-      <div className="border-b px-6 py-4">
-        <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <Database className="h-5 w-5" />
-          Unity Catalog
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Browse catalogs, schemas, tables, volumes, functions, and models.
-        </p>
-      </div>
-
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
         <div className="flex min-h-0 flex-col border-r bg-sidebar">
           <CatalogTree />
