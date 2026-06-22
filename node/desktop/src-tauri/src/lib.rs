@@ -401,6 +401,39 @@ fn env_uc_dir(id: &str) -> std::path::PathBuf {
     app_data_dir().join("envs").join(id).join("uc")
 }
 
+/// The local "home" volume dir for an environment: `.open-lakehouse/envs/<id>/home`.
+/// Backs the editor's always-available home volume (served as `/home/...`).
+fn env_home_dir(id: &str) -> std::path::PathBuf {
+    app_data_dir().join("envs").join(id).join("home")
+}
+
+/// Seed a fresh home volume with a starter `queries/` dir + a README so the editor
+/// is never empty on first open. Idempotent: skips when the dir already has any
+/// contents (so it never clobbers user files across restarts). Best-effort —
+/// failures are logged, not fatal.
+fn seed_home_dir(home: &std::path::Path) {
+    let non_empty = std::fs::read_dir(home)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if non_empty {
+        return;
+    }
+    let write = |rel: &str, body: &str| {
+        let path = home.join(rel);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&path, body) {
+            eprintln!("[home] seed {path:?} failed: {e}");
+        }
+    };
+    write(
+        "queries/example.sql",
+        "SELECT * FROM main.default.users\nORDER BY events DESC\nLIMIT 10;\n",
+    );
+    write("README.md", "# Home\n\nLocal scratch space for SQL and notes.\n");
+}
+
 /// One environment: a named bundle of service configuration. This iteration
 /// carries only an id + display name; the UC config is derived from the id's
 /// directory.
@@ -635,8 +668,21 @@ async fn activate_endpoint(
     id: Option<String>,
     unity_endpoint: Option<String>,
 ) -> Result<(), String> {
+    // A real environment gets a local home volume under its data dir; the
+    // synthetic `__external__` escape-hatch id has no managed dir, so no home.
+    let home_root = match id.as_deref() {
+        Some(env_id) if env_id != "__external__" => {
+            let home = env_home_dir(env_id);
+            std::fs::create_dir_all(&home).map_err(|e| format!("creating {home:?}: {e}"))?;
+            seed_home_dir(&home);
+            Some(home)
+        }
+        _ => None,
+    };
+
     let cfg = HostConfig {
         unity_endpoint: unity_endpoint.clone(),
+        home_root,
         ..Default::default()
     };
     let hosted = desktop_host::build(cfg)
@@ -680,6 +726,8 @@ fn create_environment(name: String) -> Result<Environment, String> {
     let id = allocate_env_id(&name, &envs);
     let uc_dir = env_uc_dir(&id);
     std::fs::create_dir_all(&uc_dir).map_err(|e| format!("creating {uc_dir:?}: {e}"))?;
+    let home_dir = env_home_dir(&id);
+    std::fs::create_dir_all(&home_dir).map_err(|e| format!("creating {home_dir:?}: {e}"))?;
     let env = Environment { id, name };
     envs.push(env.clone());
     write_environments(&envs)?;

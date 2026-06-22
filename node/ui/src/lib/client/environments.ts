@@ -16,6 +16,10 @@ export interface EnvironmentHost {
   /** Whether the host supports multiple environments / a selection step. When
    *  false, the UI skips the picker entirely (web build). */
   readonly managed: boolean;
+  /** Whether the host provides a local "home" volume (a `/home` file tree backed
+   *  by local disk). True on desktop; false on the web build, which has no local
+   *  disk — the editor then offers only Unity Catalog volumes. */
+  readonly hasHome: boolean;
   /** List the configured environments. */
   list(): Promise<Environment[]>;
   /** The id of the currently-active environment (services bound), or null when
@@ -34,6 +38,7 @@ export interface EnvironmentHost {
 // reaches its services over the network regardless, so there is nothing to pick.
 const defaultHost: EnvironmentHost = {
   managed: false,
+  hasHome: false,
   list: async () => [{ id: "default", name: "Default" }],
   active: async () => "default",
   create: async () => ({ id: "default", name: "Default" }),

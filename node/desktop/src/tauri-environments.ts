@@ -13,6 +13,7 @@ import type { Environment, EnvironmentHost } from "@/lib/client/environments";
 
 export const tauriEnvironmentHost: EnvironmentHost = {
   managed: true,
+  hasHome: true,
   list: () => invoke<Environment[]>("list_environments"),
   active: () => invoke<string | null>("active_environment"),
   create: (name: string) => invoke<Environment>("create_environment", { name }),

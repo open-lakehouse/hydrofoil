@@ -11,13 +11,16 @@
 //! is its REST base URL (a Tauri sidecar, or a dev UC). Lineage and Cedar policy
 //! are left at their no-op defaults for local desktop use.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use connectrpc::Router;
 use portal::service::AppState;
-use portal::store::{FileStore, MemoryStore, TagStore, UnityVolumeStore};
+use portal::store::{
+    FileStore, LocalFileStore, MemoryStore, RoutingFileStore, TagStore, UnityVolumeStore,
+};
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use hydrofoil::{FlightSqlServiceImpl, QueryAppState};
@@ -41,6 +44,12 @@ pub struct HostConfig {
     pub unity_token: Option<String>,
     /// AWS region override for vended credentials.
     pub unity_region: Option<String>,
+    /// Root directory for the local "home" volume. When `Some`, the file store is
+    /// a [`RoutingFileStore`] that serves `/home/...` from a [`LocalFileStore`]
+    /// rooted here and `/Volumes/...` from Unity Catalog. When `None` (e.g. the
+    /// web/server build, which has no local disk), only the volumes store is used
+    /// and there is no home volume.
+    pub home_root: Option<PathBuf>,
     /// Idle session TTL for the query engine's session store.
     pub session_ttl_secs: u64,
     /// Default row limit applied when a query omits one.
@@ -55,6 +64,7 @@ impl Default for HostConfig {
             unity_endpoint: None,
             unity_token: None,
             unity_region: None,
+            home_root: None,
             // Mirrors hydrofoil's config defaults.
             session_ttl_secs: 1800,
             query_default_limit: 1_000,
@@ -95,14 +105,32 @@ pub async fn build(cfg: HostConfig) -> anyhow::Result<Hosted> {
     Ok(Hosted { tags, query, files })
 }
 
-/// Build the [`FileStore`]: Unity Catalog volumes when an endpoint is configured,
-/// otherwise an in-memory store so the host still runs with no external deps.
+/// Build the [`FileStore`].
+///
+/// The `/Volumes/...` store is Unity Catalog volumes when an endpoint is
+/// configured, otherwise an in-memory store so the host still runs with no
+/// external deps. When `home_root` is set, the result is wrapped in a
+/// [`RoutingFileStore`] that additionally serves the local `/home/...` volume —
+/// so home works even when Unity Catalog is disabled.
 async fn files_store(cfg: &HostConfig) -> anyhow::Result<Arc<dyn FileStore>> {
+    let volumes = volumes_store(cfg).await?;
+    let Some(home_root) = cfg.home_root.as_ref() else {
+        return Ok(volumes);
+    };
+    let home = LocalFileStore::new(home_root)
+        .with_context(|| format!("creating home volume at {home_root:?}"))?;
+    tracing::info!("home volume backed by local dir ({home_root:?})");
+    Ok(Arc::new(RoutingFileStore::new(Arc::new(home), volumes)))
+}
+
+/// The `/Volumes/...` backing store: Unity Catalog volumes when an endpoint is
+/// configured, else an in-memory store.
+async fn volumes_store(cfg: &HostConfig) -> anyhow::Result<Arc<dyn FileStore>> {
     let Some(endpoint) = cfg.unity_endpoint.as_deref().filter(|e| !e.is_empty()) else {
-        tracing::info!("files backed by in-memory store (set unity_endpoint to use UC volumes)");
+        tracing::info!("volumes backed by in-memory store (set unity_endpoint to use UC volumes)");
         return Ok(Arc::new(MemoryStore::new()));
     };
-    tracing::info!("files backed by Unity Catalog volumes ({endpoint})");
+    tracing::info!("volumes backed by Unity Catalog ({endpoint})");
     let factory = unity_factory(cfg).await?;
     Ok(Arc::new(UnityVolumeStore::new(Arc::new(factory))))
 }

@@ -1,4 +1,9 @@
-import { createLazyRoute } from "@tanstack/react-router";
+import {
+  createLazyRoute,
+  useNavigate,
+  useSearch,
+} from "@tanstack/react-router";
+import { useCallback, useMemo, useState } from "react";
 import {
   EditorSessionProvider,
   useEditorSession,
@@ -10,15 +15,20 @@ import { MonacoHost } from "@/components/editor/MonacoHost";
 import { ResultsPane } from "@/components/editor/ResultsPane";
 import { TabStrip } from "@/components/editor/TabStrip";
 import { useTabPersistence } from "@/components/editor/useTabPersistence";
-import { Button } from "@/components/ui/button";
-import { useInvalidateDirectory } from "@/lib/files/queries";
-import { connectFileStore } from "@/lib/files/store";
+import { VolumeSwitcher } from "@/components/editor/VolumeSwitcher";
+import { getEnvironmentHost } from "@/lib/client/environments";
+import {
+  HOME_VOLUME,
+  loadAddedVolumes,
+  persistAddedVolumes,
+  type Volume,
+} from "@/lib/editor/volumes";
 
 export const Route = createLazyRoute("/editor")({
   component: EditorPage,
 });
 
-const ROOT = "/work";
+const FROM = "/editor";
 
 function EditorPage() {
   return (
@@ -32,55 +42,73 @@ function EditorPage() {
 
 function Workspace() {
   const { tabs, activeId, openFile } = useEditorSession();
-  const invalidate = useInvalidateDirectory();
   useTabPersistence();
   const activeTab = tabs.find((t) => t.id === activeId);
   const isSql = activeTab?.language === "sql";
   const isMarkdown = activeTab?.language === "markdown";
 
-  async function seed() {
-    const enc = (s: string) => new TextEncoder().encode(s);
-    // The memory store's unary listing only surfaces explicitly-created dirs.
-    await connectFileStore.createDir(ROOT);
-    await connectFileStore.createDir(`${ROOT}/queries`);
-    await connectFileStore.writeFile(
-      `${ROOT}/queries/top_users.sql`,
-      enc(
-        "SELECT * FROM main.default.users\nORDER BY events DESC\nLIMIT 10;\n",
-      ),
-      { contentType: "text/plain" },
-    );
-    await connectFileStore.writeFile(
-      `${ROOT}/queries/daily.sql`,
-      enc("SELECT date, count(*) FROM events GROUP BY 1;\n"),
-      { contentType: "text/plain" },
-    );
-    await connectFileStore.writeFile(
-      `${ROOT}/README.md`,
-      enc("# Work\n\nScratch SQL and notes.\n"),
-      { contentType: "text/markdown" },
-    );
-    await Promise.all([invalidate(ROOT), invalidate(`${ROOT}/queries`)]);
-  }
+  // The set of selectable volumes: the local Home (when the host provides it,
+  // i.e. desktop) plus any UC volumes the user has browsed to (persisted).
+  const hasHome = getEnvironmentHost().hasHome;
+  const [added, setAdded] = useState<Volume[]>(() => loadAddedVolumes());
+  const volumes = useMemo(
+    () => (hasHome ? [HOME_VOLUME, ...added] : added),
+    [hasHome, added],
+  );
+
+  // The active volume's root lives in the URL (`?volume=`), defaulting to the
+  // first available volume. The FileTree re-roots whenever this changes.
+  const navigate = useNavigate({ from: FROM });
+  const urlVolume = useSearch({ from: FROM, select: (s) => s.volume });
+  const activeRoot = urlVolume ?? volumes[0]?.root;
+
+  const selectVolume = useCallback(
+    (root: string) => {
+      navigate({
+        search: (prev) => ({ ...prev, volume: root }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
+  const addVolume = useCallback(
+    (volume: Volume) => {
+      setAdded((prev) => {
+        const next = prev.some((v) => v.id === volume.id)
+          ? prev
+          : [...prev, volume];
+        persistAddedVolumes(next);
+        return next;
+      });
+      selectVolume(volume.root);
+    },
+    [selectVolume],
+  );
 
   return (
     <div className="flex h-full">
       <div className="flex w-64 shrink-0 flex-col border-r">
-        <FileTree
-          root={ROOT}
-          activePath={activeId ?? undefined}
-          onOpenFile={(path) => void openFile(path)}
+        <VolumeSwitcher
+          volumes={volumes}
+          activeRoot={activeRoot}
+          onSelect={selectVolume}
+          onAdd={addVolume}
         />
-        <div className="border-t p-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full text-xs"
-            onClick={seed}
-          >
-            Seed sample files
-          </Button>
-        </div>
+        {activeRoot ? (
+          <FileTree
+            // Re-key on the root so the tree's expansion/local state resets when
+            // switching volumes (the cache is keyed per-path regardless).
+            key={activeRoot}
+            root={activeRoot}
+            activePath={activeId ?? undefined}
+            onOpenFile={(path) => void openFile(path)}
+          />
+        ) : (
+          <div className="p-4 text-xs text-muted-foreground">
+            No volume selected. Add a volume to start browsing files.
+          </div>
+        )}
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <TabStrip />

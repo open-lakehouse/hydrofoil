@@ -4,10 +4,14 @@
 //! The trait surface is intentionally small and purpose-built — the generated
 //! proto messages are used directly as the stored values.
 
+pub mod local;
 pub mod memory;
+pub mod routing;
 pub mod unity;
 
+pub use local::LocalFileStore;
 pub use memory::MemoryStore;
+pub use routing::RoutingFileStore;
 pub use unity::UnityVolumeStore;
 
 use bytes::Bytes;
