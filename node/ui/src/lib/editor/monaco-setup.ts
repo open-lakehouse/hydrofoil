@@ -34,6 +34,8 @@ import PgSQLWorker from "monaco-sql-languages/esm/languages/pgsql/pgsql.worker?w
 // they only touch the language registry, not workers.
 import "monaco-sql-languages/esm/languages/pgsql/pgsql.contribution";
 import "monaco-sql-languages/esm/languages/generic/generic.contribution";
+import { LanguageIdEnum, setupLanguageFeatures } from "monaco-sql-languages";
+import { registerSqlCompletion } from "./catalogCompletion";
 
 let done = false;
 
@@ -64,4 +66,14 @@ export function ensureMonacoSetup(): void {
 
   // Use the bundled monaco rather than the CDN default.
   loader.config({ monaco });
+
+  // Disable monaco-sql-languages' worker-based completion + diagnostics: their
+  // worker (editor.createWebWorker with a module id) doesn't load under Vite, so
+  // they fail with "Missing requestHandler". We keep only the pgsql tokenizer
+  // (highlighting) and provide completion ourselves on the main thread.
+  setupLanguageFeatures(LanguageIdEnum.PG, {
+    completionItems: false,
+    diagnostics: false,
+  });
+  registerSqlCompletion(monaco);
 }
