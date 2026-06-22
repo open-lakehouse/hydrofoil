@@ -3,7 +3,7 @@ import {
   createRootRouteWithContext,
   createRoute,
 } from "@tanstack/react-router";
-import { AppShell } from "@/components/AppShell";
+import { EnvironmentGate } from "@/components/EnvironmentGate";
 import { prefetchCatalogs } from "@/lib/uc/queries";
 
 export interface RouterContext {
@@ -11,7 +11,7 @@ export interface RouterContext {
 }
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
-  component: AppShell,
+  component: EnvironmentGate,
 });
 
 const indexRoute = createRoute({
