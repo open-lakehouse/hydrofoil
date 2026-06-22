@@ -21,7 +21,7 @@
 # The SAME SQL returns DIFFERENT results per principal — that's the whole point.
 #
 # Prerequisites (this stage genuinely needs the live governed stack):
-#   - Hydrofoil running with the demo policy + governance feature (see policy_demo.py).
+#   - Hydrofoil running with the demo policy + governance feature.
 #   - The `caspers` catalog loaded (caspers_load.py).
 #   - Per-user UC tokens in notebooks/.env (just mint-demo-tokens) for the vendor /
 #     finance principals; emails set via UC_DEMO_USERS.
@@ -218,7 +218,7 @@ def _(mo):
         bad happened — *this time*. The fix isn't a policy memo; it's getting the
         long-lived keys out of human hands entirely. The catalog **vends short-lived,
         scoped STS credentials** per table, per identity — there are no static keys to
-        leak (this is exactly how `caspers_load.py` / `uc_managed.py` write to S3: no
+        leak (this is exactly how `caspers_load.py` writes to S3: no
         access/secret keys, UC vends temporary creds the connector injects).
         """
     ).left()

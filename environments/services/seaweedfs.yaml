@@ -2,7 +2,7 @@
 # Bucket list is rendered from the aggregated `stack.s3_buckets` list at scaffold time.
 services:
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.35
     restart: unless-stopped
     profiles: [svc, full]
     # -s3.config registers an S3 identity so SIGNED requests (e.g. from Spark/hadoop-aws)
@@ -24,7 +24,7 @@ services:
       start_period: 5s
 
   seaweedfs-init:
-    image: amazon/aws-cli:latest
+    image: amazon/aws-cli:2.35.9
     restart: on-failure
     profiles: [svc, full]
     depends_on:

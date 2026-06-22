@@ -9,7 +9,7 @@
 # with the well-known emulator account `devstoreaccount1`.
 services:
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
     restart: unless-stopped
     # Bind the blob service to all interfaces so it is reachable from the host
     # (where hydrofoil + the UC server run via `just hydro` / `cargo run`).
@@ -47,7 +47,7 @@ services:
 
   # One-shot: create the container the seeded external location points at.
   azurite-init:
-    image: mcr.microsoft.com/azure-cli:latest
+    image: mcr.microsoft.com/azure-cli:2.87.0
     restart: on-failure
     depends_on:
       azurite:

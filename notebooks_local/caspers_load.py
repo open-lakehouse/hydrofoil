@@ -19,8 +19,7 @@
 #   2. creates the `caspers` catalog + bronze/silver/gold/ml schemas via the UC REST
 #      API (UCSingleCatalog has no CREATE CATALOG/SCHEMA in Spark SQL), and
 #   3. writes every frame as a UC-MANAGED Delta table (no LOCATION; the catalogManaged
-#      feature flag declared) on the catalog's storage_root — the pattern proven in
-#      notebooks/uc_managed.py.
+#      feature flag declared) on the catalog's storage_root.
 #
 # Every Spark write runs with the OpenLineage listener wired to our lineage service
 # (namespace `caspers-load`), so the loaded tables become lineage dataset entities

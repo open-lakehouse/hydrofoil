@@ -40,13 +40,12 @@
 #          just env-up       # lineage-service on :8091, Marquez web on :3000
 #          just hydro        # host hydrofoil Flight SQL on :50052
 #   2. The S3-backed demo table demo.managed_demo.events resolvable via Unity
-#      Catalog (the same table duckdb_flight.py queries), plus a writable
-#      target table:
+#      Catalog, plus a writable target table:
 #          demo.managed_demo.events_summary (event_type STRING,
 #                                            occurrences BIGINT,
 #                                            last_id BIGINT)
-#      Create it the same way the demo schema was seeded (e.g. the
-#      uc_managed.py Spark flow against the same UC). The connecting principal
+#      Create it the same way the demo schema was seeded (a UC-managed Delta
+#      Spark write against the same UC). The connecting principal
 #      must be in the table's `writers` for the Cedar `write_table` policy.
 #
 # Run on the host:

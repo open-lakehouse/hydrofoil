@@ -70,7 +70,7 @@ def _(mo):
 def _():
     import os
 
-    # Catalog / table coordinates (mirror notebooks/uc_managed.py).
+    # Catalog / table coordinates.
     UC_URI = "http://unity-catalog:8081"
     CATALOG = "demo"
     SCHEMA = "lineage_demo"

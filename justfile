@@ -29,9 +29,9 @@ lineage-deployed:
     RUST_LOG="${RUST_LOG:-lineage_service=debug}" \
     cargo run -p lineage-service -- "${LINEAGE_CONFIG:-environments/config/deployed/lineage-service.toml}"
 
-# run marimo notebook server
+# open the marimo notebook editor on the demo notebooks
 scratch:
-    uvx --directory notebooks/ marimo edit --sandbox duckdb_flight.py
+    uvx --directory notebooks/ marimo edit --sandbox stage1_marketplace.py
 
 # run the node/ UI (Vite, :3002) against a locally-built Unity Catalog server
 # from the sibling unitycatalog-rs checkout. Builds + starts the `uc` server
@@ -112,8 +112,9 @@ push_policy:
       config/policies/lakehouse.cedarschema:application/vnd.cedar.schema.v1 \
       config/policies/lakhouse.entities.json:application/vnd.cedar.entities.v1
 
-# push the policy_demo.py policy set (gate + row filter + column mask) to the local
-# OCI registry. Point hydrofoil at it with HYDROFOIL_POLICY_REF=localhost:10100/hydrofoil/demo-policy:latest
+# push the demo policy set (gate + row filter + column mask) to the local OCI
+# registry (zot on :10100 — see environments/services/zot.yaml). Point hydrofoil
+# at it with HYDROFOIL_POLICY_REF=localhost:10100/hydrofoil/demo-policy:latest
 push-demo-policy:
     oras push localhost:10100/hydrofoil/demo-policy:latest \
       config/policies/demo.cedar:application/vnd.cedar.policyset.v1 \
