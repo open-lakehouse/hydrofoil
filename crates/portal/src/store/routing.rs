@@ -47,7 +47,11 @@ impl RoutingFileStore {
     fn route(&self, path: &str) -> StoreResult<Route> {
         if let Some(rest) = strip_prefix(path, HOME_PREFIX) {
             // `/home` → "/", `/home/queries` → "/queries".
-            let inner = if rest.is_empty() { "/".to_string() } else { rest };
+            let inner = if rest.is_empty() {
+                "/".to_string()
+            } else {
+                rest
+            };
             Ok(Route::Home(inner))
         } else if path == VOLUMES_PREFIX || path.starts_with(&format!("{VOLUMES_PREFIX}/")) {
             Ok(Route::Volumes(path.to_string()))
@@ -254,7 +258,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, "/home/queries/a.sql");
 
-        let bytes = store.read_file("/home/queries/a.sql", None, None).await.unwrap();
+        let bytes = store
+            .read_file("/home/queries/a.sql", None, None)
+            .await
+            .unwrap();
         assert_eq!(bytes, b"x");
     }
 

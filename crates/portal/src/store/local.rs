@@ -365,7 +365,11 @@ mod tests {
     async fn put_read_stat_round_trip() {
         let (_dir, store) = store();
         let meta = store
-            .put_file("/queries/a.sql", Some("text/plain".into()), b"SELECT 1;".to_vec())
+            .put_file(
+                "/queries/a.sql",
+                Some("text/plain".into()),
+                b"SELECT 1;".to_vec(),
+            )
             .await
             .unwrap();
         assert_eq!(meta.path, "/queries/a.sql");
@@ -455,7 +459,10 @@ mod tests {
     #[tokio::test]
     async fn missing_directory_lists_empty() {
         let (_dir, store) = store();
-        let (entries, _) = store.list_directory("/nope", Page::default()).await.unwrap();
+        let (entries, _) = store
+            .list_directory("/nope", Page::default())
+            .await
+            .unwrap();
         assert!(entries.is_empty());
     }
 }
