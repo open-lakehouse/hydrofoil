@@ -15,7 +15,7 @@
 //!   - `files_*` call the `FileStore` directly with native types (no proto
 //!     framing) — the store already is the sanitized handler.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 use connectrpc::{CodecFormat, Dispatcher, Payload, RequestContext};
@@ -25,31 +25,65 @@ use http::HeaderMap;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
-/// Managed state: the in-process executors plus the resolved UC endpoint.
-struct AppState {
-    hosted: Arc<Hosted>,
+/// The services bound to the currently-active environment: the in-process
+/// executors plus the resolved UC endpoint. `None` until an environment is
+/// selected (the outer shell spawns services lazily on selection).
+#[derive(Clone, Default)]
+struct ActiveEnv {
+    /// The active environment's id. `None` until one is selected; set to the
+    /// escape-hatch synthetic id when `OPEN_LAKEHOUSE_UC_URL` activated one.
+    /// Lets the shell highlight the running environment in the overview.
+    id: Option<String>,
+    hosted: Option<Arc<Hosted>>,
     /// Resolved Unity Catalog REST base (the spawned sidecar's dynamic endpoint),
     /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
     /// disabled (files run in-memory); the proxy then errors.
     unity_endpoint: Option<String>,
 }
 
+/// Managed state: the active environment behind interior mutability so the
+/// `select_environment` command can swap services in after boot. Commands take a
+/// snapshot (clone of the `Arc`s) under a short read lock, then drop it before
+/// awaiting.
+#[derive(Default)]
+struct AppState {
+    active: RwLock<ActiveEnv>,
+}
+
 impl AppState {
+    /// Snapshot the active environment, erroring when none is selected yet.
+    fn snapshot(&self) -> Result<ActiveEnv, String> {
+        let active = self.active.read().unwrap();
+        if active.hosted.is_none() {
+            return Err("no environment selected".to_string());
+        }
+        Ok(active.clone())
+    }
+
+    /// Snapshot the active UC endpoint (the proxy needs only this).
+    fn unity_endpoint(&self) -> Option<String> {
+        self.active.read().unwrap().unity_endpoint.clone()
+    }
+}
+
+impl ActiveEnv {
     /// Select the router that owns a service group: `"tags"` (portal Tags) or
     /// `"query"` (hydrofoil QueryService). Files is not a router — it is served by
     /// the `files_*` commands directly.
     fn router(&self, service: &str) -> Result<&connectrpc::Router, String> {
+        let hosted = self.hosted.as_ref().ok_or("no environment selected")?;
         match service {
-            "tags" => Ok(&self.hosted.tags),
-            "query" => Ok(&self.hosted.query),
+            "tags" => Ok(&hosted.tags),
+            "query" => Ok(&hosted.query),
             other => Err(format!("unknown service group: {other}")),
         }
     }
 
-    /// Clone the file-store handle out of managed state so commands can drop the
-    /// `State` borrow before awaiting the store call.
-    fn files(&self) -> Arc<dyn portal::store::FileStore> {
-        Arc::clone(&self.hosted.files)
+    /// Clone the file-store handle so commands can drop the snapshot before
+    /// awaiting the store call.
+    fn files(&self) -> Result<Arc<dyn portal::store::FileStore>, String> {
+        let hosted = self.hosted.as_ref().ok_or("no environment selected")?;
+        Ok(Arc::clone(&hosted.files))
     }
 }
 
@@ -79,9 +113,10 @@ async fn connect_unary(
     headers: Vec<(String, String)>,
 ) -> Result<String, String> {
     let ctx = request_context(&path, headers);
+    let active = state.snapshot()?;
     // `call_unary` returns a `'static` future (it does not borrow the router), so
-    // building it under the `State` borrow and awaiting it afterwards is sound.
-    let fut = state.router(&service)?.call_unary(
+    // building it under the snapshot and awaiting it afterwards is sound.
+    let fut = active.router(&service)?.call_unary(
         &path,
         ctx,
         Payload::new(Bytes::from(message.into_bytes()), CodecFormat::Json),
@@ -118,8 +153,9 @@ async fn connect_stream(
     // byte array costs nothing.
     //
     // `call_server_streaming` returns a `'static` future + stream (no router
-    // borrow), so it is sound to build under the `State` borrow and await after.
-    let fut = state.router(&service)?.call_server_streaming(
+    // borrow), so it is sound to build under the snapshot and await after.
+    let active = state.snapshot()?;
+    let fut = active.router(&service)?.call_server_streaming(
         &path,
         ctx,
         Bytes::from(message),
@@ -143,7 +179,7 @@ async fn connect_stream(
 /// JSON (the buffa-generated messages derive serde). Map store errors to a string.
 #[tauri::command]
 async fn files_stat(state: State<'_, AppState>, path: String) -> Result<serde_json::Value, String> {
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     let meta = files.stat_file(&path).await.map_err(|e| e.to_string())?;
     serde_json::to_value(meta).map_err(|e| e.to_string())
 }
@@ -159,7 +195,7 @@ async fn files_list(
         max_results: max_results.map(|n| n.max(0) as usize),
         page_token,
     };
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     let (contents, next_page_token) = files
         .list_directory(&path, page)
         .await
@@ -176,7 +212,7 @@ async fn files_create_dir(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<serde_json::Value, String> {
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     let meta = files
         .create_directory(&path)
         .await
@@ -186,13 +222,13 @@ async fn files_create_dir(
 
 #[tauri::command]
 async fn files_delete(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     files.delete_file(&path).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn files_delete_dir(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     files
         .delete_directory(&path)
         .await
@@ -210,7 +246,7 @@ async fn files_download(
     length: Option<i64>,
     on_chunk: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     let mut stream = files
         .read_file_stream(&path, offset, length)
         .await
@@ -255,7 +291,7 @@ async fn files_upload(
     let bytes = Bytes::copy_from_slice(data);
     let chunks: portal::store::ByteStream =
         Box::pin(futures::stream::once(async move { Ok(bytes) }));
-    let files = state.files();
+    let files = state.snapshot()?.files()?;
     let meta = files
         .put_file_stream(&path, content_type, chunks)
         .await
@@ -291,9 +327,9 @@ async fn proxy_request(
     body: String,
 ) -> Result<ProxyResponse, String> {
     let endpoint = state
-        .unity_endpoint
-        .as_deref()
+        .unity_endpoint()
         .ok_or("Unity Catalog is not running")?;
+    let endpoint = endpoint.as_str();
 
     // The incoming URL may be absolute (webview origin) or relative
     // (`/api/2.1/unity-catalog/...`, the UI's relative baseUrl). Parse against a
@@ -350,15 +386,111 @@ async fn proxy_request(
 /// it. `None` once taken/killed.
 struct UcSidecar(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
-/// The in-repo data directory for the UC server (gitignored): SQLite DB + config
-/// live here so they survive restarts and are inspectable in the working tree.
-fn uc_data_dir() -> std::path::PathBuf {
-    // .../node/desktop/src-tauri/../.uc-data → node/desktop/.uc-data
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.uc-data")
+/// The app working directory (gitignored, in-repo for this iteration so it's
+/// inspectable): holds `environments.json` and per-environment data under
+/// `envs/<id>/`.
+///
+/// .../node/desktop/src-tauri/../.open-lakehouse → node/desktop/.open-lakehouse
+fn app_data_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.open-lakehouse")
+}
+
+/// The UC data dir for a given environment: `.open-lakehouse/envs/<id>/uc`,
+/// holding `config.yaml`, `catalog.db`, and `storage/`.
+fn env_uc_dir(id: &str) -> std::path::PathBuf {
+    app_data_dir().join("envs").join(id).join("uc")
+}
+
+/// The local "home" volume dir for an environment: `.open-lakehouse/envs/<id>/home`.
+/// Backs the editor's always-available home volume (served as `/home/...`).
+fn env_home_dir(id: &str) -> std::path::PathBuf {
+    app_data_dir().join("envs").join(id).join("home")
+}
+
+/// Seed a fresh home volume with a starter `queries/` dir + a README so the editor
+/// is never empty on first open. Idempotent: skips when the dir already has any
+/// contents (so it never clobbers user files across restarts). Best-effort —
+/// failures are logged, not fatal.
+fn seed_home_dir(home: &std::path::Path) {
+    let non_empty = std::fs::read_dir(home)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if non_empty {
+        return;
+    }
+    let write = |rel: &str, body: &str| {
+        let path = home.join(rel);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&path, body) {
+            eprintln!("[home] seed {path:?} failed: {e}");
+        }
+    };
+    write(
+        "queries/example.sql",
+        "SELECT * FROM main.default.users\nORDER BY events DESC\nLIMIT 10;\n",
+    );
+    write("README.md", "# Home\n\nLocal scratch space for SQL and notes.\n");
+}
+
+/// One environment: a named bundle of service configuration. This iteration
+/// carries only an id + display name; the UC config is derived from the id's
+/// directory.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Environment {
+    id: String,
+    name: String,
+}
+
+/// Read the environments registry (`environments.json`). Returns an empty list
+/// when the file is absent (fresh install) so the shell shows the create flow.
+fn read_environments() -> Result<Vec<Environment>, String> {
+    let path = app_data_dir().join("environments.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parsing {path:?}: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("reading {path:?}: {e}")),
+    }
+}
+
+/// Persist the environments registry, creating the app data dir if needed.
+fn write_environments(envs: &[Environment]) -> Result<(), String> {
+    let dir = app_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {dir:?}: {e}"))?;
+    let json = serde_json::to_vec_pretty(envs).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("environments.json"), json).map_err(|e| e.to_string())
+}
+
+/// Derive a stable, filesystem-safe id from a display name, disambiguating
+/// against existing ids with a numeric suffix. Avoids needing a random/uuid
+/// source: the suffix is deterministic from the current registry.
+fn allocate_env_id(name: &str, existing: &[Environment]) -> String {
+    let slug: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug.trim_matches('-').to_string();
+    let base = if slug.is_empty() { "env".to_string() } else { slug };
+    let taken = |candidate: &str| existing.iter().any(|e| e.id == candidate);
+    if !taken(&base) {
+        return base;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Write the UC server config (SQLite + local `file://` managed storage, all
-/// under `.uc-data/`) and return its path. We supply the config explicitly
+/// under the given `data_dir`) and return its path. We supply the config explicitly
 /// because a provided config file with no `encryption` block deserializes to
 /// `None` (the dev-KEK default only applies to a config-LESS launch), which the
 /// server rejects — so we include the dev KEK.
@@ -402,11 +534,12 @@ fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// Spawn the local `uc` server (SQLite, port 0), scrape the bound port from its
 /// startup line, and return the REST endpoint. Stores the child in managed state
 /// so the exit hook can kill it.
-async fn spawn_uc_sidecar(app: &tauri::AppHandle) -> Result<String, String> {
+async fn spawn_uc_sidecar(
+    app: &tauri::AppHandle,
+    config_path: &std::path::Path,
+) -> Result<String, String> {
     use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
-
-    let config_path = write_uc_config(&uc_data_dir())?;
 
     // Spawn as a Tauri sidecar: the binary lives at
     // `src-tauri/binaries/uc-server-<target-triple>` (declared in tauri.conf.json
@@ -428,7 +561,14 @@ async fn spawn_uc_sidecar(app: &tauri::AppHandle) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("failed to spawn uc server: {e}"))?;
 
-    app.manage(UcSidecar(std::sync::Mutex::new(Some(child))));
+    // Store the child in the managed slot so the exit hook (and a later
+    // re-selection) can kill it. Kill any prior child first — re-selecting an
+    // environment tears down the previous sidecar before respawning.
+    if let Some(slot) = app.try_state::<UcSidecar>() {
+        if let Some(prev) = slot.0.lock().unwrap().replace(child) {
+            let _ = prev.kill();
+        }
+    }
 
     // The server prints `✅listening on http://<host>:<port>` (status::success);
     // colors are auto-disabled when piped. Scrape the address from that line,
@@ -519,58 +659,156 @@ fn parse_uc_addr(line: &str) -> Option<String> {
     }
 }
 
+/// Bring an environment online: build (and store) the in-process executors for
+/// the given UC endpoint. `unity_endpoint` is `None` when UC is disabled (files
+/// run in-memory). Shared by `select_environment` and the `OPEN_LAKEHOUSE_UC_URL`
+/// escape hatch.
+async fn activate_endpoint(
+    app: &tauri::AppHandle,
+    id: Option<String>,
+    unity_endpoint: Option<String>,
+) -> Result<(), String> {
+    // A real environment gets a local home volume under its data dir; the
+    // synthetic `__external__` escape-hatch id has no managed dir, so no home.
+    let home_root = match id.as_deref() {
+        Some(env_id) if env_id != "__external__" => {
+            let home = env_home_dir(env_id);
+            std::fs::create_dir_all(&home).map_err(|e| format!("creating {home:?}: {e}"))?;
+            seed_home_dir(&home);
+            Some(home)
+        }
+        _ => None,
+    };
+
+    let cfg = HostConfig {
+        unity_endpoint: unity_endpoint.clone(),
+        home_root,
+        ..Default::default()
+    };
+    let hosted = desktop_host::build(cfg)
+        .await
+        .map_err(|e| format!("failed to build in-process services: {e}"))?;
+
+    let state = app.state::<AppState>();
+    let mut active = state.active.write().unwrap();
+    *active = ActiveEnv {
+        id,
+        hosted: Some(Arc::new(hosted)),
+        unity_endpoint,
+    };
+    Ok(())
+}
+
+/// List the configured environments. Empty on a fresh install (the shell then
+/// shows the create flow).
+#[tauri::command]
+fn list_environments() -> Result<Vec<Environment>, String> {
+    read_environments()
+}
+
+/// The id of the currently-active environment (services bound), or `null` when
+/// none is active. The shell uses this to skip the picker on startup (escape
+/// hatch) and to highlight the running environment in the overview.
+#[tauri::command]
+fn active_environment(state: State<'_, AppState>) -> Option<String> {
+    state.active.read().unwrap().id.clone()
+}
+
+/// Create an environment: allocate an id, create its data dir, and append it to
+/// the registry. Does NOT spawn any services — selection does that.
+#[tauri::command]
+fn create_environment(name: String) -> Result<Environment, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("environment name must not be empty".into());
+    }
+    let mut envs = read_environments()?;
+    let id = allocate_env_id(&name, &envs);
+    let uc_dir = env_uc_dir(&id);
+    std::fs::create_dir_all(&uc_dir).map_err(|e| format!("creating {uc_dir:?}: {e}"))?;
+    let home_dir = env_home_dir(&id);
+    std::fs::create_dir_all(&home_dir).map_err(|e| format!("creating {home_dir:?}: {e}"))?;
+    let env = Environment { id, name };
+    envs.push(env.clone());
+    write_environments(&envs)?;
+    Ok(env)
+}
+
+/// Select an environment: tear down any running sidecar, write its UC config,
+/// spawn the `uc` server, seed it, and bind the in-process executors. Returns the
+/// resolved UC endpoint. Re-selecting an environment respawns it cleanly.
+#[tauri::command]
+async fn select_environment(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let envs = read_environments()?;
+    if !envs.iter().any(|e| e.id == id) {
+        return Err(format!("unknown environment: {id}"));
+    }
+
+    // Already active → no-op (the UI re-opens an already-running environment
+    // without calling select, but keep the command idempotent so a redundant
+    // call doesn't pointlessly kill + respawn the sidecar).
+    if let Some(active) = active_environment(app.state::<AppState>()) {
+        if active == id {
+            let endpoint = app
+                .state::<AppState>()
+                .unity_endpoint()
+                .unwrap_or_default();
+            return Ok(serde_json::json!({ "unityEndpoint": endpoint }));
+        }
+    }
+
+    let config_path = write_uc_config(&env_uc_dir(&id))?;
+    let endpoint = spawn_uc_sidecar(&app, &config_path).await?;
+    eprintln!("[uc] environment {id} listening at {endpoint}");
+    activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone())).await?;
+    Ok(serde_json::json!({ "unityEndpoint": endpoint }))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(AppState::default())
+        // Slot for the spawned UC child so the exit hook (and re-selection) can
+        // kill it. Populated on first spawn; empty until then.
+        .manage(UcSidecar(std::sync::Mutex::new(None)))
         .setup(|app| {
-            // Resolve the UC endpoint. `OPEN_LAKEHOUSE_UC_URL` (incl. empty for
-            // "no UC → in-memory files") takes precedence; otherwise spawn and
-            // manage the local `uc` server (SQLite persisted under .uc-data/).
-            let unity_endpoint = match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
-                Ok(url) if url.is_empty() => {
-                    eprintln!("[uc] OPEN_LAKEHOUSE_UC_URL is empty → files in-memory, no UC");
-                    None
-                }
+            // Escape hatch for dev scripts: `OPEN_LAKEHOUSE_UC_URL` (incl. empty
+            // for "no UC → in-memory files") auto-activates a single environment
+            // up front, so `dev-desktop.sh` boots straight into the app without
+            // the environment picker. When unset, the app boots into the outer
+            // shell and an environment is activated lazily via select_environment.
+            match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
                 Ok(url) => {
-                    eprintln!("[uc] using OPEN_LAKEHOUSE_UC_URL={url}");
-                    Some(url)
+                    let endpoint = if url.is_empty() {
+                        eprintln!("[uc] OPEN_LAKEHOUSE_UC_URL is empty → files in-memory, no UC");
+                        None
+                    } else {
+                        eprintln!("[uc] using OPEN_LAKEHOUSE_UC_URL={url}");
+                        Some(url)
+                    };
+                    let handle = app.handle().clone();
+                    // Synthetic id: non-null so the shell skips the picker, but it
+                    // matches no managed environment (there are none in this mode).
+                    tauri::async_runtime::block_on(activate_endpoint(
+                        &handle,
+                        Some("__external__".to_string()),
+                        endpoint,
+                    ))?;
                 }
                 Err(_) => {
-                    eprintln!("[uc] spawning local uc sidecar…");
-                    let handle = app.handle().clone();
-                    match tauri::async_runtime::block_on(spawn_uc_sidecar(&handle)) {
-                        Ok(endpoint) => {
-                            eprintln!("uc server listening at {endpoint}");
-                            Some(endpoint)
-                        }
-                        Err(e) => {
-                            // Don't abort the app: fall back to the in-memory file
-                            // store so the editor still runs without UC.
-                            eprintln!("uc sidecar failed, files in-memory: {e}");
-                            None
-                        }
-                    }
+                    eprintln!("[shell] no OPEN_LAKEHOUSE_UC_URL → environment picker");
                 }
-            };
-
-            let cfg = HostConfig {
-                unity_endpoint: unity_endpoint.clone(),
-                ..Default::default()
-            };
-
-            // Build the in-process executors on the Tokio runtime Tauri runs
-            // setup on. block_on is fine here: startup is allowed to wait for the
-            // engine + UC factory to initialize before the window serves requests.
-            let hosted = tauri::async_runtime::block_on(desktop_host::build(cfg))
-                .map_err(|e| format!("failed to build in-process services: {e}"))?;
-
-            app.manage(AppState {
-                hosted: Arc::new(hosted),
-                unity_endpoint,
-            });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            list_environments,
+            active_environment,
+            create_environment,
+            select_environment,
             connect_unary,
             connect_stream,
             files_stat,

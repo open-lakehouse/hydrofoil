@@ -1,10 +1,10 @@
 // Per-tab SQL run controller.
 //
-// `useRunQuery` holds its state in React and is inherently single-stream, so it
-// can't back N tabs at once. This is the same streaming logic (coalesced
-// version bumps via rAF, abort-on-rerun, fresh ArrowResultStore per run) as a
-// plain subscribable object, so each SQL tab owns its own results that survive
-// tab switches. The ResultsPane subscribes to the active tab's controller.
+// A React-hook approach holding its state in component state is inherently
+// single-stream, so it can't back N tabs at once. This is the streaming logic
+// (coalesced version bumps via rAF, abort-on-rerun, fresh ArrowResultStore per
+// run) as a plain subscribable object, so each SQL tab owns its own results that
+// survive tab switches. The ResultsPane subscribes to the active tab's controller.
 
 import { ArrowResultStore } from "@/lib/query/arrowResultStore";
 import { queryRunner } from "@/lib/query/runner";

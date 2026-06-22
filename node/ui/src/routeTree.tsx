@@ -3,7 +3,7 @@ import {
   createRootRouteWithContext,
   createRoute,
 } from "@tanstack/react-router";
-import { AppShell } from "@/components/AppShell";
+import { EnvironmentGate } from "@/components/EnvironmentGate";
 import { prefetchCatalogs } from "@/lib/uc/queries";
 
 export interface RouterContext {
@@ -11,7 +11,7 @@ export interface RouterContext {
 }
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
-  component: AppShell,
+  component: EnvironmentGate,
 });
 
 const indexRoute = createRoute({
@@ -24,15 +24,13 @@ const serviceRoute = createRoute({
   path: "services/$serviceId",
 }).lazy(() => import("./routes/services.$serviceId.lazy").then((m) => m.Route));
 
-const queryRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "query",
-}).lazy(() => import("./routes/query.lazy").then((m) => m.Route));
-
 interface EditorSearch {
   // Active tab, encoded as the file path. The open-tab set is persisted to
   // sessionStorage; only the active path lives in the URL (deep-linkable).
   path?: string;
+  // Active volume, encoded as its file-API root path (e.g. "/home" or
+  // "/Volumes/main/default/data"). Deep-linkable; the tree roots here.
+  volume?: string;
 }
 
 const editorRoute = createRoute({
@@ -40,6 +38,7 @@ const editorRoute = createRoute({
   path: "editor",
   validateSearch: (search: Record<string, unknown>): EditorSearch => ({
     path: typeof search.path === "string" ? search.path : undefined,
+    volume: typeof search.volume === "string" ? search.volume : undefined,
   }),
 }).lazy(() => import("./routes/editor.lazy").then((m) => m.Route));
 
@@ -63,7 +62,6 @@ const catalogRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   serviceRoute,
-  queryRoute,
   editorRoute,
   catalogRoute,
 ]);

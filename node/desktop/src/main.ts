@@ -6,6 +6,7 @@
 //
 // `@` resolves to ../ui/src (see vite.config.ts / tsconfig.json), so we import the
 // UI's own modules directly without adding any `exports` surface to @open-lakehouse/ui.
+import { registerEnvironmentHost } from "@/lib/client/environments";
 import { registerFetch, registerTransport } from "@/lib/client/registry";
 import {
   setCatalogProvider,
@@ -15,6 +16,7 @@ import {
 // Tailwind content root, so utility classes used by the UI components are emitted
 // when building from node/desktop (see styles.css).
 import "./styles.css";
+import { tauriEnvironmentHost } from "./tauri-environments";
 import { tauriFetch } from "./tauri-fetch";
 import { tauriTransport } from "./tauri-transport";
 
@@ -24,6 +26,9 @@ registerTransport(tauriTransport);
 // …and the UC Catalog REST API (and any other plain-HTTP call) through the Tauri
 // fetch, which falls through to the network / UC sidecar.
 registerFetch(tauriFetch);
+// The outer shell owns environment management + service lifecycle on desktop:
+// the gate lists/creates environments and spawns the UC sidecar on selection.
+registerEnvironmentHost(tauriEnvironmentHost);
 // SQL IntelliSense uses real catalog metadata: on desktop UC is reachable (via
 // the proxy above), so swap the editor's fixture catalog for the live one.
 setCatalogProvider(unityCatalogProvider);

@@ -10,8 +10,8 @@
 // host calls `registerQueryRunner` before the UI bootstraps to swap in its own
 // implementation.
 //
-// The rest of the data layer (useRunQuery, the Arrow store, the grid) depends
-// ONLY on the `QueryRunner` type and `queryRunner` below — never on `createClient`
+// The rest of the data layer (the run controller, the Arrow store, the grid)
+// depends ONLY on the `QueryRunner` type and `queryRunner` below — never on `createClient`
 // or the generated `QueryService`. This file is the single place that imports
 // them, so the wire path is fully replaceable.
 //

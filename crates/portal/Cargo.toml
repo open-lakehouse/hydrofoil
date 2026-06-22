@@ -20,7 +20,7 @@ object_store = { workspace = true }
 unitycatalog-object-store = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal", "fs", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { workspace = true }
