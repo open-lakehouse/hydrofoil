@@ -1,0 +1,65 @@
+# Azurite — the Azure Blob Storage emulator.
+#
+# Used as the storage backend for exercising Unity Catalog credential vending
+# *locally*: a UC `azure_storage_key` credential is vended as a service SAS,
+# which is a pure offline HMAC signing operation (no STS-equivalent endpoint
+# needed, unlike AWS). See environments/azurite.compose.yaml.
+#
+# The blob endpoint is path-style: http://<host>:10000/<account>/<container>/...
+# with the well-known emulator account `devstoreaccount1`.
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    restart: unless-stopped
+    # Bind the blob service to all interfaces so it is reachable from the host
+    # (where hydrofoil + the UC server run via `just hydro` / `cargo run`).
+    # --skipApiVersionCheck: the azure-cli image sends a newer Storage API
+    # version than this Azurite release pins; skipping the check lets the
+    # init container (and any modern SDK) talk to it.
+    command:
+      [
+        "azurite-blob",
+        "--blobHost",
+        "0.0.0.0",
+        "--blobPort",
+        "10000",
+        "--skipApiVersionCheck",
+      ]
+    ports:
+      # Host 10000 is free in this stack (Envoy publishes on ${ENVOY_PORT:-9080}).
+      # The vended SAS URL uses localhost:10000, which the object-store layer
+      # recognises as Azurite.
+      - "${AZURITE_BLOB_PORT:-10000}:10000"
+    volumes:
+      - ./.data/azurite:/data
+    healthcheck:
+      # Azurite has no shell tools; probe the blob port with a TCP check via the
+      # node runtime that ships in the image.
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('net').connect(10000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  # One-shot: create the container the seeded external location points at.
+  azurite-init:
+    image: mcr.microsoft.com/azure-cli:latest
+    restart: on-failure
+    depends_on:
+      azurite:
+        condition: service_healthy
+    environment:
+      # The well-known Azurite account + key + path-style connection string.
+      AZURE_STORAGE_CONNECTION_STRING: >-
+        DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Creating Azurite container '${AZURITE_CONTAINER:-lakehouse}'...";
+        az storage container create --name "${AZURITE_CONTAINER:-lakehouse}" 2>&1 || true;
+        echo "Container ready.";

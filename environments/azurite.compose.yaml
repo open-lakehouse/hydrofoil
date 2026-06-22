@@ -1,0 +1,27 @@
+name: open-lakehouse-azurite
+
+# Azurite (Azure Blob emulator) stack for exercising Unity Catalog credential
+# vending locally — see docs below. The blob emulator runs in compose; the Rust
+# Unity Catalog server and hydrofoil run on the HOST (via `cargo run` / `just
+# hydro`) so they pick up local unitycatalog-rs changes without a Docker rebuild,
+# mirroring the `just dev-ui` flow.
+#
+# Why Azurite and not SeaweedFS: vending an AWS temporary credential requires a
+# live STS `AssumeRole` round-trip, which S3 emulators don't serve. An Azure
+# `azure_storage_key` credential is vended as a service SAS — pure offline HMAC
+# signing — so the full vend path is exercisable with no online token service.
+#
+# Bring up:   just env-up azurite
+# Tear down:  just env-down azurite
+#
+# Then on the host:
+#   1. start the Rust UC server from the sibling unitycatalog-rs checkout:
+#        cargo run -p unitycatalog-cli -- server --rest --port 8081 \
+#          --config environments/config/azurite/uc-config.yaml
+#   2. seed + verify the vend path:  ./scripts/azurite-seed.sh
+#   3. (optional) run hydrofoil for query-path reads/writes:
+#        HYDROFOIL_CONFIG=environments/config/azurite/hydrofoil.toml just hydro
+
+include:
+  - path: ./services/azurite.yaml
+    project_directory: .

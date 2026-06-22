@@ -1,0 +1,26 @@
+# hydrofoil configuration for the Azurite credential-vending stack (HOST run).
+#
+# Run with:
+#   HYDROFOIL_CONFIG=environments/config/azurite/hydrofoil.toml just hydro
+#
+# hydrofoil runs on the host so it picks up local unitycatalog-rs changes (the
+# Azurite store wiring) via the workspace build. It resolves tables against the
+# host-published Rust UC server and reads/writes their data through the SAS that
+# UC vends for the Azurite-backed external location.
+
+host = "0.0.0.0"
+port = 50051
+session_ttl_secs = 1800
+
+# Lineage disabled for this focused stack (no Marquez here). Add a [lineage]
+# section pointing at a running lineage-service to re-enable.
+
+# Cedar policy disabled (allow-all) — this stack exercises the vend + IO path,
+# not authorization. Push a policy and set oci_ref to enable.
+[policy]
+
+# Rust Unity Catalog REST endpoint (host-published port; see scripts/azurite-uc.sh).
+[unity]
+endpoint = "http://localhost:8081/api/2.1/unity-catalog/"
+# region is AWS-specific; harmless for the Azure/Azurite path.
+region = "eu-central-1"
