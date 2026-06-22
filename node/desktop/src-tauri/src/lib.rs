@@ -39,6 +39,10 @@ struct ActiveEnv {
     /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
     /// disabled (files run in-memory); the proxy then errors.
     unity_endpoint: Option<String>,
+    /// Whether this environment serves a local `/home` volume (true for real
+    /// environments, false for the `__external__` escape hatch). Surfaced to the
+    /// UI as an environment capability.
+    has_home: bool,
 }
 
 /// Managed state: the active environment behind interior mutability so the
@@ -680,6 +684,7 @@ async fn activate_endpoint(
         _ => None,
     };
 
+    let has_home = home_root.is_some();
     let cfg = HostConfig {
         unity_endpoint: unity_endpoint.clone(),
         home_root,
@@ -695,8 +700,28 @@ async fn activate_endpoint(
         id,
         hosted: Some(Arc::new(hosted)),
         unity_endpoint,
+        has_home,
     };
     Ok(())
+}
+
+/// Build the `ActiveEnvironment` descriptor the UI consumes (see
+/// node/ui/src/lib/client/environments.ts): id, display name, and capabilities.
+/// The UI derives built-in volumes from `hasHome`. Returns `null` when nothing is
+/// active. `name` falls back to the id for the synthetic `__external__` env,
+/// which has no registry entry.
+fn active_environment_descriptor(state: &AppState) -> Option<serde_json::Value> {
+    let active = state.active.read().unwrap();
+    let id = active.id.clone()?;
+    let name = read_environments()
+        .ok()
+        .and_then(|envs| envs.into_iter().find(|e| e.id == id).map(|e| e.name))
+        .unwrap_or_else(|| id.clone());
+    Some(serde_json::json!({
+        "id": id,
+        "name": name,
+        "capabilities": { "hasHome": active.has_home },
+    }))
 }
 
 /// List the configured environments. Empty on a fresh install (the shell then
@@ -706,12 +731,12 @@ fn list_environments() -> Result<Vec<Environment>, String> {
     read_environments()
 }
 
-/// The id of the currently-active environment (services bound), or `null` when
+/// The currently-active environment descriptor (services bound), or `null` when
 /// none is active. The shell uses this to skip the picker on startup (escape
-/// hatch) and to highlight the running environment in the overview.
+/// hatch), scope its state, and highlight the running environment in the overview.
 #[tauri::command]
-fn active_environment(state: State<'_, AppState>) -> Option<String> {
-    state.active.read().unwrap().id.clone()
+fn active_environment(state: State<'_, AppState>) -> Option<serde_json::Value> {
+    active_environment_descriptor(&state)
 }
 
 /// Create an environment: allocate an id, create its data dir, and append it to
@@ -749,22 +774,20 @@ async fn select_environment(
 
     // Already active → no-op (the UI re-opens an already-running environment
     // without calling select, but keep the command idempotent so a redundant
-    // call doesn't pointlessly kill + respawn the sidecar).
-    if let Some(active) = active_environment(app.state::<AppState>()) {
-        if active == id {
-            let endpoint = app
-                .state::<AppState>()
-                .unity_endpoint()
-                .unwrap_or_default();
-            return Ok(serde_json::json!({ "unityEndpoint": endpoint }));
-        }
+    // call doesn't pointlessly kill + respawn the sidecar). Return the current
+    // descriptor so the caller can scope state either way.
+    let already_active = app.state::<AppState>().active.read().unwrap().id.as_deref() == Some(&id);
+    if already_active {
+        return active_environment_descriptor(&app.state::<AppState>())
+            .ok_or_else(|| "environment reported active but has no descriptor".to_string());
     }
 
     let config_path = write_uc_config(&env_uc_dir(&id))?;
     let endpoint = spawn_uc_sidecar(&app, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
     activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone())).await?;
-    Ok(serde_json::json!({ "unityEndpoint": endpoint }))
+    active_environment_descriptor(&app.state::<AppState>())
+        .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
 }
 
 pub fn run() {

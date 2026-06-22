@@ -4,6 +4,22 @@ import {
   tableFromIPC,
   type Vector,
 } from "apache-arrow";
+import { arrowTypeLabel } from "@/lib/query/arrowTypeLabel";
+
+/** A read-only summary of what an {@link ArrowResultStore} currently holds.
+ *  Cheap to produce (no row scan) — for memory accounting and a "what's in the
+ *  store" affordance. */
+export interface ArrowStoreInfo {
+  /** Per-column name + human-readable type label (e.g. "int64"). */
+  schema: { name: string; type: string }[];
+  rowCount: number;
+  columnCount: number;
+  /** Number of appended Arrow IPC chunks (record batches). */
+  batchCount: number;
+  /** Approximate in-memory footprint: sum of each batch's backing buffer
+   *  byte lengths. Accumulated on append, so reading it is O(1). */
+  byteLength: number;
+}
 
 // Holds streamed query results in Arrow form and serves individual cells with
 // zero-copy access — the opposite of eagerly materializing every row into a
@@ -30,6 +46,7 @@ export class ArrowResultStore {
 
   private batches: BatchEntry[] = [];
   private total = 0;
+  private bytes = 0;
   // Cache column vectors per batch so repeated cell reads in the same batch
   // don't re-call `getChildAt`. Keyed by batch index, then column index.
   private vectorCache = new Map<number, Map<number, Vector | null>>();
@@ -50,6 +67,29 @@ export class ArrowResultStore {
     if (!this.schema) this.schema = table.schema;
     this.batches.push({ table, startRow: this.total, length: table.numRows });
     this.total += table.numRows;
+    // Accumulate the backing-buffer footprint now so `inspect().byteLength` is
+    // O(1). `Data.byteLength` recursively sums each record batch's buffers.
+    for (const batch of table.batches) this.bytes += batch.data.byteLength;
+  }
+
+  /**
+   * A cheap, read-only summary of what the store currently holds: schema, row /
+   * column / batch counts, and approximate in-memory footprint. No row scan and
+   * no copy — safe to call on every render or for memory accounting across
+   * sessions.
+   */
+  inspect(): ArrowStoreInfo {
+    const fields = this.schema?.fields ?? [];
+    return {
+      schema: fields.map((f) => ({
+        name: f.name,
+        type: arrowTypeLabel(f.type),
+      })),
+      rowCount: this.total,
+      columnCount: fields.length,
+      batchCount: this.batches.length,
+      byteLength: this.bytes,
+    };
   }
 
   /**

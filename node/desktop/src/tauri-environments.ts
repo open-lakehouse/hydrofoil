@@ -9,15 +9,42 @@
 // are bound, so the UI can mount the app immediately afterwards.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Environment, EnvironmentHost } from "@/lib/client/environments";
+import type {
+  ActiveEnvironment,
+  Environment,
+  EnvironmentHost,
+} from "@/lib/client/environments";
+import { HOME_VOLUME } from "@/lib/editor/volumes";
+
+// The descriptor shape the Rust `active_environment` / `select_environment`
+// commands return. The UI's `ActiveEnvironment` adds derived built-in volumes.
+interface EnvDescriptor {
+  id: string;
+  name: string;
+  capabilities: { hasHome: boolean };
+}
+
+// Map a Rust descriptor onto the UI's `ActiveEnvironment`, deriving built-in
+// volumes from capabilities: a local Home volume when the host serves one.
+function toActiveEnvironment(d: EnvDescriptor): ActiveEnvironment {
+  return {
+    id: d.id,
+    name: d.name,
+    capabilities: { hasHome: d.capabilities.hasHome },
+    volumes: d.capabilities.hasHome ? [HOME_VOLUME] : [],
+  };
+}
 
 export const tauriEnvironmentHost: EnvironmentHost = {
   managed: true,
-  hasHome: true,
   list: () => invoke<Environment[]>("list_environments"),
-  active: () => invoke<string | null>("active_environment"),
+  active: async () => {
+    const d = await invoke<EnvDescriptor | null>("active_environment");
+    return d ? toActiveEnvironment(d) : null;
+  },
   create: (name: string) => invoke<Environment>("create_environment", { name }),
   select: async (id: string) => {
-    await invoke("select_environment", { id });
+    const d = await invoke<EnvDescriptor>("select_environment", { id });
+    return toActiveEnvironment(d);
   },
 };

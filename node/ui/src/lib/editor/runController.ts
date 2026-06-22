@@ -6,8 +6,26 @@
 // run) as a plain subscribable object, so each SQL tab owns its own results that
 // survive tab switches. The ResultsPane subscribes to the active tab's controller.
 
-import { ArrowResultStore } from "@/lib/query/arrowResultStore";
+import {
+  ArrowResultStore,
+  type ArrowStoreInfo,
+} from "@/lib/query/arrowResultStore";
 import { queryRunner } from "@/lib/query/runner";
+
+/** Metadata correlating a run to its origin and recording its outcome. Read by
+ *  the ResultSession registry to track runs per environment / query file. */
+export interface RunMeta {
+  /** The query file this run came from (the tab id). */
+  filePath: string;
+  /** The SQL that was executed. */
+  sql: string;
+  /** Epoch ms when the run started. */
+  startedAt: number;
+  /** Wall-clock duration in ms, set once the run completes (or errors). */
+  durationMs?: number;
+  /** A snapshot of what the result store holds, set on completion. */
+  info?: ArrowStoreInfo;
+}
 
 export interface RunSnapshot {
   store: ArrowResultStore | null;
@@ -15,6 +33,8 @@ export interface RunSnapshot {
   version: number;
   running: boolean;
   error: string | null;
+  /** The current/last run's metadata, or null before the first run. */
+  meta: RunMeta | null;
 }
 
 const EMPTY: RunSnapshot = {
@@ -22,6 +42,7 @@ const EMPTY: RunSnapshot = {
   version: 0,
   running: false,
   error: null,
+  meta: null,
 };
 
 export class RunController {
@@ -29,6 +50,9 @@ export class RunController {
   private listeners = new Set<() => void>();
   private abort: AbortController | null = null;
   private raf: number | null = null;
+
+  /** @param filePath the query file this controller's runs originate from. */
+  constructor(private readonly filePath: string) {}
 
   /** getSnapshot for useSyncExternalStore (stable reference between changes). */
   get = (): RunSnapshot => this.snapshot;
@@ -65,7 +89,9 @@ export class RunController {
     this.abort = controller;
 
     const store = new ArrowResultStore();
-    this.snapshot = { store, version: 0, running: true, error: null };
+    const startedAt = Date.now();
+    const meta: RunMeta = { filePath: this.filePath, sql, startedAt };
+    this.snapshot = { store, version: 0, running: true, error: null, meta };
     for (const fn of this.listeners) fn();
 
     // Coalesce version bumps to at most one re-render per frame.
@@ -87,16 +113,29 @@ export class RunController {
         scheduleFlush();
       }
       this.cancelRaf();
-      this.emit({ version: this.snapshot.version + 1, running: false });
+      // Correlate the completed run: duration + a summary of what it produced.
+      this.emit({
+        version: this.snapshot.version + 1,
+        running: false,
+        meta: {
+          ...meta,
+          durationMs: Date.now() - startedAt,
+          info: store.inspect(),
+        },
+      });
     } catch (err) {
       this.cancelRaf();
       if (controller.signal.aborted) {
-        this.emit({ running: false });
+        this.emit({
+          running: false,
+          meta: { ...meta, durationMs: Date.now() - startedAt },
+        });
         return;
       }
       this.emit({
         running: false,
         error: err instanceof Error ? err.message : String(err),
+        meta: { ...meta, durationMs: Date.now() - startedAt },
       });
     }
   }
