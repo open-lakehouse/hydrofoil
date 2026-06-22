@@ -114,13 +114,21 @@ if ! curl -fsS -o /dev/null "${UC_API}/catalogs" 2>/dev/null; then
 fi
 
 log "Starting Tauri desktop app (Vite :3003, API -> ${UC_BASE})"
-# GATEWAY_URL is where the desktop vite.config.ts proxies /api (and /mlflow,
-# /marimo). Point it at the UC server so /api/2.1/unity-catalog reaches UC
-# directly. `tauri dev` runs `beforeDevCommand` (npm run dev) which inherits this
-# env, so the proxy is configured without touching any config file.
+# GATEWAY_URL is where the desktop vite.config.ts proxies the UC REST API (and
+# /mlflow, /marimo). Point it at the UC server so /api/2.1/unity-catalog reaches
+# UC directly. `tauri dev` runs `beforeDevCommand` (npm run dev) which inherits
+# this env, so the proxy is configured without touching any config file.
+#
+# OPEN_LAKEHOUSE_UC_URL is what the Tauri *Rust* backend (the in-process portal
+# Files + hydrofoil QueryService executors) resolves UC against — it does not go
+# through Vite. Point it at the same UC server. Tags/Files/Query now run in-process
+# in the backend, so they no longer need the QUERY_URL/gateway proxy; only the UC
+# REST client still goes over HTTP to ${UC_API}.
 (
   cd "$REPO_ROOT/node/desktop"
-  exec env GATEWAY_URL="$UC_BASE" npm run tauri:dev
+  exec env GATEWAY_URL="$UC_BASE" \
+    OPEN_LAKEHOUSE_UC_URL="${UC_API}/" \
+    npm run tauri:dev
 ) &
 TAURI_PID=$!
 

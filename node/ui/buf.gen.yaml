@@ -1,0 +1,23 @@
+# TypeScript codegen for hydrofoil's QueryService, consumed by the connect-web
+# client (src/lib/query). The proto source is single-sourced from the repo-root
+# tree (proto/hydrofoil-query), the same module the Rust crate generates from.
+#
+# connect-es v2 emits service descriptors directly from protoc-gen-es (the old
+# protoc-gen-connect-es is no longer needed); `createClient(QueryService, …)`
+# reads the generated `QueryService` descriptor.
+#
+# Regenerate with `npm run gen:rpc` (or `just gen-rpc` from node/).
+version: v2
+inputs:
+  - directory: ../../proto/hydrofoil-query
+  # Portal protos (Files + Tags) live crate-local; generate their TS clients here
+  # too. The desktop host serves Tags via the generic dispatcher and Files via
+  # native files_* commands, but the UI uses the generated ConnectRPC clients for
+  # both, staying host-agnostic.
+  - directory: ../../crates/portal/proto
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+      - import_extension=js

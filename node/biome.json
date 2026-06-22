@@ -16,7 +16,8 @@
       "!**/dist",
       "!**/node_modules",
       "!**/uc-client/src/uc-api.d.ts",
-      "!**/ui/src/lib/forms/schemas"
+      "!**/ui/src/lib/forms/schemas",
+      "!**/ui/src/gen"
     ]
   },
   "formatter": {

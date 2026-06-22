@@ -20,16 +20,24 @@ interface ProxyResponse {
 
 /**
  * Decide whether a request should be served by the Tauri backend instead of the
- * network. Currently always false (HTTP fallback for everything). The single
- * place to add a routing allowlist when bridging a real service.
+ * network. Unity Catalog REST calls (the UI's OpenAPI client, rooted at
+ * `/api/2.1/unity-catalog`) are routed through Rust to the spawned `uc` sidecar
+ * on its dynamic port; everything else falls through to the platform fetch.
  *
  * Takes the URL + method (not a Request) so the routing decision never has to
  * construct a Request and therefore never touches the body stream — building a
  * Request from the call args can lock the body, which breaks the fallthrough
  * fetch of a POST ("the request body is disturbed or locked").
  */
-function shouldRouteThroughRust(_url: string, _method: string): boolean {
-  return false;
+function shouldRouteThroughRust(url: string, _method: string): boolean {
+  // Match the path regardless of how the origin is spelled (relative, or
+  // absolute against the tauri:// / app origin).
+  try {
+    const path = new URL(url, "http://localhost").pathname;
+    return path.startsWith("/api/2.1/unity-catalog");
+  } catch {
+    return false;
+  }
 }
 
 export const tauriFetch: typeof globalThis.fetch = async (input, init) => {

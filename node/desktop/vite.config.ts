@@ -16,6 +16,10 @@ const UI_SRC = path.resolve(__dirname, "../ui/src");
 // origin too.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:9080";
 
+// Hydrofoil's ConnectRPC QueryService (see ../ui/vite.config.ts). For host-run
+// dev point QUERY_URL at hydrofoil's HTTP port (default :9082).
+const QUERY_URL = process.env.QUERY_URL ?? GATEWAY_URL;
+
 function serviceProxy(): ProxyOptions {
   return {
     target: GATEWAY_URL,
@@ -45,6 +49,10 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: GATEWAY_URL,
+        changeOrigin: true,
+      },
+      "/hydrofoil.query.v1.QueryService": {
+        target: QUERY_URL,
         changeOrigin: true,
       },
       "/mlflow": serviceProxy(),

@@ -1,7 +1,8 @@
-// Handlers implement the generated ConnectRPC service traits with plain
-// `async fn`, whose concrete return types refine the trait's `impl Encodable +
-// Send` — the idiomatic connect-rust pattern (see `crate::query_service`).
-#![allow(refining_impl_trait)]
+//! Hydrofoil server binary: Flight SQL over gRPC plus the HTTP query surface
+//! (`POST /query` + the ConnectRPC `QueryService`). All engine/service wiring
+//! lives in the `hydrofoil` library crate (see `lib.rs`); this binary only
+//! loads config, layers the optional integrations onto the service, and runs the
+//! two servers.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,39 +13,7 @@ use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware::{filters, server::OtelGrpcLayer};
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
-/// buffa + connect-rust generated code for `hydrofoil.query.v1` (the
-/// QueryService). Proto source lives in `proto/hydrofoil-query`; regenerate with
-/// `just hydrofoil-gen`.
-mod generated {
-    /// buffa-generated message types (owned structs + zero-copy views).
-    #[path = "buffa/mod.rs"]
-    pub mod buffa;
-    /// connect-rust-generated service traits, dispatchers, and clients.
-    #[path = "connect/mod.rs"]
-    pub mod connect;
-}
-
-/// Convenience re-exports for the generated message and service trees.
-pub(crate) use generated::buffa::hydrofoil::query as proto;
-pub(crate) use generated::connect::hydrofoil::query as services;
-
-mod agent;
-mod catalog;
-mod config;
-mod engine;
-mod error;
-mod execution;
-mod http;
-mod identity;
-mod lineage;
-mod planner;
-mod policy;
-mod query;
-mod query_service;
-mod server;
-mod session;
-mod stream;
-mod telemetry;
+use hydrofoil::{FlightSqlServiceImpl, config, http, policy, telemetry};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -60,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config::Config::load(config_path.as_ref())?;
 
     let addr = format!("{}:{}", cfg.host, cfg.port).parse()?;
-    let mut service = server::FlightSqlServiceImpl::try_new()?;
+    let mut service = FlightSqlServiceImpl::try_new()?;
 
     // Wire OpenLineage when a URL is configured. Without `lineage.url` the
     // session emits to a no-op client and lineage events are dropped. The

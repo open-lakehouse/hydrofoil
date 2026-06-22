@@ -6,14 +6,27 @@
 //
 // `@` resolves to ../ui/src (see vite.config.ts / tsconfig.json), so we import the
 // UI's own modules directly without adding any `exports` surface to @open-lakehouse/ui.
-import { registerFetch } from "@/lib/client/registry";
+import { registerFetch, registerTransport } from "@/lib/client/registry";
+import {
+  setCatalogProvider,
+  unityCatalogProvider,
+} from "@/lib/editor/catalogProvider";
 // Desktop stylesheet: re-exports the UI's globals AND declares the UI source as a
 // Tailwind content root, so utility classes used by the UI components are emitted
 // when building from node/desktop (see styles.css).
 import "./styles.css";
 import { tauriFetch } from "./tauri-fetch";
+import { tauriTransport } from "./tauri-transport";
 
+// Route ConnectRPC clients (QueryService, Tags, Files) to the in-process
+// executors via Tauri commands…
+registerTransport(tauriTransport);
+// …and the UC Catalog REST API (and any other plain-HTTP call) through the Tauri
+// fetch, which falls through to the network / UC sidecar.
 registerFetch(tauriFetch);
+// SQL IntelliSense uses real catalog metadata: on desktop UC is reachable (via
+// the proxy above), so swap the editor's fixture catalog for the live one.
+setCatalogProvider(unityCatalogProvider);
 
 // Dynamically import the UI bootstrap so it (and the api.ts client it pulls in)
 // evaluates only AFTER the fetch is registered. The registry is late-binding so

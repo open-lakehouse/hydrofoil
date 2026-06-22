@@ -24,6 +24,25 @@ const serviceRoute = createRoute({
   path: "services/$serviceId",
 }).lazy(() => import("./routes/services.$serviceId.lazy").then((m) => m.Route));
 
+const queryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "query",
+}).lazy(() => import("./routes/query.lazy").then((m) => m.Route));
+
+interface EditorSearch {
+  // Active tab, encoded as the file path. The open-tab set is persisted to
+  // sessionStorage; only the active path lives in the URL (deep-linkable).
+  path?: string;
+}
+
+const editorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "editor",
+  validateSearch: (search: Record<string, unknown>): EditorSearch => ({
+    path: typeof search.path === "string" ? search.path : undefined,
+  }),
+}).lazy(() => import("./routes/editor.lazy").then((m) => m.Route));
+
 interface CatalogSearch {
   // Selected object, encoded as `kind:fullName` (see components/catalog/selection.ts).
   sel?: string;
@@ -44,5 +63,7 @@ const catalogRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   serviceRoute,
+  queryRoute,
+  editorRoute,
   catalogRoute,
 ]);

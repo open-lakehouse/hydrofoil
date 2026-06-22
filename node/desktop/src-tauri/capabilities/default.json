@@ -3,5 +3,25 @@
   "identifier": "default",
   "description": "Default capability for the main window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "uc-server",
+          "sidecar": true,
+          "args": [
+            "server",
+            "--config",
+            { "validator": ".+" },
+            "--port",
+            { "validator": "\\d+" },
+            "--quiet"
+          ]
+        }
+      ]
+    },
+    "shell:allow-kill"
+  ]
 }

@@ -38,4 +38,18 @@ impl AppState {
         let router = EntityTagAssignmentsServiceExt::register(Arc::clone(&state), router);
         FilesServiceExt::register(state, router)
     }
+
+    /// Register only the Tags services (TagPolicies + EntityTagAssignments) onto
+    /// a ConnectRPC router, leaving Files off.
+    ///
+    /// Embedders that serve Files through a different path — e.g. the Tauri
+    /// desktop backend, which calls the [`FileStore`] directly with native types
+    /// rather than over ConnectRPC — register Tags via the generic dispatcher but
+    /// skip the Files service. The HTTP server binary keeps using
+    /// [`register_all`](Self::register_all).
+    pub fn register_tags(self, router: Router) -> Router {
+        let state = Arc::new(self);
+        let router = TagPoliciesServiceExt::register(Arc::clone(&state), router);
+        EntityTagAssignmentsServiceExt::register(state, router)
+    }
 }
