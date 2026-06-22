@@ -99,6 +99,13 @@ portal-gen:
     cd crates/portal && buf generate
     cargo fmt -p portal
 
+# Regenerate hydrofoil's QueryService buffa message types + connect-rust stubs.
+# Proto source lives in proto/hydrofoil-query (root tree); codegen config is the
+# crate-local crates/hydrofoil/buf.gen.yaml. Same plugins as `portal-gen`.
+hydrofoil-gen:
+    cd crates/hydrofoil && buf generate
+    cargo fmt -p hydrofoil
+
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \
       config/policies/lakehouse.cedar:application/vnd.cedar.policyset.v1 \

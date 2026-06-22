@@ -1,0 +1,37 @@
+version: v2
+# ConnectRPC / buffa code generation for hydrofoil's QueryService.
+#
+# The proto source lives in the repo-root `proto/` tree (registered in the root
+# `buf.yaml`) alongside every other domain proto, for discoverability; only the
+# codegen config is crate-local. The root `buf.gen.yaml` runs `neoeinstein-prost`
+# for a different, narrow purpose (extracting a few Spark/Delta types into
+# `crates/common`), so this file is separate.
+#
+# Three LOCAL plugins (installed via `cargo install`; see the portal README):
+#   - protoc-gen-buffa            -> message types (owned structs + zero-copy views)
+#   - protoc-gen-buffa-packaging  -> mod.rs module trees
+#   - protoc-gen-connect-rust     -> ConnectRPC service traits + clients
+#
+# Regenerate with `just hydrofoil-gen` after editing the proto.
+managed:
+  enabled: true
+inputs:
+  - directory: ../../proto/hydrofoil-query
+plugins:
+  - local: protoc-gen-buffa
+    out: src/generated/buffa
+    opt:
+      - views=true
+      - json=true
+  - local: protoc-gen-buffa-packaging
+    out: src/generated/buffa
+    strategy: all
+  - local: protoc-gen-connect-rust
+    out: src/generated/connect
+    opt:
+      - buffa_module=crate::generated::buffa
+  - local: protoc-gen-buffa-packaging
+    out: src/generated/connect
+    strategy: all
+    opt:
+      - filter=services

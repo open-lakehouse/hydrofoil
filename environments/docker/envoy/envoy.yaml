@@ -56,6 +56,18 @@ static_resources:
                       domains:
                         - "*"
                       routes:
+                        # Hydrofoil ConnectRPC QueryService (server-streaming
+                        # SQL). Connect RPC paths are rooted at the fully-qualified
+                        # service name; it's plain HTTP POST so no gRPC-web filter
+                        # is needed. A streamed query can run long, so disable the
+                        # per-route timeout (as the marimo WebSocket route does).
+                        - match:
+                            prefix: "/hydrofoil.query.v1.QueryService/"
+                          route:
+                            cluster: hydrofoil
+                            timeout: 0s
+                          decorator:
+                            operation: hydrofoil_query
                         # OpenLineage ingestion (POST /api/v1/lineage) + the rest
                         # of the Marquez REST API both live under /api/v1.
                         - match:
@@ -285,3 +297,17 @@ static_resources:
                     socket_address:
                       address: marimo
                       port_value: 2718
+
+    # Hydrofoil HTTP query surface (POST /query + ConnectRPC QueryService).
+    - name: hydrofoil
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hydrofoil
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: hydrofoil
+                      port_value: 9082
