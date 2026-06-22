@@ -766,7 +766,10 @@ mod tests {
         let sub = entries.iter().find(|e| e.path == "/d/sub").unwrap();
         assert!(sub.is_directory, "subfolder should be a directory entry");
         assert!(
-            entries.iter().filter(|e| e.path != "/d/sub").all(|e| !e.is_directory),
+            entries
+                .iter()
+                .filter(|e| e.path != "/d/sub")
+                .all(|e| !e.is_directory),
             "files must not be directories"
         );
 

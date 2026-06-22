@@ -35,7 +35,8 @@ type BoxError = Box<dyn std::error::Error>;
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
-    let url = std::env::var("HYDROFOIL_URL").unwrap_or_else(|_| "http://localhost:50051".to_string());
+    let url =
+        std::env::var("HYDROFOIL_URL").unwrap_or_else(|_| "http://localhost:50051".to_string());
     // Fully-qualified managed table name (catalog.schema.table). The catalog +
     // schema must already exist in UC; the managed catalog inherits the
     // azurite:// managed_storage_root from the server config.
@@ -62,7 +63,11 @@ async fn main() -> Result<(), BoxError> {
             // form only: no TBLPROPERTIES (the server negotiates catalogManaged).
             let ddl = format!("CREATE TABLE {fq} (id BIGINT, item STRING) USING DELTA");
             println!("creating via SQL: {ddl}");
-            let _ = client.execute(ddl, None).await?.try_collect::<Vec<_>>().await?;
+            let _ = client
+                .execute(ddl, None)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
             println!("  created");
         }
         Ok("skip") => println!("CREATE_MODE=skip — assuming {fq} already exists"),
@@ -93,7 +98,9 @@ async fn main() -> Result<(), BoxError> {
     println!("ingested {rows} rows");
 
     // ── Read them back via Flight SQL (do_get_statement → unity resolver → vended store) ──
-    let stream = client.execute(format!("SELECT * FROM {fq} ORDER BY id"), None).await?;
+    let stream = client
+        .execute(format!("SELECT * FROM {fq} ORDER BY id"), None)
+        .await?;
     let batches: Vec<RecordBatch> = stream.try_collect().await?;
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     println!("read back {total} rows");
@@ -110,9 +117,10 @@ async fn main() -> Result<(), BoxError> {
     // out-of-band create+append (SKIP_CREATE path), so assert we wrote 3 and can
     // read back at least the 3 we just wrote.
     if rows != 3 || total < 3 {
-        return Err(
-            format!("expected 3 rows written and ≥3 read, got written={rows} read={total}").into(),
-        );
+        return Err(format!(
+            "expected 3 rows written and ≥3 read, got written={rows} read={total}"
+        )
+        .into());
     }
     println!("\nSUCCESS: managed Delta table write + read through hydrofoil works on Azurite.");
     Ok(())

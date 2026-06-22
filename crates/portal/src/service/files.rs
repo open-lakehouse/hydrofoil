@@ -35,7 +35,9 @@ impl FilesService for AppState {
             .ok_or_else(|| ConnectError::invalid_argument("upload stream was empty"))??
             .to_owned_message();
         if first.path.is_empty() {
-            return Err(ConnectError::invalid_argument("first message must set `path`").into());
+            return Err(ConnectError::invalid_argument(
+                "first message must set `path`",
+            ));
         }
         let path = first.path;
         let content_type = first.content_type;
@@ -43,9 +45,8 @@ impl FilesService for AppState {
         // Stream of chunk bytes: the first message's chunk, then each subsequent
         // message's chunk. Later messages' `path`/`content_type` are ignored (set
         // only on the first, per the proto contract).
-        let first_chunk = futures::stream::once(async move {
-            Ok::<Bytes, StoreError>(Bytes::from(first.chunk))
-        });
+        let first_chunk =
+            futures::stream::once(async move { Ok::<Bytes, StoreError>(Bytes::from(first.chunk)) });
         let rest = requests.map(|item| {
             item.map(|msg| Bytes::from(msg.to_owned_message().chunk))
                 .map_err(|e| StoreError::Internal(format!("upload stream error: {e}")))

@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use connectrpc::client::{ClientConfig, HttpClient};
-use portal::proto::files::v1::{DownloadFileRequest, ListDirectoryStreamRequest, UploadFileRequest};
+use portal::proto::files::v1::{
+    DownloadFileRequest, ListDirectoryStreamRequest, UploadFileRequest,
+};
 use portal::proto::tags::v1::{CreateTagPolicyRequest, TagPolicy};
 use portal::service::AppState;
 use portal::services::files::v1::FilesServiceClient;
