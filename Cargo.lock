@@ -2503,6 +2503,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-host"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "connectrpc",
+ "futures",
+ "http",
+ "hydrofoil",
+ "portal",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "unitycatalog-object-store",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

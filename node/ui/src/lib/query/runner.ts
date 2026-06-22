@@ -20,7 +20,7 @@
 
 import { createClient } from "@connectrpc/connect";
 import { QueryService } from "@/gen/hydrofoil/query/v1/svc_pb.js";
-import { queryTransport } from "./transport";
+import { clientTransport } from "@/lib/client/registry";
 
 /** One streamed result chunk: a self-contained Arrow IPC stream + its row count. */
 export interface QueryChunk {
@@ -49,9 +49,10 @@ export type QueryRunner = (
   opts: { signal: AbortSignal },
 ) => AsyncIterable<QueryChunk>;
 
-// The default web runner: hydrofoil's ConnectRPC QueryService over `clientFetch`.
-// The connect client is created once and reused across runs.
-const client = createClient(QueryService, queryTransport);
+// The default web runner: hydrofoil's ConnectRPC QueryService over the pluggable
+// `clientTransport` (Connect-over-fetch by default; the Tauri host swaps in an
+// invoke-backed transport). The connect client is created once and reused.
+const client = createClient(QueryService, clientTransport);
 
 /** Default runner — server-streaming SQL via the ConnectRPC QueryService. */
 export const connectQueryRunner: QueryRunner = async function* (req, opts) {

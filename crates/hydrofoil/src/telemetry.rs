@@ -92,7 +92,7 @@ fn init_meter_provider() -> Option<SdkMeterProvider> {
 }
 
 // Initialize tracing-subscriber and return OtelGuard for opentelemetry-related termination processing
-pub(crate) fn init_tracing_subscriber() -> OtelGuard {
+pub fn init_tracing_subscriber() -> OtelGuard {
     let meter_provider = init_meter_provider();
 
     // OTLP/HTTP span exporter -> MLflow. The endpoint is the FULL path: the 0.31
@@ -155,7 +155,7 @@ pub(crate) fn init_tracing_subscriber() -> OtelGuard {
     }
 }
 
-pub(crate) struct OtelGuard {
+pub struct OtelGuard {
     tracer_provider: SdkTracerProvider,
     meter_provider: Option<SdkMeterProvider>,
 }

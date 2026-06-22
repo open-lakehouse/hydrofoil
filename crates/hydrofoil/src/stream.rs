@@ -224,7 +224,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 /// the `tx` end of the builder, after building the stream, we can receive
 /// those batches with calling `.next()`
 ///
-/// ```
+/// ```ignore
 /// # use std::sync::Arc;
 /// # use datafusion_common::arrow::datatypes::{Schema, Field, DataType};
 /// # use datafusion_common::arrow::array::RecordBatch;

@@ -1,0 +1,24 @@
+[package]
+name = "desktop-host"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# In-process service executors reused by the Tauri desktop backend.
+portal = { path = "../portal" }
+hydrofoil = { path = "../hydrofoil" }
+
+connectrpc = { version = "0.7", features = ["server", "client"] }
+
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tracing = { workspace = true }
+unitycatalog-object-store = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+http = "1"
+futures = { workspace = true }
