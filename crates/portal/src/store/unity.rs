@@ -16,15 +16,16 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use object_store::{
-    Attribute, Attributes, GetOptions, GetRange, ObjectStore, ObjectStoreExt, PutOptions,
-    path::Path as StorePath,
+    Attribute, Attributes, GetOptions, GetRange, ObjectStore, ObjectStoreExt, PutMultipartOptions,
+    PutOptions, WriteMultipart, path::Path as StorePath,
 };
 use unitycatalog_object_store::{UnityObjectStoreFactory, VolumeOperation};
 
 use crate::error::{StoreError, StoreResult};
 use crate::proto::files::v1::{DirectoryEntry, DirectoryMetadata, FileMetadata};
-use crate::store::{FileStore, Page, paginate};
+use crate::store::{ByteStream, EntryStream, FileStore, ListOpts, Page, paginate};
 
 /// A [`FileStore`] backed by Unity Catalog volumes.
 pub struct UnityVolumeStore {
@@ -83,6 +84,61 @@ impl FileStore for UnityVolumeStore {
         self.stat_file(path).await
     }
 
+    async fn put_file_stream(
+        &self,
+        path: &str,
+        content_type: Option<String>,
+        mut chunks: ByteStream,
+    ) -> StoreResult<FileMetadata> {
+        let (store, parsed) = self.resolve(path, VolumeOperation::ReadWrite).await?;
+        let location = parsed.store_path()?;
+
+        // Carry the caller-supplied content type through as an object attribute,
+        // same as the buffered `put_file`, so it round-trips on `stat_file`.
+        let mut attributes = Attributes::new();
+        if let Some(ct) = content_type.filter(|c| !c.is_empty()) {
+            attributes.insert(Attribute::ContentType, ct.into());
+        }
+        let opts = PutMultipartOptions {
+            attributes,
+            ..Default::default()
+        };
+
+        // Open a multipart upload and drive it with `WriteMultipart`, which
+        // buffers into fixed-size parts (5 MiB) and uploads them as they fill —
+        // the file is never fully materialized. Cap in-flight parts so a fast
+        // producer can't queue unbounded uploads.
+        let upload = store
+            .put_multipart_opts(&location, opts)
+            .await
+            .map_err(map_store_err)?;
+        let mut writer = WriteMultipart::new(upload);
+
+        const MAX_CONCURRENCY: usize = 8;
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    writer
+                        .wait_for_capacity(MAX_CONCURRENCY)
+                        .await
+                        .map_err(map_store_err)?;
+                    writer.put(bytes);
+                }
+                // The producing stream errored mid-upload — abort so no partial
+                // object is committed, then surface the original error.
+                Err(e) => {
+                    let _ = writer.abort().await;
+                    return Err(e);
+                }
+            }
+        }
+
+        writer.finish().await.map_err(map_store_err)?;
+
+        // Re-stat for accurate size / mtime / etag / content type from the backend.
+        self.stat_file(path).await
+    }
+
     async fn read_file(
         &self,
         path: &str,
@@ -116,6 +172,32 @@ impl FileStore for UnityVolumeStore {
                 .map_err(map_store_err)?,
         };
         Ok(bytes.to_vec())
+    }
+
+    async fn read_file_stream(
+        &self,
+        path: &str,
+        offset: Option<i64>,
+        length: Option<i64>,
+    ) -> StoreResult<ByteStream> {
+        let (store, parsed) = self.resolve(path, VolumeOperation::Read).await?;
+        let location = parsed.store_path()?;
+
+        // Open the GET (resolving not-found / bad-range up front), then hand back
+        // the object store's own chunked byte stream — bytes flow straight from
+        // storage to the caller without ever materializing the whole object.
+        let opts = GetOptions {
+            range: byte_range(offset, length)?,
+            ..Default::default()
+        };
+        let result = store
+            .get_opts(&location, opts)
+            .await
+            .map_err(map_store_err)?;
+        Ok(result
+            .into_stream()
+            .map(|r| r.map_err(map_store_err))
+            .boxed())
     }
 
     async fn stat_file(&self, path: &str) -> StoreResult<FileMetadata> {
@@ -158,8 +240,6 @@ impl FileStore for UnityVolumeStore {
     }
 
     async fn delete_directory(&self, path: &str) -> StoreResult<()> {
-        use futures::StreamExt;
-
         let (store, parsed) = self.resolve(path, VolumeOperation::ReadWrite).await?;
         let prefix = parsed.list_prefix();
 
@@ -237,6 +317,70 @@ impl FileStore for UnityVolumeStore {
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(paginate(entries, &page))
     }
+
+    async fn list_files_opts(&self, path: &str, opts: ListOpts) -> StoreResult<EntryStream> {
+        let (store, parsed) = self.resolve(path, VolumeOperation::Read).await?;
+        let prefix = parsed.list_prefix();
+
+        // The object store's streaming list is recursive (no delimiter). The
+        // non-recursive (delimited, hierarchical) view has no streaming form in
+        // object_store, so fall back to the buffered delimiter listing and
+        // replay it as a stream — same entry shape, bounded by directory width.
+        if !opts.recursive {
+            let (entries, _) = self
+                .list_directory(
+                    path,
+                    Page {
+                        max_results: opts.max_results,
+                        page_token: None,
+                    },
+                )
+                .await?;
+            let filtered = filter_after(entries, opts.start_after.as_deref());
+            return Ok(futures::stream::iter(filtered.into_iter().map(Ok)).boxed());
+        }
+
+        // Recursive: drive object_store's streaming list. `start_after` resumes
+        // strictly after an absolute path; translate it to a store-relative
+        // offset. Each yielded ObjectMeta becomes a (file) DirectoryEntry; the
+        // `max_results` cap is applied by the consumer via `take`.
+        let listing = match opts
+            .start_after
+            .as_deref()
+            .map(|abs| parsed.relativize(abs))
+        {
+            Some(rel) => store.list_with_offset(prefix.as_ref(), &StorePath::from(rel)),
+            None => store.list(prefix.as_ref()),
+        };
+
+        let parsed = Arc::new(parsed);
+        let stream = listing.map(move |res| {
+            res.map_err(map_store_err).map(|obj| DirectoryEntry {
+                path: parsed.absolute(obj.location.as_ref()),
+                is_directory: false,
+                file_size: obj.size as i64,
+                last_modified: obj.last_modified.timestamp_millis(),
+                ..Default::default()
+            })
+        });
+        let stream = match opts.max_results {
+            Some(n) => stream.take(n).boxed(),
+            None => stream.boxed(),
+        };
+        Ok(stream)
+    }
+}
+
+/// Drop entries up to and including `start_after` (an absolute path). Entries
+/// are assumed sorted; `None` returns them unchanged.
+fn filter_after(entries: Vec<DirectoryEntry>, start_after: Option<&str>) -> Vec<DirectoryEntry> {
+    match start_after {
+        Some(after) => entries
+            .into_iter()
+            .filter(|e| e.path.as_str() > after)
+            .collect(),
+        None => entries,
+    }
 }
 
 /// A Volumes path split into its three-level volume name and the relative
@@ -281,6 +425,19 @@ impl VolumePath {
             self.volume,
             relative.trim_start_matches('/')
         )
+    }
+
+    /// Inverse of [`absolute`](Self::absolute): strip the
+    /// `/Volumes/<catalog>/<schema>/<volume>/` prefix from an absolute Volumes
+    /// path to get the store-relative path used as a listing offset. A path that
+    /// doesn't carry this volume's prefix is returned trimmed of a leading `/`
+    /// (best-effort — the offset just needs to be store-relative).
+    fn relativize(&self, absolute: &str) -> String {
+        let prefix = format!("/Volumes/{}/{}/{}/", self.catalog, self.schema, self.volume);
+        absolute
+            .strip_prefix(&prefix)
+            .unwrap_or_else(|| absolute.trim_start_matches('/'))
+            .to_string()
     }
 }
 
