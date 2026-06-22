@@ -1,5 +1,5 @@
 import { Link, Outlet } from "@tanstack/react-router";
-import { Database } from "lucide-react";
+import { Database, Terminal } from "lucide-react";
 import { SERVICE_SURFACES } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { TopBar } from "./TopBar";
@@ -28,6 +28,16 @@ export function AppShell() {
               >
                 <Database className="h-4 w-4" />
                 Unity Catalog
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/query"
+                className={navLinkClass}
+                activeProps={activeProps}
+              >
+                <Terminal className="h-4 w-4" />
+                SQL
               </Link>
             </li>
           </ul>

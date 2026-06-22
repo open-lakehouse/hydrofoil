@@ -9,6 +9,11 @@ import { defineConfig, type ProxyOptions } from "vite";
 // the MLflow and marimo UIs and when calling the Unity Catalog REST API.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:9080";
 
+// Hydrofoil's ConnectRPC QueryService. In the fully-containerized stack it's
+// fronted by Envoy (under GATEWAY_URL); for host-run dev (`just hydro`), point
+// QUERY_URL straight at hydrofoil's HTTP port (default :9082).
+const QUERY_URL = process.env.QUERY_URL ?? GATEWAY_URL;
+
 // Service UIs (MLflow, marimo) are embedded in an <iframe>. Two things break
 // that, both fixed here:
 //   1. They 30x-redirect the base path to an ABSOLUTE gateway URL
@@ -45,6 +50,12 @@ export default defineConfig({
       // Unity Catalog REST API (Envoy routes /api/2.1/unity-catalog -> unity-catalog:8081).
       "/api": {
         target: GATEWAY_URL,
+        changeOrigin: true,
+      },
+      // Hydrofoil ConnectRPC QueryService (server-streaming SQL). Connect's RPC
+      // paths are rooted at the fully-qualified service name.
+      "/hydrofoil.query.v1.QueryService": {
+        target: QUERY_URL,
         changeOrigin: true,
       },
       // MLflow web UI (served under --static-prefix /mlflow).

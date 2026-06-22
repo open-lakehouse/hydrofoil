@@ -24,6 +24,11 @@ const serviceRoute = createRoute({
   path: "services/$serviceId",
 }).lazy(() => import("./routes/services.$serviceId.lazy").then((m) => m.Route));
 
+const queryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "query",
+}).lazy(() => import("./routes/query.lazy").then((m) => m.Route));
+
 interface CatalogSearch {
   // Selected object, encoded as `kind:fullName` (see components/catalog/selection.ts).
   sel?: string;
@@ -44,5 +49,6 @@ const catalogRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   serviceRoute,
+  queryRoute,
   catalogRoute,
 ]);

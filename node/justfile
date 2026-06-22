@@ -39,5 +39,10 @@ gen-api:
 gen-forms:
     npm run gen:form-schemas --prefix uc-client
 
-# Regenerate everything derived from the OpenAPI spec (client + form schemas)
-gen: gen-api gen-forms
+# Regenerate the connect-es TypeScript client for hydrofoil's QueryService.
+# Driven by buf against proto/hydrofoil-query (the repo-root proto tree).
+gen-rpc:
+    npm run gen:rpc --prefix ui
+
+# Regenerate everything derived from protos/specs (UC client + form schemas + RPC client)
+gen: gen-api gen-forms gen-rpc
