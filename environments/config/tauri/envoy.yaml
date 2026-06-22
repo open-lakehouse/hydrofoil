@@ -1,0 +1,122 @@
+# Envoy gateway config for the `tauri` stack.
+#
+# A trimmed copy of config/live/envoy.yaml: the Tauri desktop app runs its own UI
+# and hosts the portal + hydrofoil QueryService in-process, so this gateway only
+# fronts the two auxiliary backend services — MLflow and Marquez — and exposes
+# them under Databricks-parallel API paths so the desktop client speaks one
+# dialect.
+#
+# Published on the host as ${ENVOY_PORT:-9080}:10000 by services/envoy.yaml.
+static_resources:
+  listeners:
+    - name: gateway_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+      traffic_direction: INBOUND
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                generate_request_id: true
+                codec_type: AUTO
+                upgrade_configs:
+                  upgrade_type: "websocket"
+                stat_prefix: ingress_http
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: api_routes
+                  virtual_hosts:
+                    - name: apis
+                      domains:
+                        - "*"
+                      routes:
+                        # MLflow REST API (Databricks-parallel root path). MLflow
+                        # runs with --static-prefix /mlflow, so the API lives at
+                        # /mlflow/api/2.0/mlflow; rewrite to keep it at root. This
+                        # single prefix also covers /api/2.0/mlflow-artifacts.
+                        - match:
+                            prefix: "/api/2.0/mlflow"
+                          route:
+                            cluster: mlflow
+                            prefix_rewrite: "/mlflow/api/2.0/mlflow"
+                          decorator:
+                            operation: mlflow_api
+                        # MLflow OTLP/HTTP trace ingestion (root, OTLP convention).
+                        - match:
+                            prefix: "/v1/traces"
+                          route:
+                            cluster: mlflow
+                            prefix_rewrite: "/mlflow/v1/traces"
+                          decorator:
+                            operation: mlflow_traces
+                        # Marquez REST API (OpenLineage backend; lineage events +
+                        # the namespaces/jobs/datasets/lineage read contract).
+                        - match:
+                            prefix: "/api/v1"
+                          route:
+                            cluster: marquez
+                          decorator:
+                            operation: marquez_api
+                        # MLflow web UI (served by MLflow under --static-prefix
+                        # /mlflow: UI, /ajax-api, static assets, /health).
+                        - match:
+                            prefix: "/mlflow"
+                          route:
+                            cluster: mlflow
+                          decorator:
+                            operation: mlflow_ui
+                        # Marquez lineage web UI (catch-all root). The web app's
+                        # bundled proxy forwards its own /api/* calls server-side
+                        # to marquez-api, so only the UI shell needs routing here.
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: marquez_web
+                          decorator:
+                            operation: marquez_web
+
+  clusters:
+    - name: mlflow
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: mlflow
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: mlflow
+                      port_value: 5000
+
+    - name: marquez
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: marquez
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: marquez-api
+                      port_value: 5000
+
+    - name: marquez_web
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: marquez_web
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: marquez-web
+                      port_value: 3000
