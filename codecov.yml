@@ -11,6 +11,24 @@ coverage:
       default:
         informational: true
 
+# Exclude code we never want counted against coverage. The big skew is committed
+# codegen: buffa/connect-rust + prost/tonic output is thousands of lines of
+# machine-generated impls that tests never exercise directly, which drags the
+# denominator down and makes the percentage meaningless. Also drop examples and
+# test helpers (exercised by running them, not by assertions).
+#
+# Paths are matched against the report's workspace-relative file paths. Keep this
+# in sync with the `src/generated`, `src/gen`, and generated-proto trees (every
+# committed file carries an `@generated` / `DO NOT EDIT` header). Regenerate with
+# `just hydrofoil-gen` / `just portal-gen` / `buf generate`.
+ignore:
+  - "**/generated/**" # buffa + connect-rust output (hydrofoil, portal)
+  - "**/src/gen/**" # prost/tonic output (cedar-oci, common: spark/delta connect)
+  - "crates/lineage-service/src/proto/lineage.v1.rs" # generated; sibling mod.rs is hand-written
+  - "**/examples/**" # runnable examples, not unit-tested
+  - "**/tests/**" # integration test harnesses
+  - "**/benches/**"
+
 # Public-repo tokenless upload; no CODECOV_TOKEN secret required.
 codecov:
   require_ci_to_pass: false

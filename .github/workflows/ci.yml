@@ -203,11 +203,19 @@ jobs:
       # Collect coverage from both nextest tests and doctests into one report.
       # Doctest coverage needs nightly (unstable `--persist-doctests`); the
       # nextest run stays on the pinned stable toolchain.
+      #
+      # `--ignore-filename-regex` drops committed codegen from the report itself
+      # (buffa/connect-rust under `**/generated/`, prost/tonic under `**/src/gen/`,
+      # and the generated lineage proto) so `codecov.json` never carries those
+      # thousands of machine-generated lines. codecov.yml's `ignore` does the same
+      # server-side; filtering at the source keeps the uploaded artifact honest
+      # too. Keep the two in sync.
       - name: Collect coverage
         run: |
           cargo llvm-cov --no-report nextest --workspace --all-features
           cargo +nightly llvm-cov --no-report --doc --workspace --all-features
-          cargo +nightly llvm-cov report --doctests --codecov --output-path codecov.json
+          cargo +nightly llvm-cov report --doctests --codecov --output-path codecov.json \
+            --ignore-filename-regex '(/generated/|/src/gen/|lineage-service/src/proto/lineage\.v1\.rs)'
 
       # Codecov rejects tokenless uploads for this repo
       # ("Token required - not valid tokenless upload"), so authenticate with
