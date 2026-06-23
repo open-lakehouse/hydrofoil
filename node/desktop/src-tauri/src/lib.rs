@@ -50,7 +50,7 @@ struct ActiveEnv {
 }
 
 /// Managed state: the active environment behind interior mutability so the
-/// `select_environment` command can swap services in after boot. Commands take a
+/// `start_environment` command can swap services in after boot. Commands take a
 /// snapshot (clone of the `Arc`s) under a short read lock, then drop it before
 /// awaiting.
 #[derive(Default)]
@@ -731,7 +731,7 @@ fn parse_uc_addr(line: &str) -> Option<String> {
 
 /// Bring an environment online: build (and store) the in-process executors for
 /// the given UC endpoint. `unity_endpoint` is `None` when UC is disabled (files
-/// run in-memory). Shared by `select_environment` and the `OPEN_LAKEHOUSE_UC_URL`
+/// run in-memory). Shared by `start_environment` and the `OPEN_LAKEHOUSE_UC_URL`
 /// escape hatch.
 async fn activate_endpoint(
     app: &tauri::AppHandle,
@@ -825,11 +825,12 @@ fn create_environment(name: String) -> Result<Environment, String> {
     Ok(env)
 }
 
-/// Select an environment: tear down any running sidecar, write its UC config,
+/// Start an environment: tear down any running sidecar, write its UC config,
 /// spawn the `uc` server, seed it, and bind the in-process executors. Returns the
-/// resolved UC endpoint. Re-selecting an environment respawns it cleanly.
+/// active-environment descriptor. Re-starting an environment respawns it cleanly.
+/// Starting does not open the app — the UI decides whether to navigate into it.
 #[tauri::command]
-async fn select_environment(
+async fn start_environment(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<serde_json::Value, String> {
@@ -839,7 +840,7 @@ async fn select_environment(
     }
 
     // Already active → no-op (the UI re-opens an already-running environment
-    // without calling select, but keep the command idempotent so a redundant
+    // without calling start, but keep the command idempotent so a redundant
     // call doesn't pointlessly kill + respawn the sidecar). Return the current
     // descriptor so the caller can scope state either way.
     let already_active = app.state::<AppState>().active.read().unwrap().id.as_deref() == Some(&id);
@@ -856,6 +857,36 @@ async fn select_environment(
         .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
 }
 
+/// Stop an environment: kill its UC sidecar and clear the active services so the
+/// shell returns to the idle/overview state. Idempotent — a no-op when the given
+/// id is not the active one (or nothing is active). Only the single active
+/// environment can be running today, so stopping any other id does nothing.
+#[tauri::command]
+async fn stop_environment(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+
+    // Ignore stop for an environment that is not the active one.
+    {
+        let active = state.active.read().unwrap();
+        if active.id.as_deref() != Some(&id) {
+            return Ok(());
+        }
+    }
+
+    // Kill the spawned sidecar child (mirrors the exit hook). Taking the slot
+    // empties it, so the exit hook later finds nothing to kill — no double-kill.
+    if let Some(slot) = app.try_state::<UcSidecar>() {
+        if let Some(child) = slot.0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+
+    // Reset the active services to "none selected". `snapshot()` then errors and
+    // the proxy reports "Unity Catalog is not running" until the next start.
+    *state.active.write().unwrap() = ActiveEnv::default();
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -869,7 +900,7 @@ pub fn run() {
             // for "no UC → in-memory files") auto-activates a single environment
             // up front, so `dev-desktop.sh` boots straight into the app without
             // the environment picker. When unset, the app boots into the outer
-            // shell and an environment is activated lazily via select_environment.
+            // shell and an environment is activated lazily via start_environment.
             match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
                 Ok(url) => {
                     let endpoint = if url.is_empty() {
@@ -898,7 +929,8 @@ pub fn run() {
             list_environments,
             active_environment,
             create_environment,
-            select_environment,
+            start_environment,
+            stop_environment,
             connect_unary,
             connect_unary_proto,
             connect_stream,

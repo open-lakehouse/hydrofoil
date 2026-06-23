@@ -71,6 +71,14 @@ export function EnvironmentGate() {
     undefined,
   );
   const [showApp, setShowApp] = useState<boolean | undefined>(undefined);
+  // A start/stop in flight. Single-active backend → a single nullable value (not
+  // a per-id map). Drives the transient "Starting…/Stopping…" status and guards
+  // against concurrent lifecycle ops. `lastError` surfaces a failed transition.
+  const [transition, setTransition] = useState<{
+    id: string;
+    kind: "starting" | "stopping";
+  } | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   if (initial.isLoading) {
     return (
@@ -99,11 +107,60 @@ export function EnvironmentGate() {
     setShowApp(true);
   };
 
+  // Start WITHOUT opening the app (the "Start" action): make it the running
+  // environment but stay in the manager. Clear the cache only when the running
+  // environment actually changes.
+  const onStarted = (env: ActiveEnvironment) => {
+    if (env.id !== running?.id) queryClient.clear();
+    setActive(env);
+  };
+
+  // Stop the running environment's services: drop it back to idle. The query
+  // cache was scoped against now-dead services, so clear it; the key={running.id}
+  // remount means there is no stale app subtree to tear down.
+  const onStopped = (id: string) => {
+    if (running?.id !== id) return;
+    queryClient.clear();
+    setActive(null);
+    setShowApp(false);
+  };
+
+  // Orchestrate a start (optionally opening the app afterwards). Centralizes the
+  // concurrent-op guard and error reset so the manager/detail stay declarative.
+  const startEnv = async (id: string, open: boolean) => {
+    if (transition) return;
+    setLastError(null);
+    setTransition({ id, kind: "starting" });
+    try {
+      const env = await host.start(id);
+      if (open) adopt(env);
+      else onStarted(env);
+    } catch (e) {
+      setLastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTransition(null);
+    }
+  };
+
+  const stopEnv = async (id: string) => {
+    if (transition) return;
+    setLastError(null);
+    setTransition({ id, kind: "stopping" });
+    try {
+      await host.stop(id);
+      onStopped(id);
+    } catch (e) {
+      setLastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTransition(null);
+    }
+  };
+
   // Switch directly to another environment from the in-app switcher: bring it
-  // online via the host, then adopt it.
+  // online via the host, then adopt it (start + open).
   const switchTo = async (id: string) => {
     if (id === running?.id) return;
-    adopt(await host.select(id));
+    adopt(await host.start(id));
   };
 
   return (
@@ -125,8 +182,12 @@ export function EnvironmentGate() {
       ) : (
         <EnvironmentManager
           running={running}
+          transition={transition}
+          lastError={lastError}
           onOpen={() => setShowApp(true)}
-          onActivated={adopt}
+          onStart={(id) => startEnv(id, false)}
+          onLaunch={(id) => startEnv(id, true)}
+          onStop={stopEnv}
         />
       )}
     </div>

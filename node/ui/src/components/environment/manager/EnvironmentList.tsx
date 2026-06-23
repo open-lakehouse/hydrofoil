@@ -6,19 +6,29 @@
 // environment's detail the right pane shows; it does NOT switch the running
 // environment (that is an explicit action in the detail pane).
 
-import { CheckCircle2, Circle, Plus } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, Plus } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { ActiveEnvironment, Environment } from "@/lib/client/environments";
+import type {
+  ActiveEnvironment,
+  Environment,
+  EnvironmentStatus,
+} from "@/lib/client/environments";
 import { cn } from "@/lib/utils";
 import { CreateEnvironmentDialog } from "../CreateEnvironmentDialog";
 import { capabilitySummary } from "../capabilitySummary";
+import {
+  type EnvironmentTransition,
+  environmentStatus,
+  statusLabel,
+} from "../environmentStatus";
 
 export function EnvironmentList({
   environments,
   isLoading,
   runningId,
   runningSummary,
+  transition,
   selectedId,
   onSelect,
   onCreated,
@@ -29,11 +39,13 @@ export function EnvironmentList({
   runningId: string | null;
   /** The running environment (for its capability summary), or null. */
   runningSummary: ActiveEnvironment | null;
+  /** A start/stop in flight (drives transient status), or null. */
+  transition: EnvironmentTransition;
   /** Which card is shown in the detail pane. */
   selectedId: string | null;
   onSelect: (id: string) => void;
-  /** A new environment was created and brought online. */
-  onCreated: (env: ActiveEnvironment) => void;
+  /** A new (idle, not-started) environment was created. */
+  onCreated: (env: Environment) => void;
 }) {
   const [creating, setCreating] = useState(false);
 
@@ -65,7 +77,7 @@ export function EnvironmentList({
               <EnvironmentCard
                 key={env.id}
                 env={env}
-                running={env.id === runningId}
+                status={environmentStatus(env.id, runningId, transition)}
                 selected={env.id === selectedId}
                 summary={
                   env.id === runningId && runningSummary
@@ -91,13 +103,13 @@ export function EnvironmentList({
 
 function EnvironmentCard({
   env,
-  running,
+  status,
   selected,
   summary,
   onSelect,
 }: {
   env: Environment;
-  running: boolean;
+  status: EnvironmentStatus;
   selected: boolean;
   summary: string | null;
   onSelect: () => void;
@@ -114,22 +126,38 @@ function EnvironmentCard({
       >
         <span className="flex items-center justify-between">
           <span className="font-medium">{env.name}</span>
-          {running ? (
-            <span className="flex items-center gap-1 text-xs font-normal text-green-600 dark:text-green-500">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Running
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
-              <Circle className="h-3 w-3" />
-              Stopped
-            </span>
-          )}
+          <StatusBadge status={status} />
         </span>
         <span className="text-xs text-muted-foreground">
           {summary ?? env.id}
         </span>
       </button>
     </li>
+  );
+}
+
+function StatusBadge({ status }: { status: EnvironmentStatus }) {
+  const label = statusLabel(status);
+  if (status === "running") {
+    return (
+      <span className="flex items-center gap-1 text-xs font-normal text-green-600 dark:text-green-500">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        {label}
+      </span>
+    );
+  }
+  if (status === "starting" || status === "stopping") {
+    return (
+      <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {label}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+      <Circle className="h-3 w-3" />
+      {label}
+    </span>
   );
 }

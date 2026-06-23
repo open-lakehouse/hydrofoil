@@ -1,7 +1,8 @@
-// Modal "create environment" dialog. Creating an environment immediately selects
-// it (brings its services online) and hands the resulting active environment back
-// to the caller — create + open is the common first-run path, and the management
-// view wants the new environment to become the active one.
+// Modal "create environment" dialog. Creating an environment leaves it IDLE — it
+// is registered but its services are not started, so the user can review/adjust
+// its configuration before deliberately starting it (Start / Launch from the
+// detail pane). The new (stopped) environment is handed back so the manager can
+// select its card.
 //
 // Opened from the environment manager sidebar header (mirroring the catalog
 // view's "New" affordance) instead of an inline form.
@@ -18,7 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  type ActiveEnvironment,
+  type Environment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
 
@@ -27,8 +28,8 @@ export function CreateEnvironmentDialog({
   onCreated,
 }: {
   onClose: () => void;
-  /** A new environment was created and brought online. */
-  onCreated: (env: ActiveEnvironment) => void;
+  /** A new (idle, not-started) environment was created. */
+  onCreated: (env: Environment) => void;
 }) {
   const host = getEnvironmentHost();
   const [name, setName] = useState("");
@@ -42,8 +43,8 @@ export function CreateEnvironmentDialog({
     setError(null);
     setBusy(true);
     try {
-      const env = await host.create(trimmed);
-      onCreated(await host.select(env.id));
+      // Create only — do NOT start. The user starts it deliberately afterwards.
+      onCreated(await host.create(trimmed));
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
