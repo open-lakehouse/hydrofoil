@@ -13,6 +13,7 @@ import {
   unityCatalogProvider,
 } from "@/lib/editor/catalogProvider";
 import { registerFilePicker } from "@/lib/ingest/registry";
+import { registerNotebookHost } from "@/lib/notebook/registry";
 // Desktop stylesheet: re-exports the UI's globals AND declares the UI source as a
 // Tailwind content root, so utility classes used by the UI components are emitted
 // when building from node/desktop (see styles.css).
@@ -20,6 +21,7 @@ import "./styles.css";
 import { tauriEnvironmentHost } from "./tauri-environments";
 import { tauriFetch } from "./tauri-fetch";
 import { tauriFilePicker } from "./tauri-ingest";
+import { tauriNotebookHost } from "./tauri-notebook";
 import { tauriTransport } from "./tauri-transport";
 
 // Never bootstrap inside an iframe. The shell embeds service UIs (MLflow, marimo,
@@ -45,6 +47,10 @@ if (window.self === window.top) {
   // The import page reads a local file by path; supply the native file picker so
   // the page (and its nav entry) light up on desktop.
   registerFilePicker(tauriFilePicker);
+  // Notebooks: opening a `.py` file spins up a marimo sidecar and embeds it.
+  // Registering this is what makes `.py` files classify as notebook tabs (web
+  // leaves it unregistered, so `.py` stays a plain text file).
+  registerNotebookHost(tauriNotebookHost);
 
   // Dynamically import the UI bootstrap so it (and the api.ts client it pulls in)
   // evaluates only AFTER the fetch is registered. The registry is late-binding so

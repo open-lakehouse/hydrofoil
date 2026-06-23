@@ -29,9 +29,15 @@ pub struct LaunchContext {
     /// desktop fragments live. The generated compose `include:`s fragments here.
     pub fragments_dir: String,
     /// Absolute path to `environments/` — the `project_directory` the included
-    /// fragments resolve their relative `./.data`, `./config`, `./docker` paths
-    /// against.
+    /// fragments resolve their relative `./config`, `./docker` (read-only,
+    /// repo-tracked) paths against.
     pub environments_dir: String,
+    /// Absolute path to this environment's writable data root
+    /// (`.open-lakehouse/envs/<id>/modules/data`), injected as `OL_ENV_DATA_DIR`
+    /// so stateful fragments (Postgres, Azurite) bind their data dirs **per
+    /// environment** and co-located with the rest of the env's state — so it
+    /// survives restarts and the whole environment can be deleted as a unit.
+    pub env_data_dir: String,
     /// The shared telemetry collector's OTLP/HTTP base URL (the host Jaeger, e.g.
     /// `http://host.docker.internal:4318`), set when this environment opted in to
     /// observability. Injected as `OTEL_COLLECTOR_HTTP` so the service fragments'
@@ -74,6 +80,13 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
     if let Some(port) = ctx.uc_port {
         env.insert("UC_HOST_URL".to_string(), docker_uc_url(port));
     }
+    // The per-environment writable data root. Stateful fragments bind their data
+    // dirs under this (e.g. `${OL_ENV_DATA_DIR}/db`), so state is isolated per
+    // environment and persists across restarts.
+    env.insert(
+        "OL_ENV_DATA_DIR".to_string(),
+        ctx.env_data_dir.clone(),
+    );
     // When the env opted in to observability, point the service fragments' OTLP
     // exporters at the shared host collector; otherwise leave it unset so the
     // baked-in instrumentation is a no-op.
@@ -117,6 +130,7 @@ mod tests {
             uc_port: Some(54321),
             fragments_dir: "/repo/environments/services/desktop".into(),
             environments_dir: "/repo/environments".into(),
+            env_data_dir: "/data/.open-lakehouse/envs/dev/modules/data".into(),
             otel_collector_http: None,
         }
     }
@@ -149,6 +163,11 @@ mod tests {
         assert_eq!(
             artifacts.env.get("UC_HOST_URL").map(String::as_str),
             Some("http://host.docker.internal:54321/api/2.1/unity-catalog/")
+        );
+        // Injects the per-env data root for stateful fragments to bind against.
+        assert_eq!(
+            artifacts.env.get("OL_ENV_DATA_DIR").map(String::as_str),
+            Some("/data/.open-lakehouse/envs/dev/modules/data")
         );
         // No collector by default → no OTEL_COLLECTOR_HTTP (instrumentation no-op).
         assert!(!artifacts.env.contains_key("OTEL_COLLECTOR_HTTP"));

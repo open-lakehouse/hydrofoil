@@ -39,6 +39,15 @@ fn env_modules_dir(env_id: &str) -> PathBuf {
         .join("modules")
 }
 
+/// The writable data root for an environment's stateful Docker services
+/// (`.open-lakehouse/envs/<id>/modules/data/`), injected into compose as
+/// `OL_ENV_DATA_DIR`. Per-environment so Postgres/Azurite state is isolated and
+/// co-located with the env's UC/home/notebook state — persists across restarts
+/// and is removed when the environment is deleted.
+fn env_data_dir(env_id: &str) -> PathBuf {
+    env_modules_dir(env_id).join("data")
+}
+
 /// Absolute path to the `environments/` directory (sibling of `node/`), the
 /// project directory the included fragments resolve relative paths against.
 fn environments_dir() -> PathBuf {
@@ -53,11 +62,12 @@ fn fragments_dir() -> PathBuf {
 /// Build the `LaunchContext` from the resolved UC port and host facts.
 /// `observability` opts the env's services in to emitting to the shared host
 /// Jaeger (reached from containers via host.docker.internal on its OTLP/HTTP port).
-fn launch_context(uc_port: Option<u16>, observability: bool) -> LaunchContext {
+fn launch_context(env_id: &str, uc_port: Option<u16>, observability: bool) -> LaunchContext {
     LaunchContext {
         uc_port,
         fragments_dir: fragments_dir().to_string_lossy().into_owned(),
         environments_dir: environments_dir().to_string_lossy().into_owned(),
+        env_data_dir: env_data_dir(env_id).to_string_lossy().into_owned(),
         otel_collector_http: observability.then(|| {
             let port = std::env::var("JAEGER_OTLP_HTTP_PORT").unwrap_or_else(|_| "4318".into());
             format!("http://host.docker.internal:{port}")
@@ -126,11 +136,15 @@ fn start_compose(
     // Reconcile a stale project from a prior force-quit before bringing ours up.
     compose_down(&project);
 
-    let ctx = launch_context(uc_port, observability);
+    let ctx = launch_context(env_id, uc_port, observability);
     let ComposeArtifacts { compose_yaml, env } = env_modules::generate_compose(graph, &ctx);
 
     let dir = env_modules_dir(env_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {dir:?}: {e}"))?;
+    // Create the per-env data root up front so the bind mounts resolve to a
+    // host dir we own (Docker would otherwise create it root-owned on first up).
+    let data_dir = env_data_dir(env_id);
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
     let compose_path = dir.join("compose.yaml");
     std::fs::write(&compose_path, &compose_yaml)
         .map_err(|e| format!("writing {compose_path:?}: {e}"))?;
@@ -292,7 +306,9 @@ pub fn config_artifacts(
     //    illustrative context (placeholder UC port; collector shown when
     //    observability is opted in) so it renders the real shape pre-start.
     let observability = env_modules::Capability::wants_observability(capabilities);
-    let ctx = launch_context(None, observability);
+    // Illustrative context: no real env yet (the viewer renders pre-start), so use
+    // a placeholder id for the per-env data root path shown in the compose.
+    let ctx = launch_context("<env>", None, observability);
     let ComposeArtifacts { compose_yaml, .. } = env_modules::generate_compose(&graph, &ctx);
     if !compose_yaml.is_empty() {
         artifacts.push(ConfigArtifact {

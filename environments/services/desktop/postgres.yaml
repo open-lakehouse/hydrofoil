@@ -6,8 +6,11 @@
 # init script still creates all three DBs (the unused `unitycatalog` DB is
 # harmless); the healthcheck waits on `mlflow` since that's what we depend on.
 #
-# Paths are relative to the `environments/` directory (the generated compose sets
-# `project_directory` there), so `.data/` and `docker/` resolve to the repo tree.
+# The data dir is bind-mounted from the PER-ENVIRONMENT data root the desktop app
+# injects as ${OL_ENV_DATA_DIR} (.open-lakehouse/envs/<id>/modules/data), so
+# Postgres state is isolated per environment and persists across restarts. The
+# read-only `docker/` init path is relative to `environments/` (the generated
+# compose sets `project_directory` there), so it resolves to the repo tree.
 services:
   db:
     image: postgres:16
@@ -16,7 +19,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
-      - ./.data/desktop/db:/var/lib/postgresql/data
+      - ${OL_ENV_DATA_DIR}/db:/var/lib/postgresql/data
       - ./docker/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:

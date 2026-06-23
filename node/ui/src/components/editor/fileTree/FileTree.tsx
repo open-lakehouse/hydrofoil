@@ -3,7 +3,7 @@
 // Reuses the catalog tree's primitives (TreeRow / ListStates) and an expansion
 // store keyed by path. Directories lazily fetch their contents via `useDirectory`
 // (cursor-paginated) only once expanded; files invoke `onOpenFile` on click.
-import { FileCode, FileText, FileType, Folder } from "lucide-react";
+import { FileCode, FileText, FileType, Folder, NotebookPen } from "lucide-react";
 import { useMemo } from "react";
 
 import { ListStates, TreeRow } from "@/components/catalog/TreeRow";
@@ -17,6 +17,7 @@ function FileIcon({ language }: { language: EditorLanguage }) {
   const cls = "h-4 w-4 text-muted-foreground";
   if (language === "sql") return <FileCode className={cls} />;
   if (language === "markdown") return <FileType className={cls} />;
+  if (language === "notebook") return <NotebookPen className={cls} />;
   return <FileText className={cls} />;
 }
 

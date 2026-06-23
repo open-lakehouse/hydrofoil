@@ -31,9 +31,11 @@ use tauri::{Manager, State};
 
 mod kek;
 mod modules;
+mod notebook;
 mod supervisor;
 mod telemetry;
 
+use notebook::Notebooks;
 use supervisor::{ManagedProcess, Supervisor};
 use telemetry::Telemetry;
 
@@ -41,16 +43,16 @@ use telemetry::Telemetry;
 /// executors plus the resolved UC endpoint. `None` until an environment is
 /// selected (the outer shell spawns services lazily on selection).
 #[derive(Clone, Default)]
-struct ActiveEnv {
+pub(crate) struct ActiveEnv {
     /// The active environment's id. `None` until one is selected; set to the
     /// escape-hatch synthetic id when `OPEN_LAKEHOUSE_UC_URL` activated one.
     /// Lets the shell highlight the running environment in the overview.
-    id: Option<String>,
-    hosted: Option<Arc<Hosted>>,
+    pub(crate) id: Option<String>,
+    pub(crate) hosted: Option<Arc<Hosted>>,
     /// Resolved Unity Catalog REST base (the spawned sidecar's dynamic endpoint),
     /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
     /// disabled (files run in-memory); the proxy then errors.
-    unity_endpoint: Option<String>,
+    pub(crate) unity_endpoint: Option<String>,
     /// Whether this environment serves a local `/home` volume (true for real
     /// environments, false for the `__external__` escape hatch). Surfaced to the
     /// UI as an environment capability.
@@ -62,8 +64,8 @@ struct ActiveEnv {
 /// snapshot (clone of the `Arc`s) under a short read lock, then drop it before
 /// awaiting.
 #[derive(Default)]
-struct AppState {
-    active: RwLock<ActiveEnv>,
+pub(crate) struct AppState {
+    pub(crate) active: RwLock<ActiveEnv>,
 }
 
 impl AppState {
@@ -465,7 +467,7 @@ async fn proxy_request(
 /// `envs/<id>/`.
 ///
 /// .../node/desktop/src-tauri/../.open-lakehouse → node/desktop/.open-lakehouse
-fn app_data_dir() -> std::path::PathBuf {
+pub(crate) fn app_data_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.open-lakehouse")
 }
 
@@ -920,11 +922,14 @@ async fn start_environment(
     }
 
     // Switching to a different environment: tear down the previously-running
-    // environment's processes (UC sidecar, and later its compose project / uvx
-    // sidecars) before spawning this one's. The already-active case returned above.
+    // environment's processes (UC sidecar, its compose project, and any uvx
+    // sidecars like marimo) before spawning this one's. The already-active case
+    // returned above. Clear notebook bookkeeping too so the next environment's
+    // marimo server is discovered fresh.
     if let Some(supervisor) = app.try_state::<Supervisor>() {
         supervisor.shut_down_all();
     }
+    app.state::<Notebooks>().reset();
 
     let config_path = write_uc_config(&id, &uc_dir)?;
     let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
@@ -1003,6 +1008,7 @@ async fn stop_environment(app: tauri::AppHandle, id: String) -> Result<(), Strin
     if let Some(supervisor) = app.try_state::<Supervisor>() {
         supervisor.shut_down_all();
     }
+    app.state::<Notebooks>().reset();
 
     // Reset the active services to "none selected". `snapshot()` then errors and
     // the proxy reports "Unity Catalog is not running" until the next start.
@@ -1131,6 +1137,13 @@ pub fn run() {
         // lazily by the first observability-enabled environment; lives for the
         // app's lifetime (survives env switches), torn down only on app exit.
         .manage(Telemetry::default())
+        // Per-environment marimo notebook server + working copies. Empty until
+        // the first `.py` notebook opens; reset on environment teardown (the
+        // marimo child itself is killed via the Supervisor). The notebook tab
+        // embeds the marimo UI by pointing its iframe directly at the sidecar's
+        // loopback URL (so marimo's WebSocket connects natively) — see
+        // `notebook::open_notebook`.
+        .manage(Notebooks::default())
         .setup(|app| {
             // Escape hatch for dev scripts: `OPEN_LAKEHOUSE_UC_URL` (incl. empty
             // for "no UC → in-memory files") auto-activates a single environment
@@ -1189,6 +1202,9 @@ pub fn run() {
             files_download,
             files_upload,
             proxy_request,
+            notebook::open_notebook,
+            notebook::sync_notebook,
+            notebook::close_notebook,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

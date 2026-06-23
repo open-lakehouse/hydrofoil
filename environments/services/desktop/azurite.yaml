@@ -5,7 +5,10 @@
 # the other containers on the compose network. A one-shot init creates the
 # container MLflow writes artifacts into.
 #
-# Paths are relative to the `environments/` directory.
+# The blob data dir is bind-mounted from the PER-ENVIRONMENT data root the desktop
+# app injects as ${OL_ENV_DATA_DIR} (.open-lakehouse/envs/<id>/modules/data), so
+# object-storage state (MLflow artifacts) is isolated per environment and
+# persists across restarts.
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
@@ -13,7 +16,7 @@ services:
     command:
       ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
     volumes:
-      - ./.data/desktop/azurite:/data
+      - ${OL_ENV_DATA_DIR}/azurite:/data
     healthcheck:
       test:
         [

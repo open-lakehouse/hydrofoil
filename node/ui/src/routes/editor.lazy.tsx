@@ -12,6 +12,7 @@ import { FileTree } from "@/components/editor/fileTree/FileTree";
 import { FileExpansionProvider } from "@/components/editor/fileTree/fileExpansion";
 import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { MonacoHost } from "@/components/editor/MonacoHost";
+import { NotebookPane } from "@/components/editor/NotebookPane";
 import { ResultsPane } from "@/components/editor/ResultsPane";
 import { TabStrip } from "@/components/editor/TabStrip";
 import { useTabPersistence } from "@/components/editor/useTabPersistence";
@@ -40,11 +41,17 @@ function EditorPage() {
 }
 
 function Workspace() {
-  const { tabs, activeId, openFile } = useEditorSession();
+  const { tabs, activeId, openFile, notebookController } = useEditorSession();
   useTabPersistence();
   const activeTab = tabs.find((t) => t.id === activeId);
   const isSql = activeTab?.language === "sql";
   const isMarkdown = activeTab?.language === "markdown";
+  const isNotebook = activeTab?.language === "notebook";
+  // The notebook controller for the active tab (null for non-notebook tabs or
+  // when no host is registered). Resolving it here keeps NotebookPane keyed to
+  // the active path so its iframe persists across tab switches.
+  const nbController =
+    isNotebook && activeId ? notebookController(activeId) : null;
 
   // The set of selectable volumes: the active environment's built-in volumes
   // (the local Home on desktop) plus any UC volumes the user has browsed to
@@ -112,22 +119,31 @@ function Workspace() {
         <TabStrip />
         {/* The single MonacoHost is shared across layouts. SQL tabs stack the
             editor over a results pane; markdown tabs place a preview beside the
-            editor; other tabs are editor-only. */}
+            editor; notebook tabs replace the editor area with an embedded marimo
+            iframe; other tabs are editor-only. The Monaco editor area is hidden
+            (not unmounted) while a notebook tab is active, so its models and
+            view state survive switching back. */}
         <div className="flex min-h-0 flex-1">
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1">
-              <MonacoHost />
-            </div>
-            {isSql && activeId && (
-              <div className="h-2/5 min-h-0 border-t">
-                <ResultsPane activePath={activeId} />
+          {isNotebook && nbController && activeId ? (
+            <NotebookPane key={activeId} controller={nbController} />
+          ) : (
+            <>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="min-h-0 flex-1">
+                  <MonacoHost />
+                </div>
+                {isSql && activeId && (
+                  <div className="h-2/5 min-h-0 border-t">
+                    <ResultsPane activePath={activeId} />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          {isMarkdown && activeId && (
-            <div className="min-h-0 w-1/2 shrink-0">
-              <MarkdownPreview activePath={activeId} />
-            </div>
+              {isMarkdown && activeId && (
+                <div className="min-h-0 w-1/2 shrink-0">
+                  <MarkdownPreview activePath={activeId} />
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
