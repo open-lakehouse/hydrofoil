@@ -15,8 +15,9 @@
 #![allow(refining_impl_trait)]
 
 /// buffa + connect-rust generated code for `hydrofoil.query.v1` (the
-/// QueryService). Proto source lives in `proto/hydrofoil-query`; regenerate with
-/// `just hydrofoil-gen`.
+/// QueryService) and `hydrofoil.ingest.v1` (the IngestService). Both packages
+/// live in the `proto/hydrofoil-query` buf module (one codegen input); regenerate
+/// with `just hydrofoil-gen`.
 pub mod generated {
     /// buffa-generated message types (owned structs + zero-copy views).
     #[path = "buffa/mod.rs"]
@@ -26,8 +27,10 @@ pub mod generated {
     pub mod connect;
 }
 
+pub(crate) use generated::buffa::hydrofoil::ingest as ingest_proto;
 /// Convenience re-exports for the generated message and service trees.
 pub(crate) use generated::buffa::hydrofoil::query as proto;
+pub(crate) use generated::connect::hydrofoil::ingest as ingest_services;
 pub(crate) use generated::connect::hydrofoil::query as services;
 
 mod agent;
@@ -38,6 +41,7 @@ mod error;
 mod execution;
 pub mod http;
 mod identity;
+mod ingest_service;
 mod lineage;
 mod planner;
 pub mod policy;
@@ -51,5 +55,6 @@ pub mod telemetry;
 // Re-exports for embedders (e.g. `desktop-host`): the shared engine/session
 // service, the ConnectRPC QueryService executor wrapper, and the layered config.
 pub use config::Config;
+pub use ingest_service::IngestAppState;
 pub use query_service::QueryAppState;
 pub use server::FlightSqlServiceImpl;

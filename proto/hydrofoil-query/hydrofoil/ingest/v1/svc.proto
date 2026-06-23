@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+// Hydrofoil's data-ingest surface for web/UI clients: turn a local file into a
+// Unity Catalog **managed** Delta table.
+//
+// Flight SQL (gRPC) carries the canonical bulk-ingest path (`do_put`), but is
+// impractical from a browser and is not exposed by the in-process desktop host.
+// This ConnectRPC service serves the same managed create + append mechanics over
+// the Connect protocol so a desktop (and, later, web) UI can create a table from
+// an uploaded file. It lives in the `hydrofoil-query` buf module (one codegen
+// input → one merged `mod.rs`) alongside the QueryService.
+//
+// Two methods:
+//   - `PreviewFile` (unary): parse a local file with the engine's Parquet reader
+//     and return its inferred Arrow schema + a capped sample, both as Arrow IPC,
+//     so the UI can preview rows and let the user adjust the schema before
+//     committing. Inherently host-local (needs a filesystem path) — a web build
+//     parses in-browser instead and skips straight to `IngestTable`.
+//   - `IngestTable` (client-streaming): create the managed table (if absent) from
+//     the user-confirmed schema, then append the data. The first frame carries the
+//     target + schema; data arrives either as Arrow IPC chunks on subsequent
+//     frames (the portable path) or — on desktop — is read by the host from
+//     `source_path` (no bytes cross the wire).
+package hydrofoil.ingest.v1;
+
+// Request to preview a local file before ingest. Host-local: `path` is resolved
+// on the machine running the engine (the desktop host).
+message PreviewFileRequest {
+  // Absolute path to the file to parse. Required. Parquet only in phase 1.
+  string path = 1;
+
+  // Maximum rows to return in the sample. Clamped server-side; when omitted the
+  // server applies a small default.
+  optional uint32 sample_rows = 2;
+}
+
+// The inferred schema and a capped sample of a previewed file.
+message PreviewFileResponse {
+  // Arrow IPC stream carrying the inferred file schema (schema message + EOS, no
+  // batches), decoded with `tableFromIPC`.
+  bytes schema_ipc = 1;
+
+  // Arrow IPC stream of the sample rows (schema + batch(es) + EOS), fed directly
+  // into the UI's ArrowResultStore / DataGrid. Schema-only when the file is empty.
+  bytes sample_ipc = 2;
+
+  // Best-effort total row count of the source file (e.g. Parquet metadata), for a
+  // "N rows" hint. Zero when unknown.
+  uint64 total_rows_estimate = 3;
+}
+
+// A single frame in an `IngestTable` client stream.
+//
+// The first frame MUST set the target fields (`catalog`, `schema`, `table`,
+// `target_schema_ipc`); they are ignored on later frames. Data is supplied one of
+// two ways:
+//   - Desktop: set `source_path` on the first frame and send no `arrow_ipc`; the
+//     host reads and parses the file itself.
+//   - Web/portable: leave `source_path` empty and stream the data as `arrow_ipc`
+//     record-batch chunks across frames.
+message IngestTableRequest {
+  // Target catalog. Required on the first frame.
+  string catalog = 1;
+  // Target schema (namespace). Required on the first frame.
+  string schema = 2;
+  // Target table name. Required on the first frame.
+  string table = 3;
+
+  // The user-confirmed target Arrow schema as an Arrow IPC stream (schema message
+  // + EOS). Used to create the managed table and to coerce incoming batches.
+  // Required on the first frame.
+  bytes target_schema_ipc = 4;
+
+  // Create the managed table when it does not already exist. Honored on the first
+  // frame. When false and the table is missing, the ingest fails.
+  bool create_if_missing = 5;
+
+  // Host-local source path (desktop). When set on the first frame, the host reads
+  // batches from this file and `arrow_ipc` frames are not expected.
+  optional string source_path = 6;
+
+  // One Arrow IPC record-batch chunk (schema + batch + EOS). Used by the portable
+  // path; empty/absent when the host reads from `source_path`.
+  bytes arrow_ipc = 7;
+}
+
+// The result of an ingest, returned once the stream completes.
+message IngestTableResponse {
+  // Rows written to the managed table.
+  uint64 rows_written = 1;
+
+  // Fully-qualified `catalog.schema.table` of the target.
+  string qualified_name = 2;
+
+  // True when this call created the table (vs. appended to an existing one).
+  bool created = 3;
+}
+
+// File-to-managed-table ingest for web/UI clients.
+service IngestService {
+  // Parse a local file and return its inferred schema + a sample for preview.
+  rpc PreviewFile(PreviewFileRequest) returns (PreviewFileResponse);
+
+  // Create a managed Delta table (if needed) and append the supplied data.
+  // Client-streaming: target + schema on the first frame, then data chunks.
+  rpc IngestTable(stream IngestTableRequest) returns (IngestTableResponse);
+}

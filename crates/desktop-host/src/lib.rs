@@ -23,7 +23,7 @@ use portal::store::{
 };
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
-use hydrofoil::{FlightSqlServiceImpl, QueryAppState};
+use hydrofoil::{FlightSqlServiceImpl, IngestAppState, QueryAppState};
 
 /// Configuration for the in-process executors.
 ///
@@ -81,6 +81,11 @@ pub struct Hosted {
     /// Hydrofoil QueryService (server-streaming SQL). Implements
     /// [`connectrpc::Dispatcher`]; call `call_server_streaming` for `RunQuery`.
     pub query: Router,
+    /// Hydrofoil IngestService (file → managed table). Implements
+    /// [`connectrpc::Dispatcher`]; call `call_unary` for `PreviewFile` and
+    /// `call_client_streaming` for `IngestTable`. Shares the same engine instance
+    /// as `query`.
+    pub ingest: Router,
     /// The file store, called directly with native types (no proto framing) — the
     /// store already *is* the sanitized handler the Connect Files adapter wraps.
     pub files: Arc<dyn FileStore>,
@@ -99,10 +104,26 @@ pub async fn build(cfg: HostConfig) -> anyhow::Result<Hosted> {
     // Register only the Tags services; Files is served directly via `files`.
     let tags = AppState::new(Arc::clone(&files), tags_store).register_tags(Router::new());
 
-    // --- QueryService (hydrofoil) ---
-    let query = build_query_router(&cfg).await?;
+    // --- QueryService + IngestService (hydrofoil) ---
+    // Both surfaces share one engine instance (sessions, UC wiring, lineage).
+    let service = build_query_engine(&cfg).await?;
+    let query = QueryAppState {
+        service: Arc::clone(&service),
+        query_default_limit: cfg.query_default_limit,
+        query_max_limit: cfg.query_max_limit,
+    }
+    .register(Router::new());
+    let ingest = IngestAppState {
+        service: Arc::clone(&service),
+    }
+    .register(Router::new());
 
-    Ok(Hosted { tags, query, files })
+    Ok(Hosted {
+        tags,
+        query,
+        ingest,
+        files,
+    })
 }
 
 /// Build the [`FileStore`].
@@ -135,9 +156,11 @@ async fn volumes_store(cfg: &HostConfig) -> anyhow::Result<Arc<dyn FileStore>> {
     Ok(Arc::new(UnityVolumeStore::new(Arc::new(factory))))
 }
 
-/// Build the hydrofoil QueryService router, wiring Unity Catalog when configured.
-/// Lineage and Cedar policy are left at their no-op defaults for local desktop.
-async fn build_query_router(cfg: &HostConfig) -> anyhow::Result<Router> {
+/// Build the shared hydrofoil engine ([`FlightSqlServiceImpl`]), wiring Unity
+/// Catalog when configured. The QueryService and IngestService routers both wrap
+/// this one instance so they share sessions, UC wiring, and lineage. Lineage and
+/// Cedar policy are left at their no-op defaults for local desktop.
+async fn build_query_engine(cfg: &HostConfig) -> anyhow::Result<Arc<FlightSqlServiceImpl>> {
     let mut service =
         FlightSqlServiceImpl::try_new().context("failed to initialize query engine")?;
 
@@ -153,13 +176,9 @@ async fn build_query_router(cfg: &HostConfig) -> anyhow::Result<Router> {
         tracing::info!("query engine: Unity Catalog disabled (set unity_endpoint to enable)");
     }
 
-    let service = Arc::new(service.build(Duration::from_secs(cfg.session_ttl_secs)));
-    let state = QueryAppState {
-        service,
-        query_default_limit: cfg.query_default_limit,
-        query_max_limit: cfg.query_max_limit,
-    };
-    Ok(state.register(Router::new()))
+    Ok(Arc::new(
+        service.build(Duration::from_secs(cfg.session_ttl_secs)),
+    ))
 }
 
 /// Build a Unity Catalog object-store factory from the config. Shared by the

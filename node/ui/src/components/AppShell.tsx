@@ -5,6 +5,7 @@ import {
   type LucideIcon,
   PanelLeftClose,
   PanelLeftOpen,
+  Upload,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ingestSupported } from "@/lib/ingest/registry";
 import { SERVICE_SURFACES } from "@/lib/services";
 import { cn } from "@/lib/utils";
 
@@ -165,6 +167,18 @@ export function AppShell() {
                 collapsed={collapsed}
               />
             </li>
+            {/* File import is host-gated (desktop reads the local file by path);
+                only show the entry when a host registered a file picker. */}
+            {ingestSupported() && (
+              <li>
+                <NavItem
+                  to="/import"
+                  icon={Upload}
+                  label="Import data"
+                  collapsed={collapsed}
+                />
+              </li>
+            )}
           </NavSection>
         </div>
 

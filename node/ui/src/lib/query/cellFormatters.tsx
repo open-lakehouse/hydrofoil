@@ -124,6 +124,8 @@ function formatTimestamp(value: unknown, type: Timestamp): ReactNode {
   const ms = timestampToEpochMs(value, type);
   if (!Number.isFinite(ms)) return String(value);
   const date = new Date(ms);
+  // A finite-but-out-of-range ms yields an Invalid Date, which `format()` rejects.
+  if (Number.isNaN(date.getTime())) return String(value);
   if (type.timezone) {
     return dateTimeFmt.format(date);
   }
@@ -136,24 +138,19 @@ function formatTimestamp(value: unknown, type: Timestamp): ReactNode {
   );
 }
 
-function formatDate(value: unknown, type: DataType): string {
-  // DateDay is days since epoch; DateMillisecond is ms since epoch.
-  let ms: number;
-  if (type.typeId === Type.Date) {
-    const unit = (type as unknown as { unit?: number }).unit;
-    if (unit === 0) {
-      // DateUnit.DAY
-      ms = Number(value) * 86_400_000;
-    } else if (value instanceof Date) {
-      ms = value.getTime();
-    } else {
-      ms = Number(value);
-    }
-  } else {
-    ms = value instanceof Date ? value.getTime() : Number(value);
-  }
+function formatDate(value: unknown, _type: DataType): string {
+  // apache-arrow's get visitor already normalizes both Date units to epoch
+  // milliseconds (DateDay multiplies days×86_400_000; DateMillisecond returns ms
+  // directly — see visitor/get.js getDateDay/getDateMillisecond). So the raw value
+  // here is already ms; do NOT scale it again (doing so overflows the JS Date
+  // range and makes Intl.DateTimeFormat throw "date value is not finite").
+  const ms = value instanceof Date ? value.getTime() : Number(value);
   if (!Number.isFinite(ms)) return String(value);
-  return utcDateFmt.format(new Date(ms));
+  const date = new Date(ms);
+  // A finite-but-out-of-range ms yields an Invalid Date, which `format()` rejects;
+  // guard on the resolved time so we degrade to the raw value instead of throwing.
+  if (Number.isNaN(date.getTime())) return String(value);
+  return utcDateFmt.format(date);
 }
 
 function BoolToken({ value }: { value: boolean }): ReactNode {

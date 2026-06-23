@@ -2333,7 +2333,7 @@ dependencies = [
 [[package]]
 name = "datafusion-unitycatalog"
 version = "0.1.0"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=a4814ef98bcb7c95e5eb9de0166d0c086fffead1#a4814ef98bcb7c95e5eb9de0166d0c086fffead1"
 dependencies = [
  "async-trait",
  "buoyant_kernel",
@@ -6871,7 +6871,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unitycatalog-client"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=a4814ef98bcb7c95e5eb9de0166d0c086fffead1#a4814ef98bcb7c95e5eb9de0166d0c086fffead1"
 dependencies = [
  "futures",
  "olai-http 0.0.1 (git+https://github.com/open-lakehouse/trestle?rev=173ef0013a3ef8f9f525fcbbfd7e5c1243fe027d)",
@@ -6889,7 +6889,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-common"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=a4814ef98bcb7c95e5eb9de0166d0c086fffead1#a4814ef98bcb7c95e5eb9de0166d0c086fffead1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -6919,7 +6919,7 @@ dependencies = [
 [[package]]
 name = "unitycatalog-object-store"
 version = "0.0.1"
-source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad#f24c4675c2c97be1a4cfe2b3e9426538ce8bf5ad"
+source = "git+https://github.com/unitycatalog-incubator/unitycatalog-rs?rev=a4814ef98bcb7c95e5eb9de0166d0c086fffead1#a4814ef98bcb7c95e5eb9de0166d0c086fffead1"
 dependencies = [
  "async-trait",
  "chrono",

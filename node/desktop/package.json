@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@open-lakehouse/ui": "*",
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",

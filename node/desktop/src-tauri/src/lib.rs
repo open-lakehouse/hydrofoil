@@ -1,17 +1,21 @@
 //! Open Lakehouse desktop shell (Tauri v2).
 //!
-//! The desktop app runs the portal (Tags + Files) and hydrofoil (QueryService)
-//! executors **in-process** instead of over HTTP, so a local run needs no Docker
-//! Compose stack for those services. Only Unity Catalog must be a real server,
+//! The desktop app runs the portal (Tags + Files) and hydrofoil (QueryService +
+//! IngestService) executors **in-process** instead of over HTTP, so a local run
+//! needs no Docker Compose stack for those services. Only Unity Catalog must be a
+//! real server,
 //! reached over HTTP — run as a Tauri sidecar when bundled, or pointed at a dev
 //! UC via `OPEN_LAKEHOUSE_UC_URL`. Heavier services (Lineage, MLflow) stay in
 //! Compose.
 //!
 //! The UI reaches the executors through Tauri commands (see `tauri-transport.ts`
 //! / the Files host seam on the JS side):
-//!   - `connect_unary` / `connect_stream` drive the `connectrpc::Router`
-//!     dispatchers for **Tags** and the **QueryService** — JSON in, JSON out
-//!     (unary), or raw Connect frames over a `Channel` (server-streaming).
+//!   - `connect_unary` / `connect_unary_proto` / `connect_stream` / `query_ingest`
+//!     drive the `connectrpc::Router` dispatchers for **Tags**, the
+//!     **QueryService**, and the **IngestService** — JSON in/out (unary), proto
+//!     in/out (unary, for the IPC-carrying `PreviewFile`), raw Connect frames over
+//!     a `Channel` (server-streaming `RunQuery`), or a list of proto frames
+//!     (client-streaming `IngestTable`).
 //!   - `files_*` call the `FileStore` directly with native types (no proto
 //!     framing) — the store already is the sanitized handler.
 
@@ -71,14 +75,15 @@ impl AppState {
 }
 
 impl ActiveEnv {
-    /// Select the router that owns a service group: `"tags"` (portal Tags) or
-    /// `"query"` (hydrofoil QueryService). Files is not a router — it is served by
-    /// the `files_*` commands directly.
+    /// Select the router that owns a service group: `"tags"` (portal Tags),
+    /// `"query"` (hydrofoil QueryService), or `"ingest"` (hydrofoil IngestService).
+    /// Files is not a router — it is served by the `files_*` commands directly.
     fn router(&self, service: &str) -> Result<&connectrpc::Router, String> {
         let hosted = self.hosted.as_ref().ok_or("no environment selected")?;
         match service {
             "tags" => Ok(&hosted.tags),
             "query" => Ok(&hosted.query),
+            "ingest" => Ok(&hosted.ingest),
             other => Err(format!("unknown service group: {other}")),
         }
     }
@@ -175,6 +180,67 @@ async fn connect_stream(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Unary Connect call with the **Proto** codec, for RPCs whose request/response
+/// carry binary payloads that JSON would bloat (base64). Used by
+/// `IngestService/PreviewFile`, whose response carries Arrow IPC bytes. Request
+/// and response are proto-encoded message bytes.
+#[tauri::command]
+async fn connect_unary_proto(
+    state: State<'_, AppState>,
+    service: String,
+    path: String,
+    message: Vec<u8>,
+    headers: Vec<(String, String)>,
+) -> Result<Vec<u8>, String> {
+    let ctx = request_context(&path, headers);
+    let active = state.snapshot()?;
+    let fut = active.router(&service)?.call_unary(
+        &path,
+        ctx,
+        Payload::new(Bytes::from(message), CodecFormat::Proto),
+        CodecFormat::Proto,
+    );
+    let resp = fut.await.map_err(|e| e.to_string())?;
+    Ok(resp.body.to_vec())
+}
+
+/// Client-streaming Connect call: the UI sends the request frames as an ordered
+/// list of proto-encoded message bytes (one `IngestTableRequest` each), and the
+/// handler returns a single proto-encoded response. Used by
+/// `IngestService/IngestTable`.
+///
+/// The dispatcher's `RequestStream` yields each message's *decoded* payload bytes
+/// (the codec then decodes each), so we hand it the frames verbatim — no envelope
+/// framing. On desktop the bulk data rides via the first frame's `source_path`
+/// (the host reads the file), so the frame list is small; the streaming RPC shape
+/// is kept so the same handler serves a future web client that streams Arrow IPC.
+#[tauri::command]
+async fn query_ingest(
+    state: State<'_, AppState>,
+    service: String,
+    path: String,
+    frames: Vec<Vec<u8>>,
+    headers: Vec<(String, String)>,
+) -> Result<Vec<u8>, String> {
+    use connectrpc::ConnectError;
+
+    let ctx = request_context(&path, headers);
+    let active = state.snapshot()?;
+    let requests: connectrpc::dispatcher::RequestStream = Box::pin(futures::stream::iter(
+        frames
+            .into_iter()
+            .map(|f| Ok::<Bytes, ConnectError>(Bytes::from(f))),
+    ));
+    let fut = active.router(&service)?.call_client_streaming(
+        &path,
+        ctx,
+        requests,
+        CodecFormat::Proto,
+    );
+    let resp = fut.await.map_err(|e| e.to_string())?;
+    Ok(resp.body.to_vec())
 }
 
 // --- Files: direct FileStore calls (no dispatcher, native types) ---------------
@@ -793,6 +859,7 @@ async fn select_environment(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         // Slot for the spawned UC child so the exit hook (and re-selection) can
         // kill it. Populated on first spawn; empty until then.
@@ -833,7 +900,9 @@ pub fn run() {
             create_environment,
             select_environment,
             connect_unary,
+            connect_unary_proto,
             connect_stream,
+            query_ingest,
             files_stat,
             files_list,
             files_create_dir,

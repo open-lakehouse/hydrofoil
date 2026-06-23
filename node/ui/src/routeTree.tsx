@@ -59,9 +59,15 @@ const catalogRoute = createRoute({
   loader: ({ context }) => prefetchCatalogs(context.queryClient),
 }).lazy(() => import("./routes/catalog.lazy").then((m) => m.Route));
 
+const importRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "import",
+}).lazy(() => import("./routes/import.lazy").then((m) => m.Route));
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   serviceRoute,
   editorRoute,
   catalogRoute,
+  importRoute,
 ]);
