@@ -29,6 +29,15 @@ interface EnvDescriptor {
   capabilities: { hasHome: boolean };
 }
 
+// Biometric (Touch ID) key protection is macOS-only: only there does the Rust
+// side talk to the data-protection keychain that honors a biometric access
+// control. Detect the host OS from the webview UA (WKWebView reports
+// "Macintosh"); the Rust command authoritatively rejects on unsupported hosts, so
+// this is just the UI affordance gate.
+const isMacOs = /Mac|Macintosh|Mac OS X/.test(
+  typeof navigator !== "undefined" ? navigator.userAgent : "",
+);
+
 // Map a Rust descriptor onto the UI's `ActiveEnvironment`, deriving built-in
 // volumes from capabilities: a local Home volume when the host serves one.
 function toActiveEnvironment(d: EnvDescriptor): ActiveEnvironment {
@@ -57,6 +66,9 @@ export const tauriEnvironmentHost: EnvironmentHost = {
     invoke<KeyStatus>("environment_key_status", { id }),
   configureKey: (id: string, provider: KeyProvider) =>
     invoke<KeyStatus>("configure_environment_key", { id, provider }),
+  biometricSupported: isMacOs,
+  setKeyBiometric: (id: string, enabled: boolean) =>
+    invoke<KeyStatus>("set_environment_key_biometric", { id, enabled }),
   dockerStatus: () => invoke<boolean>("docker_status"),
   availableCapabilities: () => invoke<Capability[]>("available_capabilities"),
   environmentCapabilities: (id: string) =>

@@ -649,7 +649,9 @@ async fn spawn_uc_sidecar(
     // Resolve the per-environment KEK from the OS keychain (get-or-create) and
     // hand it to the child via env only — the config references it as
     // `key: { env: OPEN_LAKEHOUSE_UC_KEK }`, so the material never hits disk.
-    let kek = kek::ensure_kek(env_id)?;
+    // `key.json` (the biometric flag for new keys) sits beside config.yaml.
+    let uc_dir = config_path.parent().unwrap_or(config_path);
+    let kek = kek::ensure_kek(env_id, uc_dir)?;
 
     // Spawn as a Tauri sidecar: the binary lives at
     // `src-tauri/binaries/uc-server-<target-triple>` (declared in tauri.conf.json
@@ -1037,6 +1039,12 @@ fn environment_key_status(id: String) -> Result<kek::KeyStatus, String> {
 /// Configure the encryption-key provider for an environment, returning the
 /// resulting status. For the keychain provider this mints the key eagerly so a
 /// broken keychain surfaces here rather than at start.
+///
+/// The key material is minted once and never rotated, so the provider is **locked**
+/// after a key exists: changing it would orphan already-sealed credentials. We
+/// reject a *change* of provider once a key record is present, but allow a no-op
+/// re-configure to the same provider (e.g. retrying after a transient keychain
+/// failure left the env unconfigured).
 #[tauri::command]
 fn configure_environment_key(
     id: String,
@@ -1046,7 +1054,30 @@ fn configure_environment_key(
     if !envs.iter().any(|e| e.id == id) {
         return Err(format!("unknown environment: {id}"));
     }
-    kek::configure(&id, &env_uc_dir(&id), provider)
+    let uc_dir = env_uc_dir(&id);
+    if let Some(existing) = kek::read_key_config(&uc_dir) {
+        if existing.provider != provider {
+            return Err(format!(
+                "this environment's key is already provisioned with the {:?} provider; \
+                 the provider can't be changed without rotation (not supported)",
+                existing.provider
+            ));
+        }
+    }
+    kek::configure(&id, &uc_dir, provider)
+}
+
+/// Turn Touch ID protection on or off for an environment's keychain-stored key.
+/// Rewrites the same key material with/without the biometric access-control flag —
+/// no rotation — and returns the resulting status. macOS only; elsewhere this
+/// errors (the UI hides the switch on unsupported hosts).
+#[tauri::command]
+fn set_environment_key_biometric(id: String, enabled: bool) -> Result<kek::KeyStatus, String> {
+    let envs = read_environments()?;
+    if !envs.iter().any(|e| e.id == id) {
+        return Err(format!("unknown environment: {id}"));
+    }
+    kek::set_biometric(&id, &env_uc_dir(&id), enabled)
 }
 
 /// Whether the Docker daemon is reachable. Drives the UI availability banner
@@ -1190,6 +1221,7 @@ pub fn run() {
             stop_environment,
             environment_key_status,
             configure_environment_key,
+            set_environment_key_biometric,
             docker_status,
             set_environment_capabilities,
             available_capabilities,
