@@ -53,6 +53,12 @@ pub(crate) struct ActiveEnv {
     /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
     /// disabled (files run in-memory); the proxy then errors.
     pub(crate) unity_endpoint: Option<String>,
+    /// Resolved OpenLineage sink base (the Envoy gateway base on the host), e.g.
+    /// `http://localhost:9080`. `Some` only when the environment carries the
+    /// lineage capability; injected into the marimo child as `LINEAGE_URL` so
+    /// notebook templates can wire OpenLineage. `None` when lineage isn't part of
+    /// the environment.
+    pub(crate) lineage_endpoint: Option<String>,
     /// Whether this environment serves a local `/home` volume (true for real
     /// environments, false for the `__external__` escape hatch). Surfaced to the
     /// UI as an environment capability.
@@ -791,7 +797,7 @@ async fn activate_endpoint(
     let has_home = home_root.is_some();
     let cfg = HostConfig {
         unity_endpoint: unity_endpoint.clone(),
-        lineage_endpoint,
+        lineage_endpoint: lineage_endpoint.clone(),
         home_root,
         ..Default::default()
     };
@@ -805,6 +811,7 @@ async fn activate_endpoint(
         id,
         hosted: Some(Arc::new(hosted)),
         unity_endpoint,
+        lineage_endpoint,
         has_home,
     };
     Ok(())

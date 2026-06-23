@@ -1,0 +1,2 @@
+# Local build artifacts — only the README is tracked.
+*.whl
