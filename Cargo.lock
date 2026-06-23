@@ -2509,6 +2509,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "connectrpc",
+ "datafusion-open-lineage",
  "futures",
  "http",
  "hydrofoil",
@@ -2517,6 +2518,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unitycatalog-object-store",
+ "url",
 ]
 
 [[package]]
@@ -2690,6 +2692,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "env-modules"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

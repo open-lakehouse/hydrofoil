@@ -1,0 +1,15 @@
+# Envoy gateway for the DESKTOP stack — the single host-published entry point the
+# app reaches the containerised services (MLflow, Marquez) through.
+#
+# Self-contained fragment: the desktop Envoy config is bind-mounted directly
+# (rather than via a top-level compose `configs:` block) so this fragment needs
+# nothing declared by the parent file. The path is relative to `environments/`.
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.38-latest
+    restart: unless-stopped
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes:
+      - ./config/tauri/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "${ENVOY_PORT:-9080}:10000"

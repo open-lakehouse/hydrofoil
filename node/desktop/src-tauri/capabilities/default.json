@@ -19,6 +19,22 @@
             { "validator": "\\d+" },
             "--quiet"
           ]
+        },
+        {
+          "name": "uvx",
+          "cmd": "uvx",
+          "args": [
+            "marimo",
+            "edit",
+            "--headless",
+            "--host",
+            "127.0.0.1",
+            "-p",
+            "0",
+            "--no-token",
+            "--sandbox",
+            { "validator": ".+" }
+          ]
         }
       ]
     },

@@ -30,21 +30,29 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
 mod kek;
+mod modules;
+mod notebook;
+mod supervisor;
+mod telemetry;
+
+use notebook::Notebooks;
+use supervisor::{ManagedProcess, Supervisor};
+use telemetry::Telemetry;
 
 /// The services bound to the currently-active environment: the in-process
 /// executors plus the resolved UC endpoint. `None` until an environment is
 /// selected (the outer shell spawns services lazily on selection).
 #[derive(Clone, Default)]
-struct ActiveEnv {
+pub(crate) struct ActiveEnv {
     /// The active environment's id. `None` until one is selected; set to the
     /// escape-hatch synthetic id when `OPEN_LAKEHOUSE_UC_URL` activated one.
     /// Lets the shell highlight the running environment in the overview.
-    id: Option<String>,
-    hosted: Option<Arc<Hosted>>,
+    pub(crate) id: Option<String>,
+    pub(crate) hosted: Option<Arc<Hosted>>,
     /// Resolved Unity Catalog REST base (the spawned sidecar's dynamic endpoint),
     /// e.g. `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` when UC is
     /// disabled (files run in-memory); the proxy then errors.
-    unity_endpoint: Option<String>,
+    pub(crate) unity_endpoint: Option<String>,
     /// Whether this environment serves a local `/home` volume (true for real
     /// environments, false for the `__external__` escape hatch). Surfaced to the
     /// UI as an environment capability.
@@ -56,8 +64,8 @@ struct ActiveEnv {
 /// snapshot (clone of the `Arc`s) under a short read lock, then drop it before
 /// awaiting.
 #[derive(Default)]
-struct AppState {
-    active: RwLock<ActiveEnv>,
+pub(crate) struct AppState {
+    pub(crate) active: RwLock<ActiveEnv>,
 }
 
 impl AppState {
@@ -454,16 +462,12 @@ async fn proxy_request(
     })
 }
 
-/// The managed child handle for the spawned UC server, so the exit hook can kill
-/// it. `None` once taken/killed.
-struct UcSidecar(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
-
 /// The app working directory (gitignored, in-repo for this iteration so it's
 /// inspectable): holds `environments.json` and per-environment data under
 /// `envs/<id>/`.
 ///
 /// .../node/desktop/src-tauri/../.open-lakehouse → node/desktop/.open-lakehouse
-fn app_data_dir() -> std::path::PathBuf {
+pub(crate) fn app_data_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.open-lakehouse")
 }
 
@@ -506,13 +510,21 @@ fn seed_home_dir(home: &std::path::Path) {
     write("README.md", "# Home\n\nLocal scratch space for SQL and notes.\n");
 }
 
-/// One environment: a named bundle of service configuration. This iteration
-/// carries only an id + display name; the UC config is derived from the id's
-/// directory.
+/// One environment: a named bundle of service configuration. Carries an id +
+/// display name (the UC config is derived from the id's directory) and the set of
+/// optional capabilities to run alongside UC (lineage, observability, model
+/// tracking, object storage). Capabilities — not raw services — are the
+/// user-facing unit; the `env-modules` resolver maps them to providers, modules,
+/// and cross-service effects (see ADR 0017).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Environment {
     id: String,
     name: String,
+    /// Selected capability ids (see `env_modules::Capability`). Empty = UC-only
+    /// (no Docker). `#[serde(default)]` keeps pre-capabilities `environments.json`
+    /// files parsing.
+    #[serde(default)]
+    capabilities: Vec<String>,
 }
 
 /// Read the environments registry (`environments.json`). Returns an empty list
@@ -654,13 +666,15 @@ async fn spawn_uc_sidecar(
         .spawn()
         .map_err(|e| format!("failed to spawn uc server: {e}"))?;
 
-    // Store the child in the managed slot so the exit hook (and a later
-    // re-selection) can kill it. Kill any prior child first — re-selecting an
-    // environment tears down the previous sidecar before respawning.
-    if let Some(slot) = app.try_state::<UcSidecar>() {
-        if let Some(prev) = slot.0.lock().unwrap().replace(child) {
-            let _ = prev.kill();
-        }
+    // Track the child in the supervisor so the exit hook (and `stop_environment`)
+    // can kill it alongside any compose project / uvx sidecars. The prior
+    // environment's processes are torn down by `start_environment` before this
+    // spawn, so the supervisor holds only the current environment's set.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.track(ManagedProcess::Sidecar {
+            label: "uc-server".to_string(),
+            child,
+        });
     }
 
     // The server prints `✅listening on http://<host>:<port>` (status::success);
@@ -760,6 +774,7 @@ async fn activate_endpoint(
     app: &tauri::AppHandle,
     id: Option<String>,
     unity_endpoint: Option<String>,
+    lineage_endpoint: Option<String>,
 ) -> Result<(), String> {
     // A real environment gets a local home volume under its data dir; the
     // synthetic `__external__` escape-hatch id has no managed dir, so no home.
@@ -776,6 +791,7 @@ async fn activate_endpoint(
     let has_home = home_root.is_some();
     let cfg = HostConfig {
         unity_endpoint: unity_endpoint.clone(),
+        lineage_endpoint,
         home_root,
         ..Default::default()
     };
@@ -851,7 +867,11 @@ fn create_environment(name: String) -> Result<Environment, String> {
         eprintln!("[kek] key provisioning deferred for {id}: {e}");
     }
 
-    let env = Environment { id, name };
+    let env = Environment {
+        id,
+        name,
+        capabilities: Vec::new(),
+    };
     envs.push(env.clone());
     write_environments(&envs)?;
     Ok(env)
@@ -867,9 +887,17 @@ async fn start_environment(
     id: String,
 ) -> Result<serde_json::Value, String> {
     let envs = read_environments()?;
-    if !envs.iter().any(|e| e.id == id) {
-        return Err(format!("unknown environment: {id}"));
-    }
+    let env = envs
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    // Parse persisted capability ids, ignoring any unknown (forward-compat with
+    // ids a newer build may have written).
+    let capabilities: Vec<env_modules::Capability> = env
+        .capabilities
+        .iter()
+        .filter_map(|id| env_modules::Capability::from_id(id))
+        .collect();
 
     // Already active → no-op (the UI re-opens an already-running environment
     // without calling start, but keep the command idempotent so a redundant
@@ -893,12 +921,69 @@ async fn start_environment(
         );
     }
 
+    // Switching to a different environment: tear down the previously-running
+    // environment's processes (UC sidecar, its compose project, and any uvx
+    // sidecars like marimo) before spawning this one's. The already-active case
+    // returned above. Clear notebook bookkeeping too so the next environment's
+    // marimo server is discovered fresh.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.shut_down_all();
+    }
+    app.state::<Notebooks>().reset();
+
     let config_path = write_uc_config(&id, &uc_dir)?;
     let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
-    activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone())).await?;
+
+    // Observability is a per-env opt-in that emits to the SHARED, app-level
+    // telemetry collector (not a per-env service). Bring the collector up + init
+    // the global tracer lazily on the first opt-in env; later envs reuse it. This
+    // lives in the app-level Telemetry slot, not the per-env supervisor, so it
+    // survives env switches. Done FIRST (before the compose services) so the
+    // collector exists when the services' OTLP exporters point at it, and so the
+    // in-process engine emits too. A failure tears UC back down (the user asked
+    // for observability and we couldn't provide it).
+    if env_modules::Capability::wants_observability(&capabilities) {
+        if let Err(e) = telemetry::ensure(&app.state::<Telemetry>()) {
+            app.state::<Supervisor>().shut_down_all();
+            return Err(e);
+        }
+    }
+
+    // Bring up the environment's capability services (Docker compose project)
+    // BEFORE building the in-process engine: an effect like lineage produces an
+    // endpoint (the Marquez sink via the gateway) that the engine must be
+    // configured with, and that endpoint only exists once the services are
+    // healthy. Tracked in the supervisor so they tear down with the environment;
+    // a failure tears UC back down rather than leaving it orphaned.
+    let mut lineage_endpoint = None;
+    if !capabilities.is_empty() {
+        let uc_port = uc_port_from_endpoint(&endpoint);
+        let supervisor = app.state::<Supervisor>();
+        match modules::start_modules(&id, &capabilities, uc_port, &supervisor) {
+            Ok(graph) => lineage_endpoint = modules::lineage_endpoint(&graph),
+            Err(e) => {
+                supervisor.shut_down_all();
+                return Err(e);
+            }
+        }
+    }
+
+    // Now build the in-process engine, wired with any effect-derived endpoints
+    // (lineage). The engine consumes the effects; it is built exactly once.
+    activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone()), lineage_endpoint).await?;
+
     active_environment_descriptor(&app.state::<AppState>())
         .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
+}
+
+/// Extract the port from a UC endpoint like
+/// `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` if it can't be parsed
+/// (modules then run without a UC URL injected — they fall back to their defaults).
+fn uc_port_from_endpoint(endpoint: &str) -> Option<u16> {
+    let after_scheme = endpoint.split("://").nth(1)?;
+    let authority = after_scheme.split('/').next()?;
+    authority.rsplit(':').next()?.parse().ok()
 }
 
 /// Stop an environment: kill its UC sidecar and clear the active services so the
@@ -917,13 +1002,13 @@ async fn stop_environment(app: tauri::AppHandle, id: String) -> Result<(), Strin
         }
     }
 
-    // Kill the spawned sidecar child (mirrors the exit hook). Taking the slot
-    // empties it, so the exit hook later finds nothing to kill — no double-kill.
-    if let Some(slot) = app.try_state::<UcSidecar>() {
-        if let Some(child) = slot.0.lock().unwrap().take() {
-            let _ = child.kill();
-        }
+    // Tear down every process bound to this environment (UC sidecar, and later
+    // the compose project / uvx sidecars). Draining the supervisor leaves the
+    // exit hook nothing to do — no double-kill.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.shut_down_all();
     }
+    app.state::<Notebooks>().reset();
 
     // Reset the active services to "none selected". `snapshot()` then errors and
     // the proxy reports "Unity Catalog is not running" until the next start.
@@ -957,14 +1042,108 @@ fn configure_environment_key(
     kek::configure(&id, &env_uc_dir(&id), provider)
 }
 
+/// Whether the Docker daemon is reachable. Drives the UI availability banner
+/// (Docker-backed modules are disabled, with install hints, when this is false)
+/// and is re-checked at start before bringing a Docker-backed environment up.
+#[tauri::command]
+fn docker_status() -> bool {
+    modules::docker_available()
+}
+
+/// Set an environment's selected capabilities, persisting the registry. Takes
+/// effect on the next start (a running environment is not hot-reconfigured).
+/// Unknown ids are rejected so the UI can't persist a capability the backend
+/// won't resolve.
+#[tauri::command]
+fn set_environment_capabilities(id: String, capabilities: Vec<String>) -> Result<(), String> {
+    for cap in &capabilities {
+        if env_modules::Capability::from_id(cap).is_none() {
+            return Err(format!("unknown capability: {cap}"));
+        }
+    }
+    let mut envs = read_environments()?;
+    let env = envs
+        .iter_mut()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    env.capabilities = capabilities;
+    write_environments(&envs)
+}
+
+/// The available capabilities (id + label) for the UI to render as a checklist.
+#[tauri::command]
+fn available_capabilities() -> Vec<serde_json::Value> {
+    env_modules::Capability::all()
+        .iter()
+        .map(|c| serde_json::json!({ "id": c.id(), "label": c.label() }))
+        .collect()
+}
+
+/// An environment's currently-selected capability ids (for pre-checking the
+/// checklist). Empty for a fresh or UC-only environment.
+#[tauri::command]
+fn environment_capabilities(id: String) -> Result<Vec<String>, String> {
+    let envs = read_environments()?;
+    envs.into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.capabilities)
+        .ok_or_else(|| format!("unknown environment: {id}"))
+}
+
+/// Live per-service status (state + health) for a running environment, for the
+/// UI's Services panel. Best-effort: returns an empty list when Docker is
+/// unavailable or nothing is up. The UI polls this on a gentle interval.
+#[tauri::command]
+fn environment_service_status(id: String) -> Vec<modules::ServiceStatus> {
+    modules::service_status(&id)
+}
+
+/// Whether the shared, app-level telemetry collector (Jaeger) is running. Drives
+/// the Telemetry entry's status + whether its embedded UI is available.
+#[tauri::command]
+fn telemetry_status() -> bool {
+    modules::telemetry_running()
+}
+
+/// The read-only config artifacts (generated compose + the static fragments and
+/// gateway/collector configs) for an environment's selected capabilities, for the
+/// teaching/inspection viewer. The compose is generated on demand, so this works
+/// before the environment has ever been started.
+#[tauri::command]
+fn environment_config_artifacts(id: String) -> Result<Vec<modules::ConfigArtifact>, String> {
+    let envs = read_environments()?;
+    let env = envs
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    let capabilities: Vec<env_modules::Capability> = env
+        .capabilities
+        .iter()
+        .filter_map(|c| env_modules::Capability::from_id(c))
+        .collect();
+    modules::config_artifacts(&capabilities)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        // Slot for the spawned UC child so the exit hook (and re-selection) can
-        // kill it. Populated on first spawn; empty until then.
-        .manage(UcSidecar(std::sync::Mutex::new(None)))
+        // Tracks every process bound to the active environment (UC sidecar, and
+        // later the compose project / uvx sidecars) so the exit hook and
+        // `stop_environment` can tear the whole set down. Empty until first spawn.
+        .manage(Supervisor::default())
+        // App-level shared telemetry (one Jaeger for all environments). Started
+        // lazily by the first observability-enabled environment; lives for the
+        // app's lifetime (survives env switches), torn down only on app exit.
+        .manage(Telemetry::default())
+        // Per-environment marimo notebook server + working copies. Empty until
+        // the first `.py` notebook opens; reset on environment teardown (the
+        // marimo child itself is killed via the Supervisor). The notebook tab
+        // embeds the marimo UI by pointing its iframe directly at the sidecar's
+        // loopback URL (so marimo's WebSocket connects natively) — see
+        // `notebook::open_notebook`.
+        .manage(Notebooks::default())
         .setup(|app| {
             // Escape hatch for dev scripts: `OPEN_LAKEHOUSE_UC_URL` (incl. empty
             // for "no UC → in-memory files") auto-activates a single environment
@@ -987,6 +1166,7 @@ pub fn run() {
                         &handle,
                         Some("__external__".to_string()),
                         endpoint,
+                        None,
                     ))?;
                 }
                 Err(_) => {
@@ -1003,6 +1183,13 @@ pub fn run() {
             stop_environment,
             environment_key_status,
             configure_environment_key,
+            docker_status,
+            set_environment_capabilities,
+            available_capabilities,
+            environment_capabilities,
+            environment_config_artifacts,
+            environment_service_status,
+            telemetry_status,
             connect_unary,
             connect_unary_proto,
             connect_stream,
@@ -1015,16 +1202,22 @@ pub fn run() {
             files_download,
             files_upload,
             proxy_request,
+            notebook::open_notebook,
+            notebook::sync_notebook,
+            notebook::close_notebook,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Kill the spawned UC server when the app exits.
+            // Tear down every process bound to the active environment when the
+            // app exits (UC server, and later the compose project / uvx sidecars),
+            // plus the shared telemetry collector (app-lifetime, so only here).
             if let tauri::RunEvent::Exit = event {
-                if let Some(sidecar) = app.try_state::<UcSidecar>() {
-                    if let Some(child) = sidecar.0.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                if let Some(supervisor) = app.try_state::<Supervisor>() {
+                    supervisor.shut_down_all();
+                }
+                if let Some(telemetry) = app.try_state::<Telemetry>() {
+                    telemetry.shut_down();
                 }
             }
         });

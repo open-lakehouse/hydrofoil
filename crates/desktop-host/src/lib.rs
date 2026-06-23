@@ -25,6 +25,13 @@ use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use hydrofoil::{FlightSqlServiceImpl, IngestAppState, QueryAppState};
 
+/// Re-export of hydrofoil's process-global telemetry init + guard, so the desktop
+/// shell can wire the shared app-level OpenTelemetry collector without taking a
+/// direct dependency on the `hydrofoil` crate (it depends only on `desktop-host`).
+pub mod telemetry {
+    pub use hydrofoil::telemetry::{OtelGuard, init_tracing_subscriber};
+}
+
 /// Configuration for the in-process executors.
 ///
 /// Carries only what the embedded services need; there are no HTTP/gRPC ports —
@@ -50,6 +57,11 @@ pub struct HostConfig {
     /// web/server build, which has no local disk), only the volumes store is used
     /// and there is no home volume.
     pub home_root: Option<PathBuf>,
+    /// OpenLineage HTTP base URL the engine emits lineage to (the lineage
+    /// capability's sink, e.g. Marquez via the Envoy gateway). The
+    /// `/api/v1/lineage` path is appended. `None`/empty → lineage disabled
+    /// (no-op client).
+    pub lineage_endpoint: Option<String>,
     /// Idle session TTL for the query engine's session store.
     pub session_ttl_secs: u64,
     /// Default row limit applied when a query omits one.
@@ -64,6 +76,7 @@ impl Default for HostConfig {
             unity_endpoint: None,
             unity_token: None,
             unity_region: None,
+            lineage_endpoint: None,
             home_root: None,
             // Mirrors hydrofoil's config defaults.
             session_ttl_secs: 1800,
@@ -176,9 +189,41 @@ async fn build_query_engine(cfg: &HostConfig) -> anyhow::Result<Arc<FlightSqlSer
         tracing::info!("query engine: Unity Catalog disabled (set unity_endpoint to enable)");
     }
 
+    // Wire OpenLineage when the lineage capability supplied a sink endpoint;
+    // otherwise sessions emit to a no-op client. The endpoint is the lineage
+    // sink's base URL (Marquez via the gateway); `/api/v1/lineage` is appended.
+    if let Some(client) = build_lineage_client(cfg)? {
+        service = service.with_lineage(client, lineage_config());
+        tracing::info!("query engine: OpenLineage emission enabled");
+    }
+
     Ok(Arc::new(
         service.build(Duration::from_secs(cfg.session_ttl_secs)),
     ))
+}
+
+/// Build an OpenLineage client from the lineage endpoint, or `None` to leave the
+/// engine on its no-op lineage default. Mirrors the hydrofoil binary's wiring:
+/// the sink base URL + the `/api/v1/lineage` path, unauthenticated (local).
+fn build_lineage_client(
+    cfg: &HostConfig,
+) -> anyhow::Result<Option<datafusion_open_lineage::OpenLineageClient>> {
+    use datafusion_open_lineage::{CloudClientTransport, OpenLineageClient};
+
+    let Some(base) = cfg.lineage_endpoint.as_deref().filter(|u| !u.is_empty()) else {
+        return Ok(None);
+    };
+    let full = format!("{}/api/v1/lineage", base.trim_end_matches('/'));
+    let endpoint_url =
+        url::Url::parse(&full).with_context(|| format!("invalid lineage endpoint {full:?}"))?;
+    let transport = CloudClientTransport::unauthenticated(endpoint_url);
+    Ok(Some(OpenLineageClient::new(Arc::new(transport))))
+}
+
+/// The static OpenLineage config (job namespace, producer, engine identity) — the
+/// crate defaults are right for local desktop.
+fn lineage_config() -> datafusion_open_lineage::config::OpenLineageConfig {
+    datafusion_open_lineage::config::OpenLineageConfig::default()
 }
 
 /// Build a Unity Catalog object-store factory from the config. Shared by the

@@ -31,6 +31,33 @@ export type KeyStatus = "unconfigured" | "keychain" | "remote" | "unavailable";
  *  are transient UI states held while the async host call is in flight. */
 export type EnvironmentStatus = "idle" | "starting" | "running" | "stopping";
 
+/** A capability the user can enable on an environment (lineage, observability,
+ *  model tracking, object storage). The host owns the technology mapping; the UI
+ *  just renders the checklist and persists the selection. */
+export type Capability = { id: string; label: string };
+
+/** A read-only config artifact surfaced for inspection/learning (the generated
+ *  compose, a service fragment, the Envoy/collector config). `language` is the
+ *  Monaco language id. */
+export type ConfigArtifact = {
+  id: string;
+  label: string;
+  description: string;
+  language: string;
+  content: string;
+};
+
+/** Live status of one running service (container) in an environment. `shared`
+ *  marks the app-level telemetry collector, which is not per-environment. */
+export type ServiceStatus = {
+  service: string;
+  /** Compose state: `running`, `exited`, `restarting`, … */
+  state: string;
+  /** Health when declared: `healthy`, `starting`, `unhealthy`, or empty. */
+  health: string;
+  shared: boolean;
+};
+
 /** What a selected environment can do. A capability is shaped by which services
  *  the host wired up for it; the UI shells itself to fit. Grows over time
  *  (lineage, credential vending, a write path, …) — add fields here rather than
@@ -81,6 +108,26 @@ export interface EnvironmentHost {
    *  For `keychain` the host mints the key eagerly, so a keychain failure surfaces
    *  here rather than at start. */
   configureKey(id: string, provider: KeyProvider): Promise<KeyStatus>;
+  /** Whether the host's container runtime (Docker) is available. Drives the
+   *  graceful-degrade banner: capabilities needing Docker are disabled when false.
+   *  Always true for hosts with no container dependency. */
+  dockerStatus(): Promise<boolean>;
+  /** The capabilities a user can enable, for the checklist. */
+  availableCapabilities(): Promise<Capability[]>;
+  /** An environment's currently-enabled capability ids (for pre-checking). */
+  environmentCapabilities(id: string): Promise<string[]>;
+  /** Persist an environment's enabled capabilities. Takes effect on next start. */
+  setEnvironmentCapabilities(id: string, capabilities: string[]): Promise<void>;
+  /** Read-only config artifacts (generated compose + static configs) for the
+   *  environment's selected capabilities — for the inspection/learning viewer.
+   *  Generated on demand, so available before the environment has started. */
+  configArtifacts(id: string): Promise<ConfigArtifact[]>;
+  /** Live per-service status (state + health) for a running environment. Polled
+   *  on a gentle interval by the UI; empty when nothing is up. */
+  serviceStatus(id: string): Promise<ServiceStatus[]>;
+  /** Whether the shared, app-level telemetry collector (Jaeger) is running.
+   *  Drives the Telemetry entry's status and whether its UI is embeddable. */
+  telemetryStatus(): Promise<boolean>;
 }
 
 // Default: a single implicit environment that is always active. The web build
@@ -107,6 +154,16 @@ const defaultHost: EnvironmentHost = {
   // as a no-op.
   keyStatus: async () => "remote",
   configureKey: async () => "remote",
+  // The web build has no local container runtime and no per-env capabilities to
+  // manage — Docker is "available" (nothing to gate), the capability set is empty,
+  // and there are no local config artifacts to inspect.
+  dockerStatus: async () => true,
+  availableCapabilities: async () => [],
+  environmentCapabilities: async () => [],
+  setEnvironmentCapabilities: async () => {},
+  configArtifacts: async () => [],
+  serviceStatus: async () => [],
+  telemetryStatus: async () => false,
 };
 
 let currentHost: EnvironmentHost = defaultHost;

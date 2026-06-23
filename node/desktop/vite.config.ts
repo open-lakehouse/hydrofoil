@@ -16,6 +16,12 @@ const UI_SRC = path.resolve(__dirname, "../ui/src");
 // origin too.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:9080";
 
+// The shared Jaeger collector is app-level — it runs in its own compose project,
+// independent of any environment's Envoy gateway, and publishes its UI on the
+// host. So /jaeger is proxied straight to Jaeger, NOT through the gateway (which
+// may not even be running when only telemetry is up).
+const JAEGER_URL = process.env.JAEGER_URL ?? "http://localhost:16686";
+
 // Hydrofoil's ConnectRPC QueryService (see ../ui/vite.config.ts). For host-run
 // dev point QUERY_URL at hydrofoil's HTTP port (default :9082).
 const QUERY_URL = process.env.QUERY_URL ?? GATEWAY_URL;
@@ -57,6 +63,19 @@ export default defineConfig({
       },
       "/mlflow": serviceProxy(),
       "/marimo": serviceProxy(),
+      // Jaeger UI (shared telemetry collector, served under QUERY_BASE_PATH
+      // /jaeger). Proxied directly to Jaeger's host port, not the gateway — it's
+      // app-level and may be up when no environment (hence no Envoy) is running.
+      "/jaeger": {
+        target: JAEGER_URL,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            proxyRes.headers["x-frame-options"] = undefined;
+            proxyRes.headers["content-security-policy"] = undefined;
+          });
+        },
+      },
     },
   },
 });

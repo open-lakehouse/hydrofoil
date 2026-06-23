@@ -40,11 +40,16 @@ import {
   type TabId,
 } from "@/lib/editor/sessionReducer";
 import { connectFileStore } from "@/lib/files/store";
+import {
+  type NotebookController,
+  NotebookSessionRegistry,
+} from "@/lib/notebook/sessionRegistry";
 import { ResultSessionRegistry } from "@/lib/query/resultSessions";
 
 const CONTENT_TYPE_BY_LANG: Record<string, string> = {
   sql: "text/plain",
   markdown: "text/markdown",
+  notebook: "text/x-python",
   plaintext: "text/plain",
 };
 
@@ -62,6 +67,9 @@ interface EditorSessionValue {
   flush: (path: string) => Promise<void>;
   /** The run controller for a tab (per-tab SQL results, survives switches). */
   runController: (path: TabId) => RunController;
+  /** The notebook controller for a notebook tab (per-tab marimo session,
+   *  survives switches). Null if no notebook host is registered. */
+  notebookController: (path: TabId) => NotebookController | null;
   /** Flush then run the active SQL tab's current buffer text. */
   runActive: () => Promise<void>;
   /** Set by MonacoHost once the editor has mounted. */
@@ -97,10 +105,22 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
     sessionsRef.current = new ResultSessionRegistry();
   }
   const sessions = sessionsRef.current;
+  // The notebook-session registry, scoped to this provider's lifetime exactly
+  // like the result-session registry (disposed on environment switch, which
+  // remounts the provider). Owns the per-tab marimo sessions.
+  const notebooksRef = useRef<NotebookSessionRegistry | null>(null);
+  if (notebooksRef.current === null) {
+    notebooksRef.current = new NotebookSessionRegistry();
+  }
+  const notebooks = notebooksRef.current;
   // Mirror of activeId for stable callbacks (runActive) that shouldn't re-create
   // on every activation.
   const activeIdRef = useRef<TabId | null>(null);
   activeIdRef.current = state.activeId;
+  // Mirror of the tab list for the stable openFile callback (notebook dedupe —
+  // notebooks have no Monaco model, so getEntry can't serve as the open-check).
+  const tabsRef = useRef<OpenTab[]>(state.tabs);
+  tabsRef.current = state.tabs;
 
   // Build the autosave instance once; its callbacks dispatch into the reducer.
   if (autosaveRef.current === null) {
@@ -126,6 +146,25 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
   );
 
   const openFile = useCallback(async (path: string) => {
+    const language = languageOf(path);
+
+    // Notebook tabs embed a marimo iframe — no Monaco model, no byte read here
+    // (the host copies a working copy and serves it). Dedupe on the tab list
+    // (notebooks never create a model, so getEntry can't be the open-check) and
+    // let the NotebookController own the async session lifecycle.
+    if (language === "notebook") {
+      if (tabsRef.current.some((t) => t.id === path)) {
+        dispatch({ type: "ACTIVATE_TAB", id: path });
+        return;
+      }
+      const name = path.replace(/\/+$/, "").split("/").pop() ?? path;
+      dispatch({
+        type: "OPEN_TAB",
+        tab: { id: path, path, name, language: "notebook" },
+      });
+      return;
+    }
+
     // Already open → just activate (no refetch, no duplicate model).
     if (getEntry(path)) {
       dispatch({ type: "ACTIVATE_TAB", id: path });
@@ -166,6 +205,17 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
 
   const close = useCallback(
     async (id: TabId) => {
+      // Notebook tabs have no Monaco model / autosave; closing means a final
+      // sync of the working copy back to the volume, then releasing the host
+      // session (which discards the working copy).
+      if (languageOf(id) === "notebook") {
+        const ctrl = notebooks.controller(id);
+        if (ctrl) await ctrl.sync().catch(() => {});
+        notebooks.release(id);
+        dispatch({ type: "CLOSE_TAB", id });
+        return;
+      }
+
       // Best-effort flush before discarding the buffer (dirty-confirm UI lands in
       // the autosave/dirty step; for now an unsaved close still persists).
       await autosaveRef.current?.flush(id);
@@ -177,7 +227,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
       disposeModel(id);
       dispatch({ type: "CLOSE_TAB", id });
     },
-    [sessions],
+    [sessions, notebooks],
   );
 
   const reorder = useCallback(
@@ -193,6 +243,11 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
   const runController = useCallback(
     (path: TabId): RunController => sessions.controller(path),
     [sessions],
+  );
+
+  const notebookController = useCallback(
+    (path: TabId): NotebookController | null => notebooks.controller(path),
+    [notebooks],
   );
 
   // Save-on-run: flush the buffer, then execute its current text. We run what's
@@ -237,10 +292,11 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
         for (const d of listeners.values()) d.dispose();
         listeners.clear();
         sessions.dispose();
+        notebooks.dispose();
         disposeAll();
       });
     };
-  }, [autosave, sessions]);
+  }, [autosave, sessions, notebooks]);
 
   const value = useMemo<EditorSessionValue>(
     () => ({
@@ -253,6 +309,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
       reorder,
       flush,
       runController,
+      notebookController,
       runActive,
       attachMonaco,
     }),
@@ -266,6 +323,7 @@ export function EditorSessionProvider({ children }: { children: ReactNode }) {
       reorder,
       flush,
       runController,
+      notebookController,
       runActive,
       attachMonaco,
     ],
