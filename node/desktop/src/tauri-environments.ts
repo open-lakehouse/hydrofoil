@@ -13,6 +13,8 @@ import type {
   ActiveEnvironment,
   Environment,
   EnvironmentHost,
+  KeyProvider,
+  KeyStatus,
 } from "@/lib/client/environments";
 import { HOME_VOLUME } from "@/lib/editor/volumes";
 
@@ -48,4 +50,8 @@ export const tauriEnvironmentHost: EnvironmentHost = {
     return toActiveEnvironment(d);
   },
   stop: (id: string) => invoke<void>("stop_environment", { id }),
+  keyStatus: (id: string) =>
+    invoke<KeyStatus>("environment_key_status", { id }),
+  configureKey: (id: string, provider: KeyProvider) =>
+    invoke<KeyStatus>("configure_environment_key", { id, provider }),
 };

@@ -14,6 +14,17 @@ import type { Volume } from "@/lib/editor/volumes";
 
 export type Environment = { id: string; name: string };
 
+/** Where an environment's credential-encryption key (KEK) lives. `keychain` keeps
+ *  it in the OS-native secret store (desktop); `remote` defers to an external key
+ *  store (scaffolded — not yet fully wired). */
+export type KeyProvider = "keychain" | "remote";
+
+/** Encryption-key status the UI can render without starting the environment.
+ *  `unconfigured` — no key yet; `keychain`/`remote` — provisioned under that
+ *  provider; `unavailable` — the OS keychain can't be reached, so the environment
+ *  cannot start until a key store is configured. */
+export type KeyStatus = "unconfigured" | "keychain" | "remote" | "unavailable";
+
 /** Lifecycle status of an environment as the UI presents it. Forward-compatible
  *  with multiple running environments later; today only the single active
  *  environment is "running" and everything else is "idle". "starting"/"stopping"
@@ -63,6 +74,13 @@ export interface EnvironmentHost {
   /** Stop an environment: tear down its services. Idempotent — a no-op when the
    *  environment is not running. After this resolves the environment is idle. */
   stop(id: string): Promise<void>;
+  /** Current encryption-key status for an environment, resolvable without
+   *  starting it. */
+  keyStatus(id: string): Promise<KeyStatus>;
+  /** Choose the key provider for an environment, returning the resulting status.
+   *  For `keychain` the host mints the key eagerly, so a keychain failure surfaces
+   *  here rather than at start. */
+  configureKey(id: string, provider: KeyProvider): Promise<KeyStatus>;
 }
 
 // Default: a single implicit environment that is always active. The web build
@@ -84,6 +102,11 @@ const defaultHost: EnvironmentHost = {
   // The web build has a single always-on environment and no services to tear
   // down, so stopping is a no-op.
   stop: async () => {},
+  // The web build's server owns key management; there is nothing local to
+  // provision or surface, so report a remote-managed key and treat configuration
+  // as a no-op.
+  keyStatus: async () => "remote",
+  configureKey: async () => "remote",
 };
 
 let currentHost: EnvironmentHost = defaultHost;

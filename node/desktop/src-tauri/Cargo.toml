@@ -42,3 +42,12 @@ futures = "0.3"
 # HTTP client for the Unity Catalog REST proxy (forwards the UI's /api calls to
 # the spawned uc server on its dynamic port). rustls to avoid a system TLS dep.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Local key management for the per-environment UC KEK (see src/kek.rs):
+# - `keyring` stores the 32-byte KEK in the OS-native secret store (macOS Keychain,
+#   Windows Credential Manager, Linux Secret Service) so it never lands on disk.
+# - `getrandom` draws the key material from the OS CSPRNG.
+# - `base64` encodes it in the form the UC server expects.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+getrandom = "0.2"
+base64 = "0.22"
