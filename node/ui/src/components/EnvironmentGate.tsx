@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
+import { ErrorBoundary, ErrorFallback } from "@/components/ErrorBoundary";
 import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnvironmentContext";
 import { EnvironmentSwitcher } from "@/components/environment/EnvironmentSwitcher";
 import { EnvironmentManager } from "@/components/environment/manager/EnvironmentManager";
@@ -9,6 +11,7 @@ import {
   type ActiveEnvironment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
+import { parseUcError } from "@/lib/uc/errors";
 
 // The persistent top header — always visible, over both the picker and the app.
 // In the app view (on managed hosts) the active-environment switcher sits to the
@@ -89,6 +92,21 @@ export function EnvironmentGate() {
     );
   }
 
+  // If the startup query (host.active()) rejects, show a recoverable error
+  // instead of spinning on "Loading…" forever.
+  if (initial.isError) {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <ShellHeader />
+        <ErrorFallback
+          error={initial.error}
+          onReset={() => initial.refetch()}
+          resetLabel="Retry"
+        />
+      </div>
+    );
+  }
+
   const running = active !== undefined ? active : (initial.data ?? null);
   // Default the view to the app when something is running at startup, else the
   // overview; explicit navigation overrides.
@@ -157,10 +175,16 @@ export function EnvironmentGate() {
   };
 
   // Switch directly to another environment from the in-app switcher: bring it
-  // online via the host, then adopt it (start + open).
+  // online via the host, then adopt it (start + open). Surface failures as a
+  // toast (the switcher dropdown has no error slot, and a silent failure leaves
+  // the menu stuck "Starting…").
   const switchTo = async (id: string) => {
     if (id === running?.id) return;
-    adopt(await host.start(id));
+    try {
+      adopt(await host.start(id));
+    } catch (e) {
+      toast.error(parseUcError(e, "Failed to switch environment."));
+    }
   };
 
   return (
@@ -172,24 +196,31 @@ export function EnvironmentGate() {
         // running environment (it stays highlighted there).
         onManage={() => setShowApp(false)}
       />
-      {viewingApp && running ? (
-        // The app and all env-scoped state mount under the active environment.
-        // Re-keying on the id unmounts/remounts the subtree on a switch, so no
-        // env-A state survives into env B (see the switch protocol in the ADR).
-        <ActiveEnvironmentProvider key={running.id} environment={running}>
-          <AppShell />
-        </ActiveEnvironmentProvider>
-      ) : (
-        <EnvironmentManager
-          running={running}
-          transition={transition}
-          lastError={lastError}
-          onOpen={() => setShowApp(true)}
-          onStart={(id) => startEnv(id, false)}
-          onLaunch={(id) => startEnv(id, true)}
-          onStop={stopEnv}
-        />
-      )}
+      {/* A render fault in a view degrades to a recoverable card without taking
+          out the persistent ShellHeader/switcher. Keyed by the running env so a
+          switch (or going app<->manager) clears any prior error. Note routed
+          content (AppShell's <Outlet />) also has the router's per-route
+          fallback; this boundary covers AppShell's own chrome and the manager. */}
+      <ErrorBoundary resetKeys={[running?.id ?? null, viewingApp]}>
+        {viewingApp && running ? (
+          // The app and all env-scoped state mount under the active environment.
+          // Re-keying on the id unmounts/remounts the subtree on a switch, so no
+          // env-A state survives into env B (see the switch protocol in the ADR).
+          <ActiveEnvironmentProvider key={running.id} environment={running}>
+            <AppShell />
+          </ActiveEnvironmentProvider>
+        ) : (
+          <EnvironmentManager
+            running={running}
+            transition={transition}
+            lastError={lastError}
+            onOpen={() => setShowApp(true)}
+            onStart={(id) => startEnv(id, false)}
+            onLaunch={(id) => startEnv(id, true)}
+            onStop={stopEnv}
+          />
+        )}
+      </ErrorBoundary>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -31,7 +32,13 @@ createRoot(rootElement).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <TooltipProvider delayDuration={300}>
-          <RouterProvider router={router} />
+          {/* Whole-app safety net: a render fault degrades to a recoverable
+              screen instead of a blank page. The router supplies a finer-grained
+              per-route fallback (see routeTree.tsx); this catches anything above
+              the router. Toaster sits outside so toasts survive a faulted tree. */}
+          <ErrorBoundary>
+            <RouterProvider router={router} />
+          </ErrorBoundary>
           <Toaster position="bottom-right" />
         </TooltipProvider>
       </ThemeProvider>
