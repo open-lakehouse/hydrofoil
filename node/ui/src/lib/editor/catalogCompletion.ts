@@ -1,11 +1,11 @@
 // Catalog-aware SQL completion, run on the MAIN THREAD.
 //
-// We do NOT use monaco-sql-languages' completion/diagnostics: those run the
-// parser in a web worker created via `editor.createWebWorker({moduleId})`, whose
-// ESM module-loading is incompatible with the Vite build (the worker never
-// loads, surfacing as "Missing requestHandler or method: doValidation" and no
-// completions). We keep monaco-sql-languages only for its pgsql *tokenizer*
-// (syntax highlighting, which is not worker-based).
+// monaco-sql-languages' own completion runs the parser in a web worker, which
+// can't see our catalog. The worker DOES load fine under Vite (see monaco-setup.ts
+// — we use it for diagnostics), but its completion only knows SQL grammar, not the
+// live Unity Catalog. So we leave the package's worker-based *completion* disabled
+// and provide our own here, sourcing real catalog names; async catalog fetches are
+// natural on the main thread (a worker would have complicated them).
 //
 // Instead we register a plain Monaco CompletionItemProvider that parses with
 // `dt-sql-parser`'s PostgreSQL grammar directly (the same parser the package
