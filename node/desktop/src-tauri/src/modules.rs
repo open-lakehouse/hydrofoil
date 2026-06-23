@@ -197,6 +197,15 @@ pub fn service_status(env_id: &str) -> Vec<ServiceStatus> {
     all
 }
 
+/// Whether the shared app-level telemetry collector (Jaeger) is currently up.
+/// Drives the Telemetry entry's status dot and its embedded UI gate, independent
+/// of any environment.
+pub fn telemetry_running() -> bool {
+    compose_ps(crate::telemetry::TELEMETRY_PROJECT, true)
+        .iter()
+        .any(|s| s.state == "running")
+}
+
 /// Run `docker compose -p <project> ps --format json` and parse per-service
 /// status. Compose emits either a JSON array or newline-delimited JSON objects
 /// depending on version; handle both. Best-effort — any failure yields an empty

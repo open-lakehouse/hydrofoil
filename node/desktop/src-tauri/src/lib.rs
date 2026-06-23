@@ -1092,6 +1092,13 @@ fn environment_service_status(id: String) -> Vec<modules::ServiceStatus> {
     modules::service_status(&id)
 }
 
+/// Whether the shared, app-level telemetry collector (Jaeger) is running. Drives
+/// the Telemetry entry's status + whether its embedded UI is available.
+#[tauri::command]
+fn telemetry_status() -> bool {
+    modules::telemetry_running()
+}
+
 /// The read-only config artifacts (generated compose + the static fragments and
 /// gateway/collector configs) for an environment's selected capabilities, for the
 /// teaching/inspection viewer. The compose is generated on demand, so this works
@@ -1169,6 +1176,7 @@ pub fn run() {
             environment_capabilities,
             environment_config_artifacts,
             environment_service_status,
+            telemetry_status,
             connect_unary,
             connect_unary_proto,
             connect_stream,

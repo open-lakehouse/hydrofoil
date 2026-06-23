@@ -14,6 +14,11 @@ const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:9080";
 // QUERY_URL straight at hydrofoil's HTTP port (default :9082).
 const QUERY_URL = process.env.QUERY_URL ?? GATEWAY_URL;
 
+// The shared Jaeger collector is app-level — it runs in its own compose project,
+// independent of any environment's Envoy gateway, and publishes its UI on the
+// host. So /jaeger is proxied straight to Jaeger, NOT through the gateway.
+const JAEGER_URL = process.env.JAEGER_URL ?? "http://localhost:16686";
+
 // Service UIs (MLflow, marimo) are embedded in an <iframe>. Two things break
 // that, both fixed here:
 //   1. They 30x-redirect the base path to an ABSOLUTE gateway URL
@@ -62,6 +67,19 @@ export default defineConfig({
       "/mlflow": serviceProxy(),
       // marimo notebook editor (served under --base-url /marimo, long-lived WebSocket).
       "/marimo": serviceProxy(),
+      // Jaeger UI (shared telemetry collector, served under QUERY_BASE_PATH
+      // /jaeger). Proxied directly to Jaeger's host port, not the gateway — it's
+      // app-level and may be up when no environment (hence no Envoy) is running.
+      "/jaeger": {
+        target: JAEGER_URL,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            proxyRes.headers["x-frame-options"] = undefined;
+            proxyRes.headers["content-security-policy"] = undefined;
+          });
+        },
+      },
     },
   },
 });

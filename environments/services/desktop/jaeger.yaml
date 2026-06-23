@@ -15,6 +15,9 @@ services:
     restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      # Serve the query UI under /jaeger so it can be embedded same-origin behind
+      # the Envoy gateway (which routes /jaeger here), like the other service UIs.
+      QUERY_BASE_PATH: "/jaeger"
     ports:
       - "${JAEGER_UI_PORT:-16686}:16686"
       - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"

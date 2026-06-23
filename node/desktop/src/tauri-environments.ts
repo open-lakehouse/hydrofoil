@@ -67,4 +67,5 @@ export const tauriEnvironmentHost: EnvironmentHost = {
     invoke<ConfigArtifact[]>("environment_config_artifacts", { id }),
   serviceStatus: (id: string) =>
     invoke<ServiceStatus[]>("environment_service_status", { id }),
+  telemetryStatus: () => invoke<boolean>("telemetry_status"),
 };

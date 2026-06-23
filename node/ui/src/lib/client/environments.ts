@@ -125,6 +125,9 @@ export interface EnvironmentHost {
   /** Live per-service status (state + health) for a running environment. Polled
    *  on a gentle interval by the UI; empty when nothing is up. */
   serviceStatus(id: string): Promise<ServiceStatus[]>;
+  /** Whether the shared, app-level telemetry collector (Jaeger) is running.
+   *  Drives the Telemetry entry's status and whether its UI is embeddable. */
+  telemetryStatus(): Promise<boolean>;
 }
 
 // Default: a single implicit environment that is always active. The web build
@@ -160,6 +163,7 @@ const defaultHost: EnvironmentHost = {
   setEnvironmentCapabilities: async () => {},
   configArtifacts: async () => [],
   serviceStatus: async () => [],
+  telemetryStatus: async () => false,
 };
 
 let currentHost: EnvironmentHost = defaultHost;
