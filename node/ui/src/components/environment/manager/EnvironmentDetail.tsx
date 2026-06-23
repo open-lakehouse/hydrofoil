@@ -9,6 +9,7 @@ import {
   Boxes,
   ChevronDown,
   CircleStop,
+  Fingerprint,
   KeyRound,
   Loader2,
   Play,
@@ -440,6 +441,11 @@ function isMac(): boolean {
 // would orphan already-sealed secrets), so when running we show the status
 // read-only. The blocking `unconfigured`/`unavailable` warning is rendered as a
 // banner above the tabs (see EnvironmentDetail), not here.
+//
+// Once a key exists the storage provider is locked (the key is minted once and
+// never rotated), so "Configure key" only appears while `unconfigured`. Touch ID,
+// by contrast, is an in-place toggle on the same key bytes and stays available
+// (idle-only, macOS only).
 function KeyManagement({
   environmentId,
   editable,
@@ -449,20 +455,51 @@ function KeyManagement({
   editable: boolean;
   keyStatus: KeyStatusState;
 }) {
+  const host = getEnvironmentHost();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioError, setBioError] = useState<string | null>(null);
   const { status, setStatus } = keyStatus;
+
+  const isKeychain = status === "keychain" || status === "keychain-biometric";
+  const biometricOn = status === "keychain-biometric";
+  // The Touch ID toggle is offered only for a keychain key, while idle, on a host
+  // that supports biometry. The provider can't be changed after creation, so a
+  // configured keychain key never reverts to the configure dialog.
+  const canToggleBiometric = editable && isKeychain && host.biometricSupported;
+
+  async function toggleBiometric() {
+    setBioError(null);
+    setBioBusy(true);
+    try {
+      // Reading the existing biometric key prompts for Touch ID; the OS dialog is
+      // the confirmation, so no extra UI needed.
+      const next = await host.setKeyBiometric(environmentId, !biometricOn);
+      setStatus(next);
+    } catch (e) {
+      setBioError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBioBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-2 rounded-md border p-3">
       <div className="flex items-center gap-2">
         <KeyRound className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">Encryption key</span>
-        {status === "keychain" ? (
+        {biometricOn ? (
+          <Badge variant="outline">
+            <Fingerprint className="mr-1 h-3 w-3" />
+            Touch ID
+          </Badge>
+        ) : status === "keychain" ? (
           <Badge variant="outline">OS keychain</Badge>
         ) : status === "remote" ? (
           <Badge variant="outline">Remote store</Badge>
         ) : null}
-        {editable ? (
+        {/* Initial provisioning only — the provider locks once a key exists. */}
+        {editable && (status === "unconfigured" || status === "unavailable") ? (
           <Button
             className="ml-auto h-7"
             size="sm"
@@ -472,11 +509,35 @@ function KeyManagement({
             Configure key
           </Button>
         ) : null}
+        {canToggleBiometric ? (
+          <Button
+            className="ml-auto h-7"
+            size="sm"
+            variant={biometricOn ? "secondary" : "outline"}
+            disabled={bioBusy}
+            onClick={toggleBiometric}
+          >
+            <Fingerprint className="mr-1 h-3.5 w-3.5" />
+            {bioBusy
+              ? "Updating…"
+              : biometricOn
+                ? "Disable Touch ID"
+                : "Require Touch ID"}
+          </Button>
+        ) : null}
       </div>
 
-      {status === "keychain" ? (
+      {biometricOn ? (
+        <p className="text-xs text-muted-foreground">
+          Credentials are encrypted with a key in your OS keychain, unlocked by
+          Touch ID. Starting this environment prompts for your fingerprint.
+        </p>
+      ) : status === "keychain" ? (
         <p className="text-xs text-muted-foreground">
           Credentials are encrypted with a key stored in your OS keychain.
+          {host.biometricSupported && editable
+            ? " Require Touch ID to unlock it on each start."
+            : null}
         </p>
       ) : status === "remote" ? (
         <p className="text-xs text-muted-foreground">
@@ -488,6 +549,8 @@ function KeyManagement({
           stored.
         </p>
       )}
+
+      {bioError ? <p className="text-xs text-destructive">{bioError}</p> : null}
 
       <ConfigureKeyDialog
         environmentId={environmentId}

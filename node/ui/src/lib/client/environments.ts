@@ -21,9 +21,15 @@ export type KeyProvider = "keychain" | "remote";
 
 /** Encryption-key status the UI can render without starting the environment.
  *  `unconfigured` — no key yet; `keychain`/`remote` — provisioned under that
- *  provider; `unavailable` — the OS keychain can't be reached, so the environment
- *  cannot start until a key store is configured. */
-export type KeyStatus = "unconfigured" | "keychain" | "remote" | "unavailable";
+ *  provider; `keychain-biometric` — keychain key additionally gated behind Touch ID
+ *  (so each start prompts for biometry); `unavailable` — the OS keychain can't be
+ *  reached, so the environment cannot start until a key store is configured. */
+export type KeyStatus =
+  | "unconfigured"
+  | "keychain"
+  | "keychain-biometric"
+  | "remote"
+  | "unavailable";
 
 /** Lifecycle status of an environment as the UI presents it. Forward-compatible
  *  with multiple running environments later; today only the single active
@@ -106,8 +112,18 @@ export interface EnvironmentHost {
   keyStatus(id: string): Promise<KeyStatus>;
   /** Choose the key provider for an environment, returning the resulting status.
    *  For `keychain` the host mints the key eagerly, so a keychain failure surfaces
-   *  here rather than at start. */
+   *  here rather than at start. The provider is locked once a key exists (the key
+   *  is minted once and never rotated). */
   configureKey(id: string, provider: KeyProvider): Promise<KeyStatus>;
+  /** Whether this host can gate the keychain key behind biometry (Touch ID).
+   *  Drives whether the Touch ID switch is shown. macOS desktop only; false on the
+   *  web build and non-macOS desktops. */
+  readonly biometricSupported: boolean;
+  /** Toggle Touch ID protection for an environment's keychain key, returning the
+   *  resulting status. Rewrites the same key material with/without the biometric
+   *  flag — no rotation — so already-sealed credentials keep decrypting. Throws on
+   *  hosts where `biometricSupported` is false. */
+  setKeyBiometric(id: string, enabled: boolean): Promise<KeyStatus>;
   /** Whether the host's container runtime (Docker) is available. Drives the
    *  graceful-degrade banner: capabilities needing Docker are disabled when false.
    *  Always true for hosts with no container dependency. */
@@ -154,6 +170,9 @@ const defaultHost: EnvironmentHost = {
   // as a no-op.
   keyStatus: async () => "remote",
   configureKey: async () => "remote",
+  // No local keychain in the web build, so no biometric gating.
+  biometricSupported: false,
+  setKeyBiometric: async () => "remote",
   // The web build has no local container runtime and no per-env capabilities to
   // manage — Docker is "available" (nothing to gate), the capability set is empty,
   // and there are no local config artifacts to inspect.

@@ -47,10 +47,19 @@ futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Local key management for the per-environment UC KEK (see src/kek.rs):
-# - `keyring` stores the 32-byte KEK in the OS-native secret store (macOS Keychain,
-#   Windows Credential Manager, Linux Secret Service) so it never lands on disk.
+# - `keyring` is the portable secret store for the default (non-biometric) KEK on
+#   every platform (macOS Keychain, Windows Credential Manager, Linux Secret
+#   Service) so the key never lands on disk.
 # - `getrandom` draws the key material from the OS CSPRNG.
 # - `base64` encodes it in the form the UC server expects.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 getrandom = "0.2"
 base64 = "0.22"
+
+# macOS-only: the optional Touch ID store. `security-framework` lets us attach a
+# biometric `SecAccessControl` (`kSecAttrAccessControl`) to a keychain item, which
+# `keyring` can't express. NOTE: that flag requires a code-signed app with a
+# `keychain-access-groups` entitlement — unsigned builds get errSecMissingEntitlement
+# — so the Touch ID toggle is dormant (with a clear message) until signing is wired.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
