@@ -14,6 +14,12 @@ import type { Volume } from "@/lib/editor/volumes";
 
 export type Environment = { id: string; name: string };
 
+/** Lifecycle status of an environment as the UI presents it. Forward-compatible
+ *  with multiple running environments later; today only the single active
+ *  environment is "running" and everything else is "idle". "starting"/"stopping"
+ *  are transient UI states held while the async host call is in flight. */
+export type EnvironmentStatus = "idle" | "starting" | "running" | "stopping";
+
 /** What a selected environment can do. A capability is shaped by which services
  *  the host wired up for it; the UI shells itself to fit. Grows over time
  *  (lineage, credential vending, a write path, …) — add fields here rather than
@@ -49,10 +55,14 @@ export interface EnvironmentHost {
   active(): Promise<ActiveEnvironment | null>;
   /** Create a new environment (no services spawned yet). */
   create(name: string): Promise<Environment>;
-  /** Select an environment: the host brings its services online and resolves to
+  /** Start an environment: the host brings its services online and resolves to
    *  the active environment (capabilities + built-in volumes) once they are
-   *  ready, so the UI can mount the app and scope its state after this returns. */
-  select(id: string): Promise<ActiveEnvironment>;
+   *  ready. Starting does NOT imply opening the app — the caller decides whether
+   *  to navigate into it (launch) or stay in the manager. */
+  start(id: string): Promise<ActiveEnvironment>;
+  /** Stop an environment: tear down its services. Idempotent — a no-op when the
+   *  environment is not running. After this resolves the environment is idle. */
+  stop(id: string): Promise<void>;
 }
 
 // Default: a single implicit environment that is always active. The web build
@@ -70,7 +80,10 @@ const defaultHost: EnvironmentHost = {
   list: async () => [{ id: "default", name: "Default" }],
   active: async () => DEFAULT_ENVIRONMENT,
   create: async () => ({ id: "default", name: "Default" }),
-  select: async () => DEFAULT_ENVIRONMENT,
+  start: async () => DEFAULT_ENVIRONMENT,
+  // The web build has a single always-on environment and no services to tear
+  // down, so stopping is a no-op.
+  stop: async () => {},
 };
 
 let currentHost: EnvironmentHost = defaultHost;

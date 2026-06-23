@@ -3,10 +3,10 @@
 // this is one of the few places on the JS side that imports `@tauri-apps/api`,
 // keeping node/ui completely Tauri-free.
 //
-// It maps the four host operations onto the Rust commands in src-tauri/src/lib.rs:
-// listing / activating / creating / selecting environments. `select` resolves
-// only after the Unity Catalog sidecar is spawned and the in-process executors
-// are bound, so the UI can mount the app immediately afterwards.
+// It maps the host operations onto the Rust commands in src-tauri/src/lib.rs:
+// listing / activating / creating / starting / stopping environments. `start`
+// resolves only after the Unity Catalog sidecar is spawned and the in-process
+// executors are bound; `stop` kills the sidecar and clears the active services.
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -16,7 +16,7 @@ import type {
 } from "@/lib/client/environments";
 import { HOME_VOLUME } from "@/lib/editor/volumes";
 
-// The descriptor shape the Rust `active_environment` / `select_environment`
+// The descriptor shape the Rust `active_environment` / `start_environment`
 // commands return. The UI's `ActiveEnvironment` adds derived built-in volumes.
 interface EnvDescriptor {
   id: string;
@@ -43,8 +43,9 @@ export const tauriEnvironmentHost: EnvironmentHost = {
     return d ? toActiveEnvironment(d) : null;
   },
   create: (name: string) => invoke<Environment>("create_environment", { name }),
-  select: async (id: string) => {
-    const d = await invoke<EnvDescriptor>("select_environment", { id });
+  start: async (id: string) => {
+    const d = await invoke<EnvDescriptor>("start_environment", { id });
     return toActiveEnvironment(d);
   },
+  stop: (id: string) => invoke<void>("stop_environment", { id }),
 };
