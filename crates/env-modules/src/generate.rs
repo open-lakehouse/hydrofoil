@@ -83,10 +83,7 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
     // The per-environment writable data root. Stateful fragments bind their data
     // dirs under this (e.g. `${OL_ENV_DATA_DIR}/db`), so state is isolated per
     // environment and persists across restarts.
-    env.insert(
-        "OL_ENV_DATA_DIR".to_string(),
-        ctx.env_data_dir.clone(),
-    );
+    env.insert("OL_ENV_DATA_DIR".to_string(), ctx.env_data_dir.clone());
     // When the env opted in to observability, point the service fragments' OTLP
     // exporters at the shared host collector; otherwise leave it unset so the
     // baked-in instrumentation is a no-op.
@@ -106,12 +103,14 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
         // get the fragment. `ModuleKind` has one variant today (hence the allow);
         // `let-else` keeps this correct if more kinds are added later.
         #[allow(irrefutable_let_patterns)]
-        let crate::model::ModuleKind::DockerService { fragment } = &module.kind
-        else {
+        let crate::model::ModuleKind::DockerService { fragment } = &module.kind else {
             continue;
         };
         yaml.push_str(&format!("  - path: {}/{}\n", ctx.fragments_dir, fragment));
-        yaml.push_str(&format!("    project_directory: {}\n", ctx.environments_dir));
+        yaml.push_str(&format!(
+            "    project_directory: {}\n",
+            ctx.environments_dir
+        ));
     }
 
     ComposeArtifacts {
@@ -158,7 +157,11 @@ mod tests {
             );
         }
         // All includes share the environments/ project directory.
-        assert!(artifacts.compose_yaml.contains("project_directory: /repo/environments\n"));
+        assert!(
+            artifacts
+                .compose_yaml
+                .contains("project_directory: /repo/environments\n")
+        );
         // Injects the UC host URL pointing at host.docker.internal.
         assert_eq!(
             artifacts.env.get("UC_HOST_URL").map(String::as_str),

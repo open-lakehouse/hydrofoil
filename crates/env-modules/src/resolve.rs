@@ -79,8 +79,7 @@ pub fn resolve_with(
     selected: &[ModuleId],
     registry: &[Module],
 ) -> Result<ResolvedGraph, ResolveError> {
-    let by_id: BTreeMap<&str, &Module> =
-        registry.iter().map(|m| (m.id.as_str(), m)).collect();
+    let by_id: BTreeMap<&str, &Module> = registry.iter().map(|m| (m.id.as_str(), m)).collect();
 
     // Transitive closure of the selection over `requires` (BFS), erroring on any
     // unknown id encountered along the way.
@@ -130,10 +129,10 @@ pub fn resolve_capabilities(
     // they are handled app-side (the shared collector + per-engine emit flag).
     let mut providers: Vec<crate::capability::Provider> = Vec::new();
     for cap in capabilities {
-        if let Some(provider) = cap.default_provider() {
-            if !providers.contains(&provider) {
-                providers.push(provider);
-            }
+        if let Some(provider) = cap.default_provider()
+            && !providers.contains(&provider)
+        {
+            providers.push(provider);
         }
     }
 
@@ -159,10 +158,7 @@ pub fn resolve_capabilities(
 
 /// Collect the dependency edges (from → to: `from` requires `to`) within the
 /// included set, in a deterministic order.
-fn collect_edges(
-    included: &BTreeSet<ModuleId>,
-    by_id: &BTreeMap<&str, &Module>,
-) -> Vec<Edge> {
+fn collect_edges(included: &BTreeSet<ModuleId>, by_id: &BTreeMap<&str, &Module>) -> Vec<Edge> {
     let mut edges = Vec::new();
     for id in included {
         let module = by_id.get(id.as_str()).unwrap();
@@ -181,10 +177,7 @@ fn collect_edges(
 
 /// Kahn topological sort: dependencies (edge `to`) ordered before dependents
 /// (edge `from`). Returns the modules left in a cycle as a [`ResolveError::Cycle`].
-fn topo_sort(
-    included: &BTreeSet<ModuleId>,
-    edges: &[Edge],
-) -> Result<Vec<ModuleId>, ResolveError> {
+fn topo_sort(included: &BTreeSet<ModuleId>, edges: &[Edge]) -> Result<Vec<ModuleId>, ResolveError> {
     // in_degree counts unresolved dependencies of each node (its `requires`).
     let mut in_degree: BTreeMap<&ModuleId, usize> =
         included.iter().map(|id| (id, 0usize)).collect();

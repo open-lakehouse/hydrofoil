@@ -21,9 +21,7 @@ pub use capability::{Capability, Provider};
 pub use effect::{Effect, EffectConsumer, EffectKind};
 pub use generate::{ComposeArtifacts, LaunchContext, generate_compose};
 pub use model::{Module, ModuleId, ModuleKind, registry};
-pub use resolve::{
-    Edge, ResolveError, ResolvedGraph, resolve, resolve_capabilities, resolve_with,
-};
+pub use resolve::{Edge, ResolveError, ResolvedGraph, resolve, resolve_capabilities, resolve_with};
 
 #[cfg(test)]
 mod tests {
@@ -60,7 +58,10 @@ mod tests {
         let graph = resolve(&["mlflow".into()]).unwrap();
         let got = ids(&graph);
         for required in ["mlflow", "postgres", "azurite", "envoy"] {
-            assert!(got.contains(&required.to_string()), "missing {required} in {got:?}");
+            assert!(
+                got.contains(&required.to_string()),
+                "missing {required} in {got:?}"
+            );
         }
         assert_deps_before_dependents(&graph);
     }
@@ -70,7 +71,10 @@ mod tests {
         let graph = resolve(&["marquez".into()]).unwrap();
         let got = ids(&graph);
         for required in ["marquez", "postgres", "envoy"] {
-            assert!(got.contains(&required.to_string()), "missing {required} in {got:?}");
+            assert!(
+                got.contains(&required.to_string()),
+                "missing {required} in {got:?}"
+            );
         }
         // Marquez does not need Azurite.
         assert!(!got.contains(&"azurite".to_string()));
@@ -100,7 +104,10 @@ mod tests {
     fn selection_order_does_not_change_result() {
         let a = resolve(&["mlflow".into(), "marquez".into()]).unwrap();
         let b = resolve(&["marquez".into(), "mlflow".into()]).unwrap();
-        assert_eq!(a, b, "resolution must be deterministic regardless of input order");
+        assert_eq!(
+            a, b,
+            "resolution must be deterministic regardless of input order"
+        );
     }
 
     #[test]
@@ -124,10 +131,15 @@ mod tests {
         let graph = super::resolve_capabilities(&[Capability::Lineage]).unwrap();
         // Marquez (+ its deps postgres, envoy) run.
         for required in ["marquez", "postgres", "envoy"] {
-            assert!(ids(&graph).contains(&required.to_string()), "missing {required}");
+            assert!(
+                ids(&graph).contains(&required.to_string()),
+                "missing {required}"
+            );
         }
         // A lineage effect wires Hydrofoil, produced by marquez.
-        let effect = graph.effect(EffectKind::LineageEndpoint).expect("lineage effect");
+        let effect = graph
+            .effect(EffectKind::LineageEndpoint)
+            .expect("lineage effect");
         assert_eq!(effect.producer.as_deref(), Some("marquez"));
         assert!(effect.consumers.contains(&EffectConsumer::Hydrofoil));
     }
@@ -146,10 +158,15 @@ mod tests {
         // Observability alone runs no per-env service (it opts the env in to
         // emitting to the shared app-level collector), so the graph is empty.
         let graph = super::resolve_capabilities(&[Capability::Observability]).unwrap();
-        assert!(graph.nodes.is_empty(), "observability must run no per-env module");
+        assert!(
+            graph.nodes.is_empty(),
+            "observability must run no per-env module"
+        );
         assert!(!graph.needs_docker());
         assert!(Capability::Observability.is_shared_infra());
-        assert!(Capability::wants_observability(&[Capability::Observability]));
+        assert!(Capability::wants_observability(&[
+            Capability::Observability
+        ]));
         assert!(!Capability::wants_observability(&[Capability::Lineage]));
     }
 
@@ -158,7 +175,9 @@ mod tests {
         use super::capability::Capability;
         use super::effect::{EffectConsumer, EffectKind};
         let graph = super::resolve_capabilities(&[Capability::ObjectStorage]).unwrap();
-        let effect = graph.effect(EffectKind::ObjectStorage).expect("object storage effect");
+        let effect = graph
+            .effect(EffectKind::ObjectStorage)
+            .expect("object storage effect");
         // MLflow consumes the bucket now; UC vending is designed (carried) but not wired.
         assert!(effect.consumers.contains(&EffectConsumer::Mlflow));
         assert!(effect.consumers.contains(&EffectConsumer::UnityCatalog));
@@ -170,13 +189,17 @@ mod tests {
             Module {
                 id: "a".into(),
                 name: "A".into(),
-                kind: ModuleKind::DockerService { fragment: "a.yaml".into() },
+                kind: ModuleKind::DockerService {
+                    fragment: "a.yaml".into(),
+                },
                 requires: vec!["b".into()],
             },
             Module {
                 id: "b".into(),
                 name: "B".into(),
-                kind: ModuleKind::DockerService { fragment: "b.yaml".into() },
+                kind: ModuleKind::DockerService {
+                    fragment: "b.yaml".into(),
+                },
                 requires: vec!["a".into()],
             },
         ];
