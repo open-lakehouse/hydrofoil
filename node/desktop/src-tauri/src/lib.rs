@@ -30,6 +30,9 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
 mod kek;
+mod supervisor;
+
+use supervisor::{ManagedProcess, Supervisor};
 
 /// The services bound to the currently-active environment: the in-process
 /// executors plus the resolved UC endpoint. `None` until an environment is
@@ -454,10 +457,6 @@ async fn proxy_request(
     })
 }
 
-/// The managed child handle for the spawned UC server, so the exit hook can kill
-/// it. `None` once taken/killed.
-struct UcSidecar(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
-
 /// The app working directory (gitignored, in-repo for this iteration so it's
 /// inspectable): holds `environments.json` and per-environment data under
 /// `envs/<id>/`.
@@ -654,13 +653,15 @@ async fn spawn_uc_sidecar(
         .spawn()
         .map_err(|e| format!("failed to spawn uc server: {e}"))?;
 
-    // Store the child in the managed slot so the exit hook (and a later
-    // re-selection) can kill it. Kill any prior child first — re-selecting an
-    // environment tears down the previous sidecar before respawning.
-    if let Some(slot) = app.try_state::<UcSidecar>() {
-        if let Some(prev) = slot.0.lock().unwrap().replace(child) {
-            let _ = prev.kill();
-        }
+    // Track the child in the supervisor so the exit hook (and `stop_environment`)
+    // can kill it alongside any compose project / uvx sidecars. The prior
+    // environment's processes are torn down by `start_environment` before this
+    // spawn, so the supervisor holds only the current environment's set.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.track(ManagedProcess::Sidecar {
+            label: "uc-server".to_string(),
+            child,
+        });
     }
 
     // The server prints `✅listening on http://<host>:<port>` (status::success);
@@ -893,6 +894,13 @@ async fn start_environment(
         );
     }
 
+    // Switching to a different environment: tear down the previously-running
+    // environment's processes (UC sidecar, and later its compose project / uvx
+    // sidecars) before spawning this one's. The already-active case returned above.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.shut_down_all();
+    }
+
     let config_path = write_uc_config(&id, &uc_dir)?;
     let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
@@ -917,12 +925,11 @@ async fn stop_environment(app: tauri::AppHandle, id: String) -> Result<(), Strin
         }
     }
 
-    // Kill the spawned sidecar child (mirrors the exit hook). Taking the slot
-    // empties it, so the exit hook later finds nothing to kill — no double-kill.
-    if let Some(slot) = app.try_state::<UcSidecar>() {
-        if let Some(child) = slot.0.lock().unwrap().take() {
-            let _ = child.kill();
-        }
+    // Tear down every process bound to this environment (UC sidecar, and later
+    // the compose project / uvx sidecars). Draining the supervisor leaves the
+    // exit hook nothing to do — no double-kill.
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.shut_down_all();
     }
 
     // Reset the active services to "none selected". `snapshot()` then errors and
@@ -962,9 +969,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        // Slot for the spawned UC child so the exit hook (and re-selection) can
-        // kill it. Populated on first spawn; empty until then.
-        .manage(UcSidecar(std::sync::Mutex::new(None)))
+        // Tracks every process bound to the active environment (UC sidecar, and
+        // later the compose project / uvx sidecars) so the exit hook and
+        // `stop_environment` can tear the whole set down. Empty until first spawn.
+        .manage(Supervisor::default())
         .setup(|app| {
             // Escape hatch for dev scripts: `OPEN_LAKEHOUSE_UC_URL` (incl. empty
             // for "no UC → in-memory files") auto-activates a single environment
@@ -1019,12 +1027,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Kill the spawned UC server when the app exits.
+            // Tear down every process bound to the active environment when the
+            // app exits (UC server, and later the compose project / uvx sidecars).
             if let tauri::RunEvent::Exit = event {
-                if let Some(sidecar) = app.try_state::<UcSidecar>() {
-                    if let Some(child) = sidecar.0.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                if let Some(supervisor) = app.try_state::<Supervisor>() {
+                    supervisor.shut_down_all();
                 }
             }
         });
