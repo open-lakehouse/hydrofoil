@@ -1,18 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Plus } from "lucide-react";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnvironmentContext";
 import { EnvironmentSwitcher } from "@/components/environment/EnvironmentSwitcher";
+import { EnvironmentManager } from "@/components/environment/manager/EnvironmentManager";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   type ActiveEnvironment,
-  type Environment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 
 // The persistent top header — always visible, over both the picker and the app.
 // In the app view (on managed hosts) the active-environment switcher sits to the
@@ -46,149 +42,6 @@ function ShellHeader({
       </div>
       <ThemeToggle />
     </header>
-  );
-}
-
-// The onboarding / overview screen. Lists existing environments — highlighting
-// the running one (if any) — and offers a name-only create form. Selecting the
-// running environment re-opens the app without restarting it; selecting another
-// switches to it (the host stops the previous one and starts the new).
-function EnvironmentPicker({
-  activeId,
-  onOpen,
-  onActivated,
-}: {
-  // The currently-running environment, or null when none is running.
-  activeId: string | null;
-  // Re-open the already-running environment (no restart).
-  onOpen: () => void;
-  // A (possibly different) environment was brought online — switch to the app.
-  onActivated: (env: ActiveEnvironment) => void;
-}) {
-  const host = getEnvironmentHost();
-  const environments = useQuery({
-    queryKey: ["environments"],
-    queryFn: () => host.list(),
-  });
-
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function choose(env: Environment) {
-    // Re-opening the running environment is a view change, not a restart.
-    if (env.id === activeId) {
-      onOpen();
-      return;
-    }
-    setError(null);
-    setBusy(env.id);
-    try {
-      const active = await host.select(env.id);
-      onActivated(active);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(null);
-    }
-  }
-
-  async function create() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setError(null);
-    setBusy("__create__");
-    try {
-      const env = await host.create(trimmed);
-      setName("");
-      // Newly created environments are selected immediately so the user lands in
-      // the app — create + open is the common first-run path.
-      const active = await host.select(env.id);
-      onActivated(active);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(null);
-    }
-  }
-
-  const envs = environments.data ?? [];
-
-  return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-16">
-      <div>
-        <h1 className="text-lg font-semibold">Environments</h1>
-        <p className="text-sm text-muted-foreground">
-          An environment bundles the local services (Unity Catalog and more).
-          Select one to open it, or create a new one.
-        </p>
-      </div>
-
-      {environments.isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : envs.length > 0 ? (
-        <ul className="space-y-2">
-          {envs.map((env) => {
-            const running = env.id === activeId;
-            return (
-              <li key={env.id}>
-                <button
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => choose(env)}
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50",
-                    running && "border-primary/50 bg-accent/40",
-                  )}
-                >
-                  <span className="flex items-center gap-2 font-medium">
-                    {env.name}
-                    {running ? (
-                      <span className="flex items-center gap-1 text-xs font-normal text-green-600 dark:text-green-500">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Running
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {busy === env.id ? "Starting…" : running ? "Open" : env.id}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          No environments yet. Create one to get started.
-        </p>
-      )}
-
-      <form
-        className="flex items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void create();
-        }}
-      >
-        <div className="flex-1 space-y-1">
-          <label htmlFor="env-name" className="text-xs font-medium">
-            New environment
-          </label>
-          <Input
-            id="env-name"
-            placeholder="my-environment"
-            value={name}
-            disabled={busy !== null}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-        <Button type="submit" disabled={busy !== null || !name.trim()}>
-          <Plus className="h-4 w-4" />
-          Create
-        </Button>
-      </form>
-
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-    </div>
   );
 }
 
@@ -270,8 +123,8 @@ export function EnvironmentGate() {
           <AppShell />
         </ActiveEnvironmentProvider>
       ) : (
-        <EnvironmentPicker
-          activeId={running?.id ?? null}
+        <EnvironmentManager
+          running={running}
           onOpen={() => setShowApp(true)}
           onActivated={adopt}
         />

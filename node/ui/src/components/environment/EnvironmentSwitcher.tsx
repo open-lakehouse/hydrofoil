@@ -21,18 +21,7 @@ import {
   type ActiveEnvironment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
-import { HOME_VOLUME } from "@/lib/editor/volumes";
-
-// A one-line summary of what the environment provides, from its capabilities and
-// built-in volumes (the correlated data we hold at the header layer).
-function capabilitySummary(env: ActiveEnvironment): string {
-  const parts: string[] = [];
-  if (env.capabilities.hasHome) parts.push("Home");
-  const ucCount = env.volumes.filter((v) => v.id !== HOME_VOLUME.id).length;
-  if (ucCount > 0)
-    parts.push(`${ucCount} UC volume${ucCount === 1 ? "" : "s"}`);
-  return parts.length > 0 ? parts.join(" · ") : "No local volumes";
-}
+import { capabilitySummary } from "./capabilitySummary";
 
 export function EnvironmentSwitcher({
   active,
