@@ -2,16 +2,31 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
   createRoute,
+  type ErrorComponentProps,
+  useRouter,
 } from "@tanstack/react-router";
 import { EnvironmentGate } from "@/components/EnvironmentGate";
+import { ErrorFallback } from "@/components/ErrorBoundary";
 import { prefetchCatalogs } from "@/lib/uc/queries";
 
 export interface RouterContext {
   queryClient: QueryClient;
 }
 
+// Catches errors from route loaders (e.g. prefetchCatalogs) and route-component
+// renders. Rendered inside EnvironmentGate's <Outlet />, so the persistent
+// header + nav stay mounted and only the routed content shows the fallback.
+function RouteError({ error }: ErrorComponentProps) {
+  const router = useRouter();
+  // invalidate() re-runs loaders and re-mounts the route, clearing the error.
+  return <ErrorFallback error={error} onReset={() => router.invalidate()} />;
+}
+
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: EnvironmentGate,
+  // Inherited by all child routes (none override it): catches loader/render
+  // errors and shows RouteError inside EnvironmentGate's <Outlet />.
+  errorComponent: RouteError,
 });
 
 const indexRoute = createRoute({
