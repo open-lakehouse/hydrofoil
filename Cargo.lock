@@ -2509,6 +2509,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "connectrpc",
+ "datafusion-open-lineage",
  "futures",
  "http",
  "hydrofoil",
@@ -2517,6 +2518,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unitycatalog-object-store",
+ "url",
 ]
 
 [[package]]

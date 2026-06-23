@@ -67,11 +67,12 @@ fn launch_context(uc_port: Option<u16>) -> LaunchContext {
 pub async fn start_modules(
     app: &tauri::AppHandle,
     env_id: &str,
-    modules: &[String],
+    capabilities: &[env_modules::Capability],
     uc_port: Option<u16>,
     supervisor: &Supervisor,
-) -> Result<(), String> {
-    let graph = env_modules::resolve(modules).map_err(|e| format!("resolving modules: {e}"))?;
+) -> Result<ResolvedGraph, String> {
+    let graph = env_modules::resolve_capabilities(capabilities)
+        .map_err(|e| format!("resolving capabilities: {e}"))?;
 
     if graph.needs_docker() {
         if !docker_available() {
@@ -85,7 +86,25 @@ pub async fn start_modules(
     }
 
     start_uvx_sidecars(app, &graph, uc_port, supervisor).await?;
-    Ok(())
+    Ok(graph)
+}
+
+/// The lineage sink endpoint to inject into the in-process engine, derived from
+/// the resolved graph: `Some(base_url)` when the graph carries a lineage effect
+/// (the Marquez sink is reached through the Envoy gateway on the host). `None`
+/// when lineage isn't part of the environment.
+pub fn lineage_endpoint(graph: &ResolvedGraph) -> Option<String> {
+    graph
+        .effect(env_modules::EffectKind::LineageEndpoint)
+        .map(|_| gateway_base())
+}
+
+/// The host base URL of the Envoy gateway the Docker services are published on.
+fn gateway_base() -> String {
+    // Envoy publishes on ENVOY_PORT (default 9080); the desktop fragments use the
+    // same default. Marquez's OpenLineage API lives under /api/v1 on the gateway.
+    let port = std::env::var("ENVOY_PORT").unwrap_or_else(|_| "9080".to_string());
+    format!("http://localhost:{port}")
 }
 
 /// Generate + write the compose file and bring the project up, tracking it for

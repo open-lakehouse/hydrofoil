@@ -41,6 +41,11 @@ pub struct ResolvedGraph {
     pub nodes: Vec<Module>,
     /// Dependency edges among `nodes`.
     pub edges: Vec<Edge>,
+    /// Cross-service wiring effects to apply once the producing services are
+    /// healthy (lineage/OTLP endpoints into Hydrofoil, object-store buckets).
+    /// Empty when resolving modules directly (effects come from capabilities).
+    #[serde(default)]
+    pub effects: Vec<crate::effect::Effect>,
 }
 
 impl ResolvedGraph {
@@ -63,6 +68,12 @@ impl ResolvedGraph {
     /// Whether running this graph requires a Docker daemon.
     pub fn needs_docker(&self) -> bool {
         self.nodes.iter().any(|m| m.kind.needs_docker())
+    }
+
+    /// The single effect of a given kind, if any (each kind appears at most once
+    /// in a resolved graph — a capability maps to one provider).
+    pub fn effect(&self, kind: crate::effect::EffectKind) -> Option<&crate::effect::Effect> {
+        self.effects.iter().find(|e| e.kind == kind)
     }
 }
 
@@ -103,7 +114,55 @@ pub fn resolve_with(
         .map(|id| (*by_id.get(id.as_str()).unwrap()).clone())
         .collect();
 
-    Ok(ResolvedGraph { nodes, edges })
+    Ok(ResolvedGraph {
+        nodes,
+        edges,
+        effects: Vec::new(),
+    })
+}
+
+/// Resolve a set of user-facing **capabilities** into the full graph: each
+/// capability maps to its default provider, providers contribute modules (whose
+/// transitive `requires` are pulled in by the module resolver) and effects.
+///
+/// This is the desktop entry point — the environment stores capabilities, and the
+/// resulting graph carries both the modules to run and the effects to apply once
+/// the producing services are healthy.
+pub fn resolve_capabilities(
+    capabilities: &[crate::capability::Capability],
+) -> Result<ResolvedGraph, ResolveError> {
+    // Collect each capability's provider, then the provider modules + effects.
+    // Dedup providers so two capabilities sharing one (e.g. observability +
+    // model-tracking both via MLflow) don't double-list its modules/effects.
+    // Shared-infra capabilities (observability) contribute no per-env provider;
+    // they are handled app-side (the shared collector + per-engine emit flag).
+    let mut providers: Vec<crate::capability::Provider> = Vec::new();
+    for cap in capabilities {
+        if let Some(provider) = cap.default_provider() {
+            if !providers.contains(&provider) {
+                providers.push(provider);
+            }
+        }
+    }
+
+    let mut module_ids: Vec<ModuleId> = Vec::new();
+    let mut effects: Vec<crate::effect::Effect> = Vec::new();
+    for provider in &providers {
+        for m in provider.modules() {
+            if !module_ids.contains(&m) {
+                module_ids.push(m);
+            }
+        }
+        for e in provider.effects() {
+            if !effects.contains(&e) {
+                effects.push(e);
+            }
+        }
+    }
+
+    let mut graph = resolve(&module_ids)?;
+    graph.effects = effects;
+    Ok(graph)
 }
 
 /// Collect the dependency edges (from → to: `from` requires `to`) within the

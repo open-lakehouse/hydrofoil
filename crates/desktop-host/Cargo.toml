@@ -8,6 +8,8 @@ rust-version.workspace = true
 # In-process service executors reused by the Tauri desktop backend.
 portal = { path = "../portal" }
 hydrofoil = { path = "../hydrofoil" }
+# OpenLineage client, to wire the lineage capability's endpoint into the engine.
+datafusion-open-lineage = { path = "../open-lineage" }
 
 connectrpc = { version = "0.7", features = ["server", "client"] }
 
@@ -15,6 +17,7 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 unitycatalog-object-store = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

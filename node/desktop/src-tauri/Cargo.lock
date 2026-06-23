@@ -2545,11 +2545,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "connectrpc",
+ "datafusion-open-lineage",
  "hydrofoil",
  "portal",
  "tokio",
  "tracing",
  "unitycatalog-object-store",
+ "url",
 ]
 
 [[package]]

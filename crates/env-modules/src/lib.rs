@@ -11,13 +11,19 @@
 //! Topology: Unity Catalog runs on the host (not as a module); modules consume it
 //! via an injected URL. See `docs/adr` / the env-service-modules design.
 
+pub mod capability;
+pub mod effect;
 pub mod generate;
 pub mod model;
 pub mod resolve;
 
+pub use capability::{Capability, Provider};
+pub use effect::{Effect, EffectConsumer, EffectKind};
 pub use generate::{ComposeArtifacts, LaunchContext, generate_compose, uvx_uc_uri};
 pub use model::{Module, ModuleId, ModuleKind, registry};
-pub use resolve::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
+pub use resolve::{
+    Edge, ResolveError, ResolvedGraph, resolve, resolve_capabilities, resolve_with,
+};
 
 #[cfg(test)]
 mod tests {
@@ -110,6 +116,53 @@ mod tests {
     fn unknown_module_errors() {
         let err = resolve(&["nope".into()]).unwrap_err();
         assert_eq!(err, ResolveError::UnknownModule("nope".into()));
+    }
+
+    #[test]
+    fn lineage_capability_runs_marquez_and_wires_hydrofoil() {
+        use super::capability::Capability;
+        use super::effect::{EffectConsumer, EffectKind};
+        let graph = super::resolve_capabilities(&[Capability::Lineage]).unwrap();
+        // Marquez (+ its deps postgres, envoy) run.
+        for required in ["marquez", "postgres", "envoy"] {
+            assert!(ids(&graph).contains(&required.to_string()), "missing {required}");
+        }
+        // A lineage effect wires Hydrofoil, produced by marquez.
+        let effect = graph.effect(EffectKind::LineageEndpoint).expect("lineage effect");
+        assert_eq!(effect.producer.as_deref(), Some("marquez"));
+        assert!(effect.consumers.contains(&EffectConsumer::Hydrofoil));
+    }
+
+    #[test]
+    fn duplicate_capability_provider_listed_once() {
+        use super::capability::Capability;
+        // Selecting model tracking pulls MLflow in exactly once (and its deps).
+        let graph = super::resolve_capabilities(&[Capability::ModelTracking]).unwrap();
+        assert_eq!(ids(&graph).iter().filter(|id| *id == "mlflow").count(), 1);
+    }
+
+    #[test]
+    fn observability_is_shared_infra_runs_no_module() {
+        use super::capability::Capability;
+        // Observability alone runs no per-env service (it opts the env in to
+        // emitting to the shared app-level collector), so the graph is empty.
+        let graph = super::resolve_capabilities(&[Capability::Observability]).unwrap();
+        assert!(graph.nodes.is_empty(), "observability must run no per-env module");
+        assert!(!graph.needs_docker());
+        assert!(Capability::Observability.is_shared_infra());
+        assert!(Capability::wants_observability(&[Capability::Observability]));
+        assert!(!Capability::wants_observability(&[Capability::Lineage]));
+    }
+
+    #[test]
+    fn object_storage_effect_lists_mlflow_and_uc_consumers() {
+        use super::capability::Capability;
+        use super::effect::{EffectConsumer, EffectKind};
+        let graph = super::resolve_capabilities(&[Capability::ObjectStorage]).unwrap();
+        let effect = graph.effect(EffectKind::ObjectStorage).expect("object storage effect");
+        // MLflow consumes the bucket now; UC vending is designed (carried) but not wired.
+        assert!(effect.consumers.contains(&EffectConsumer::Mlflow));
+        assert!(effect.consumers.contains(&EffectConsumer::UnityCatalog));
     }
 
     #[test]
