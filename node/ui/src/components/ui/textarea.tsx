@@ -8,6 +8,11 @@ const Textarea = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <textarea
     ref={ref}
+    // Don't auto-capitalize/auto-correct what the user types. Listed before
+    // {...props} so a specific field can opt back in. (spellCheck is left at the
+    // browser default — a squiggle on prose is fine and doesn't mutate text.)
+    autoCapitalize="off"
+    autoCorrect="off"
     className={cn(
       "flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
       className,
