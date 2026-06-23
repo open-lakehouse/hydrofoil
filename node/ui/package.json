@@ -8,7 +8,12 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "biome check .",
-    "gen:rpc": "buf generate"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "gen:rpc": "buf generate",
+    "gen:fixture-schemas": "node scripts/gen-fixture-schemas.mjs",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.0",
@@ -50,14 +55,17 @@
   "devDependencies": {
     "@bufbuild/buf": "^1.58.0",
     "@bufbuild/protoc-gen-es": "^2.10.0",
+    "@storybook/react-vite": "^10.4.6",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "storybook": "^10.4.6",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "vitest": "^4.1.9"
   }
 }

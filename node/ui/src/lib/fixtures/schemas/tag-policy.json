@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "description": "A tag policy defines a tag key together with the rules that govern how it can\n be used, including the optional set of allowed values. Assigning a governed\n tag to an entity is done through the EntityTagAssignments API.",
+  "properties": {
+    "created_at": {
+      "description": "Time at which this tag policy was created, in epoch milliseconds.\n Output only.",
+      "type": "integer"
+    },
+    "description": {
+      "description": "User-provided free-form text description of the tag policy.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Unique identifier for the tag policy. Output only; assigned by the server.",
+      "type": "string"
+    },
+    "tag_key": {
+      "default": "",
+      "description": "The key of the governed tag.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Time at which this tag policy was last updated, in epoch milliseconds.\n Output only.",
+      "type": "integer"
+    },
+    "values": {
+      "description": "When empty, the governed tag does not restrict the values that may be\n assigned.",
+      "items": {
+        "$ref": "#/$defs/portal.tags.v1.Value.schema.json"
+      },
+      "title": "The set of allowed values for the governed tag.",
+      "type": "array"
+    }
+  },
+  "title": "A governed tag definition (tag policy).",
+  "type": "object",
+  "$defs": {
+    "portal.tags.v1.TagPolicy.schema.json": {
+      "additionalProperties": false,
+      "description": "A tag policy defines a tag key together with the rules that govern how it can\n be used, including the optional set of allowed values. Assigning a governed\n tag to an entity is done through the EntityTagAssignments API.",
+      "properties": {
+        "created_at": {
+          "description": "Time at which this tag policy was created, in epoch milliseconds.\n Output only.",
+          "type": "integer"
+        },
+        "description": {
+          "description": "User-provided free-form text description of the tag policy.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Unique identifier for the tag policy. Output only; assigned by the server.",
+          "type": "string"
+        },
+        "tag_key": {
+          "default": "",
+          "description": "The key of the governed tag.",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "Time at which this tag policy was last updated, in epoch milliseconds.\n Output only.",
+          "type": "integer"
+        },
+        "values": {
+          "description": "When empty, the governed tag does not restrict the values that may be\n assigned.",
+          "items": {
+            "$ref": "#/$defs/portal.tags.v1.Value.schema.json"
+          },
+          "title": "The set of allowed values for the governed tag.",
+          "type": "array"
+        }
+      },
+      "title": "A governed tag definition (tag policy).",
+      "type": "object"
+    },
+    "portal.tags.v1.Value.schema.json": {
+      "additionalProperties": false,
+      "description": "An allowed value for a governed tag.",
+      "properties": {
+        "name": {
+          "default": "",
+          "description": "The name of the allowed value.",
+          "type": "string"
+        }
+      },
+      "title": "Value",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

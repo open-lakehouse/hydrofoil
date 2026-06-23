@@ -18,6 +18,19 @@ ui-dev:
 ui-build:
     npm run build --prefix ui
 
+# Run the UI unit tests (incl. the Storybook fixture-validation gate)
+ui-test:
+    npm run test --prefix ui
+
+# Launch Storybook to explore UI components in isolation (no backend needed —
+# the .storybook host serves the curated fixtures at the UI's seams).
+ui-storybook:
+    npm run storybook --prefix ui
+
+# Build the static Storybook bundle (storybook-static/)
+ui-storybook-build:
+    npm run build-storybook --prefix ui
+
 # Absolute path to the sibling unitycatalog-rs repo + the built uc binary,
 # derived from this justfile's location (node/ → repo root → its sibling) so
 # tasks work from any cwd. Override the binary with OPEN_LAKEHOUSE_UC_BIN.
@@ -83,10 +96,17 @@ gen-api:
 gen-forms:
     npm run gen:form-schemas --prefix uc-client
 
+# Regenerate the JSON Schemas that validate the Storybook fixtures (portal
+# Tags/Files domain models via buf + Unity Catalog entity Info types from the
+# committed OpenAPI spec). See node/ui/scripts/gen-fixture-schemas.mjs.
+gen-fixture-schemas:
+    npm run gen:fixture-schemas --prefix ui
+
 # Regenerate the connect-es TypeScript client for hydrofoil's QueryService.
 # Driven by buf against proto/hydrofoil-query (the repo-root proto tree).
 gen-rpc:
     npm run gen:rpc --prefix ui
 
-# Regenerate everything derived from protos/specs (UC client + form schemas + RPC client)
-gen: gen-api gen-forms gen-rpc
+# Regenerate everything derived from protos/specs (UC client + form schemas + RPC
+# client + Storybook fixture schemas)
+gen: gen-api gen-forms gen-rpc gen-fixture-schemas

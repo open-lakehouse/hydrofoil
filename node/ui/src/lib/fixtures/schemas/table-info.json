@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "Name of table, relative to parent schema.",
+      "type": "string"
+    },
+    "catalog_name": {
+      "description": "Name of parent catalog.",
+      "type": "string"
+    },
+    "schema_name": {
+      "description": "Name of parent schema relative to its parent catalog.",
+      "type": "string"
+    },
+    "table_type": {
+      "$ref": "#/$defs/TableType"
+    },
+    "data_source_format": {
+      "$ref": "#/$defs/DataSourceFormat"
+    },
+    "columns": {
+      "description": "The array of __ColumnInfo__ definitions of the table's columns.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ColumnInfo"
+      }
+    },
+    "storage_location": {
+      "description": "Storage root URL for table (for **MANAGED**, **EXTERNAL** tables)",
+      "type": "string"
+    },
+    "comment": {
+      "description": "User-provided free-form text description.",
+      "type": "string"
+    },
+    "properties": {
+      "$ref": "#/$defs/SecurablePropertiesMap"
+    },
+    "owner": {
+      "description": "Username of current owner of table.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Time at which this table was created, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_by": {
+      "description": "Username of table creator.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Time at which this table was last modified, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "updated_by": {
+      "description": "Username of user who last modified the table.",
+      "type": "string"
+    },
+    "table_id": {
+      "description": "Unique identifier for the table.",
+      "type": "string"
+    },
+    "view_definition": {
+      "description": "Definition text for view-like table types such as VIEW, MATERIALIZED_VIEW, STREAMING_TABLE, and METRIC_VIEW. The format depends on the table type (SQL for views, YAML for metric views).",
+      "type": "string"
+    },
+    "view_dependencies": {
+      "$ref": "#/$defs/DependencyList"
+    }
+  },
+  "$defs": {
+    "TableType": {
+      "type": "string",
+      "enum": [
+        "MANAGED",
+        "EXTERNAL",
+        "STREAMING_TABLE",
+        "MATERIALIZED_VIEW",
+        "METRIC_VIEW"
+      ]
+    },
+    "DataSourceFormat": {
+      "description": "Data source format",
+      "type": "string",
+      "enum": [
+        "DELTA",
+        "CSV",
+        "JSON",
+        "AVRO",
+        "PARQUET",
+        "ORC",
+        "TEXT"
+      ]
+    },
+    "ColumnInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Name of Column.",
+          "type": "string"
+        },
+        "type_text": {
+          "description": "Full data type specification as SQL/catalogString text.",
+          "type": "string"
+        },
+        "type_json": {
+          "description": "Full data type specification, JSON-serialized.",
+          "type": "string"
+        },
+        "type_name": {
+          "$ref": "#/$defs/ColumnTypeName"
+        },
+        "type_precision": {
+          "description": "Digits of precision; required for DecimalTypes.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "type_scale": {
+          "description": "Digits to right of decimal; Required for DecimalTypes.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "type_interval_type": {
+          "description": "Format of IntervalType.",
+          "type": "string"
+        },
+        "position": {
+          "description": "Ordinal position of column (starting at position 0).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "comment": {
+          "description": "User-provided free-form text description.",
+          "type": "string"
+        },
+        "nullable": {
+          "description": "Whether field may be Null.",
+          "type": "boolean",
+          "default": "true"
+        },
+        "partition_index": {
+          "description": "Partition index for column.",
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "SecurablePropertiesMap": {
+      "description": "A map of key-value properties attached to the securable.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "DependencyList": {
+      "description": "A list of dependencies.",
+      "type": "object",
+      "properties": {
+        "dependencies": {
+          "description": "Array of dependencies.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
+        }
+      }
+    },
+    "ColumnTypeName": {
+      "description": "Name of type (INT, STRUCT, MAP, etc.).",
+      "type": "string",
+      "enum": [
+        "BOOLEAN",
+        "BYTE",
+        "SHORT",
+        "INT",
+        "LONG",
+        "FLOAT",
+        "DOUBLE",
+        "DATE",
+        "TIMESTAMP",
+        "TIMESTAMP_NTZ",
+        "STRING",
+        "BINARY",
+        "DECIMAL",
+        "INTERVAL",
+        "ARRAY",
+        "STRUCT",
+        "MAP",
+        "VARIANT",
+        "CHAR",
+        "NULL",
+        "USER_DEFINED_TYPE",
+        "TABLE_TYPE"
+      ]
+    },
+    "Dependency": {
+      "description": "A dependency of a SQL object. Either the __table__ field or the __function__ field must be defined.",
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/TableDependency"
+        },
+        "function": {
+          "$ref": "#/$defs/FunctionDependency"
+        }
+      }
+    },
+    "TableDependency": {
+      "description": "A table that is dependent on a SQL object.",
+      "type": "object",
+      "required": [
+        "table_full_name"
+      ],
+      "properties": {
+        "table_full_name": {
+          "description": "Full name of the dependent table, in the form of __catalog_name__.__schema_name__.__table_name__.",
+          "type": "string"
+        }
+      }
+    },
+    "FunctionDependency": {
+      "description": "A function that is dependent on a SQL object.",
+      "type": "object",
+      "required": [
+        "function_full_name"
+      ],
+      "properties": {
+        "function_full_name": {
+          "description": "Full name of the dependent function, in the form of __catalog_name__.__schema_name__.__function_name__.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

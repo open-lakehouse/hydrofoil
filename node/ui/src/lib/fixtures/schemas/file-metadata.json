@@ -1,0 +1,61 @@
+{
+  "additionalProperties": false,
+  "description": "Metadata describing a single file (the proto analog of an HTTP HEAD).",
+  "properties": {
+    "content_type": {
+      "default": "",
+      "type": "string"
+    },
+    "etag": {
+      "default": "",
+      "type": "string"
+    },
+    "file_size": {
+      "default": 0,
+      "type": "integer"
+    },
+    "last_modified": {
+      "default": 0,
+      "description": "Last-modified time in epoch milliseconds.",
+      "type": "integer"
+    },
+    "path": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "File Metadata",
+  "type": "object",
+  "$defs": {
+    "portal.files.v1.FileMetadata.schema.json": {
+      "additionalProperties": false,
+      "description": "Metadata describing a single file (the proto analog of an HTTP HEAD).",
+      "properties": {
+        "content_type": {
+          "default": "",
+          "type": "string"
+        },
+        "etag": {
+          "default": "",
+          "type": "string"
+        },
+        "file_size": {
+          "default": 0,
+          "type": "integer"
+        },
+        "last_modified": {
+          "default": 0,
+          "description": "Last-modified time in epoch milliseconds.",
+          "type": "integer"
+        },
+        "path": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "title": "File Metadata",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

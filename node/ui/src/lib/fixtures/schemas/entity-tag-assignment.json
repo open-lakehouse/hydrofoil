@@ -1,0 +1,59 @@
+{
+  "additionalProperties": false,
+  "description": "Unlike a TagPolicy (a governed-tag *definition*), an assignment is the\n application of a tag to a specific entity. It has no identifier of its own —\n its identity is the composite of (entity_type, entity_name, tag_key).",
+  "properties": {
+    "entity_name": {
+      "default": "",
+      "description": "The fully qualified name of the entity to which the tag is assigned.",
+      "type": "string"
+    },
+    "entity_type": {
+      "default": "",
+      "description": "Supported values: catalogs, schemas, tables, columns, volumes.",
+      "title": "The type of the entity to which the tag is assigned.",
+      "type": "string"
+    },
+    "tag_key": {
+      "default": "",
+      "description": "The key of the tag.",
+      "type": "string"
+    },
+    "tag_value": {
+      "description": "The value of the tag (optional).",
+      "type": "string"
+    }
+  },
+  "title": "The assignment of a tag to a lakehouse entity.",
+  "type": "object",
+  "$defs": {
+    "portal.tags.v1.EntityTagAssignment.schema.json": {
+      "additionalProperties": false,
+      "description": "Unlike a TagPolicy (a governed-tag *definition*), an assignment is the\n application of a tag to a specific entity. It has no identifier of its own —\n its identity is the composite of (entity_type, entity_name, tag_key).",
+      "properties": {
+        "entity_name": {
+          "default": "",
+          "description": "The fully qualified name of the entity to which the tag is assigned.",
+          "type": "string"
+        },
+        "entity_type": {
+          "default": "",
+          "description": "Supported values: catalogs, schemas, tables, columns, volumes.",
+          "title": "The type of the entity to which the tag is assigned.",
+          "type": "string"
+        },
+        "tag_key": {
+          "default": "",
+          "description": "The key of the tag.",
+          "type": "string"
+        },
+        "tag_value": {
+          "description": "The value of the tag (optional).",
+          "type": "string"
+        }
+      },
+      "title": "The assignment of a tag to a lakehouse entity.",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
