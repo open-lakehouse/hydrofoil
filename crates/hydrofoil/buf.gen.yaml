@@ -1,9 +1,13 @@
 version: v2
-# ConnectRPC / buffa code generation for hydrofoil's QueryService.
+# ConnectRPC / buffa code generation for hydrofoil's QueryService + IngestService.
 #
 # The proto source lives in the repo-root `proto/` tree (registered in the root
 # `buf.yaml`) alongside every other domain proto, for discoverability; only the
-# codegen config is crate-local. The root `buf.gen.yaml` runs `neoeinstein-prost`
+# codegen config is crate-local. Both services share the one `hydrofoil-query`
+# buf module / codegen input: the `protoc-gen-buffa-packaging` plugin emits a
+# single aggregating `mod.rs` per input, so two inputs would clobber each other's
+# module tree — keep new hydrofoil packages under this one module directory. The
+# root `buf.gen.yaml` runs `neoeinstein-prost`
 # for a different, narrow purpose (extracting a few Spark/Delta types into
 # `crates/common`), so this file is separate.
 #

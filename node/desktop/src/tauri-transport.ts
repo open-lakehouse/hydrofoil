@@ -7,13 +7,17 @@
 // unchanged — they never learn they're talking to Rust over IPC.
 //
 // Routing by service:
-//   - Tags  (portal.tags.v1.*)      → `connect_unary` (generic dispatcher, JSON)
-//   - Query (hydrofoil.query.v1.*)  → `connect_stream` (generic dispatcher; each
-//                                      chunk is a raw protobuf RunQueryResponse
-//                                      streamed over a Tauri Channel)
-//   - Files (portal.files.v1.*)     → the native `files_*` commands (the backend
-//                                      serves Files directly off the FileStore, not
-//                                      through the dispatcher), see ./tauri-files.
+//   - Tags   (portal.tags.v1.*)      → `connect_unary` (generic dispatcher, JSON)
+//   - Query  (hydrofoil.query.v1.*)  → `connect_stream` (generic dispatcher; each
+//                                       chunk is a raw protobuf RunQueryResponse
+//                                       streamed over a Tauri Channel)
+//   - Ingest (hydrofoil.ingest.v1.*) → `connect_unary_proto` (PreviewFile: proto
+//                                       in/out, carrying Arrow IPC) and
+//                                       `query_ingest` (IngestTable: client-stream,
+//                                       request frames sent as a list of proto bytes)
+//   - Files  (portal.files.v1.*)     → the native `files_*` commands (the backend
+//                                       serves Files directly off the FileStore, not
+//                                       through the dispatcher), see ./tauri-files.
 //
 // Alongside `@tauri-apps`, this file is one of the only places that imports Tauri;
 // keeping it in node/desktop is what lets node/ui stay Tauri-free.
@@ -35,12 +39,14 @@ import { filesStream, filesUnary } from "./tauri-files";
 
 const TAGS_PREFIX = "portal.tags.v1.";
 const QUERY_PREFIX = "hydrofoil.query.v1.";
+const INGEST_PREFIX = "hydrofoil.ingest.v1.";
 const FILES_PREFIX = "portal.files.v1.";
 
 /** The dispatcher service group a method belongs to (matches the Rust `service` arg). */
-function serviceGroup(typeName: string): "tags" | "query" | "files" {
+function serviceGroup(typeName: string): "tags" | "query" | "ingest" | "files" {
   if (typeName.startsWith(TAGS_PREFIX)) return "tags";
   if (typeName.startsWith(QUERY_PREFIX)) return "query";
+  if (typeName.startsWith(INGEST_PREFIX)) return "ingest";
   if (typeName.startsWith(FILES_PREFIX)) return "files";
   throw new Error(`tauri-transport: no route for service ${typeName}`);
 }
@@ -83,6 +89,16 @@ export const tauriTransport: Transport = {
       // Files bypasses the dispatcher: the desktop backend serves it off the
       // FileStore directly via native files_* commands.
       out = await filesUnary(method, message);
+    } else if (group === "ingest") {
+      // IngestService unary (PreviewFile): proto in / proto out, since the
+      // response carries Arrow IPC bytes that JSON would base64-bloat.
+      const responseBytes = await invoke<number[]>("connect_unary_proto", {
+        service: group,
+        path: methodPath(method),
+        message: Array.from(toBinary(method.input, message)),
+        headers: headerPairs(header),
+      });
+      out = fromBinary(method.output, new Uint8Array(responseBytes));
     } else {
       // Tags (and any future unary RPC): JSON in, JSON out through the generic
       // dispatcher command.
@@ -125,6 +141,38 @@ export const tauriTransport: Transport = {
         method,
         header: new Headers(),
         message: messages,
+        trailer: new Headers(),
+      };
+    }
+
+    if (group === "ingest") {
+      // IngestService client-streaming (IngestTable): drain every request frame,
+      // proto-encode each, and hand the whole list to the `query_ingest` command,
+      // which builds a RequestStream and returns the single response. Mirrors the
+      // files_upload client-stream pattern; on desktop the bulk data rides via the
+      // first frame's source_path, so the frame list is small.
+      const frames: number[][] = [];
+      for await (const msg of input) {
+        frames.push(
+          Array.from(toBinary(method.input, create(method.input, msg))),
+        );
+      }
+      const responseBytes = await invoke<number[]>("query_ingest", {
+        service: group,
+        path: methodPath(method),
+        frames,
+        headers: headerPairs(header),
+      });
+      const response = fromBinary(method.output, new Uint8Array(responseBytes));
+      async function* single(): AsyncIterable<MessageShape<O>> {
+        yield response;
+      }
+      return {
+        stream: true as const,
+        service: method.parent,
+        method,
+        header: new Headers(),
+        message: single(),
         trailer: new Headers(),
       };
     }

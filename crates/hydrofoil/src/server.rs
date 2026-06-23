@@ -39,7 +39,7 @@ use crate::engine::{Engine, Session, SessionStore, StoredStatement};
 use crate::stream::FlightDataReceiverStreamBuilder;
 use crate::{execution::CpuRuntime, policy::Policy};
 use crate::{
-    planner::{DeltaPlanner, FlightPlanner, collect_coerced_batches},
+    planner::{DeltaPlanner, FlightPlanner, coerce_batches_to_schema, collect_coerced_batches},
     policy::StaticPolicy,
 };
 
@@ -350,17 +350,7 @@ impl FlightSqlServiceImpl {
         ctx: &Arc<crate::session::LakehouseCtx>,
         ticket: &CommandStatementIngest,
     ) -> Result<Option<ManagedIngestTarget>, DataFusionError> {
-        use datafusion::common::exec_datafusion_err;
         use datafusion::sql::TableReference;
-        use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
-        use deltalake_datafusion::sql::UnityFactoryExt;
-
-        let state = ctx.ctx().state();
-        let Some(factory) = state.config().get_extension::<UnityFactoryExt>() else {
-            // Unity Catalog not wired → nothing is managed.
-            debug!("managed ingest: no UnityFactoryExt on session; using external path");
-            return Ok(None);
-        };
 
         // Resolve the fully-qualified `(catalog, schema, table)`. Prefer the
         // ticket's explicit catalog/schema; otherwise parse a (possibly
@@ -382,8 +372,34 @@ impl FlightSqlServiceImpl {
             },
         };
 
+        Self::resolve_managed_target(ctx, &catalog, &schema, &table).await
+    }
+
+    /// Resolve a fully-qualified `(catalog, schema, table)` to a managed-ingest
+    /// target, or `None` when Unity Catalog is not wired on the session, the name
+    /// does not resolve through `/delta/v1`, or the table is external. Errors only
+    /// when the table resolves as managed but is partitioned (unsupported). Shared
+    /// by the Flight ingest path ([`Self::resolve_managed_ingest`]) and the
+    /// ConnectRPC `IngestService`.
+    pub(crate) async fn resolve_managed_target(
+        ctx: &Arc<crate::session::LakehouseCtx>,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<ManagedIngestTarget>, DataFusionError> {
+        use datafusion::common::exec_datafusion_err;
+        use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
+        use deltalake_datafusion::sql::UnityFactoryExt;
+
+        let state = ctx.ctx().state();
+        let Some(factory) = state.config().get_extension::<UnityFactoryExt>() else {
+            // Unity Catalog not wired → nothing is managed.
+            debug!("managed ingest: no UnityFactoryExt on session; using external path");
+            return Ok(None);
+        };
+
         let client = factory.0.unity_client().delta_v1();
-        let loaded = match client.load_table(&catalog, &schema, &table).await {
+        let loaded = match client.load_table(catalog, schema, table).await {
             Ok(loaded) => loaded,
             // Not resolvable through `/delta/v1` (older server, or not a UC
             // table): let the external INSERT path try.
@@ -415,9 +431,9 @@ impl FlightSqlServiceImpl {
 
         Ok(Some(ManagedIngestTarget {
             factory: factory.0.clone(),
-            catalog,
-            schema,
-            table,
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
         }))
     }
 
@@ -439,13 +455,50 @@ impl FlightSqlServiceImpl {
         stream: PeekableFlightDataStream,
         lineage: datafusion_open_lineage::context::LineageContext,
     ) -> Result<i64, DataFusionError> {
+        // The batch source for the Flight ingest path is the wire stream, coerced
+        // to the table schema. Resolve the schema first (registering the UC
+        // catalog), then drain + append through the shared committer path.
+        use datafusion::sql::TableReference;
+
+        let table_ref = TableReference::full(
+            target.catalog.clone(),
+            target.schema.clone(),
+            target.table.clone(),
+        );
+        let provider = ctx.resolve_table_provider(table_ref).await?;
+        let target_schema = provider.schema();
+        let batches = collect_coerced_batches(stream, target_schema.clone()).await?;
+
+        self.append_managed_batches(ctx, &target, batches, &lineage)
+            .await
+    }
+
+    /// Authorize and append already-collected Arrow batches to a managed Unity
+    /// Catalog table, then emit lineage. The batch *source* is the caller's
+    /// concern (the Flight ingest stream in [`Self::ingest_managed`]; decoded
+    /// Arrow IPC frames or a parsed local file in the ConnectRPC
+    /// `IngestService`); this is the shared tail every managed append runs.
+    ///
+    /// Managed tables must commit through the catalog's coordinated-commit
+    /// endpoint, so we cannot reuse the DataFusion INSERT plan (whose
+    /// `DataFusionLogStore` writes `_delta_log/` directly). Authorization runs the
+    /// identical Cedar gate a regular append would face: we build the same
+    /// `INSERT INTO … Append` plan and authorize it (without executing) before
+    /// writing. The batches are concatenated into a single commit for atomicity.
+    pub(crate) async fn append_managed_batches(
+        &self,
+        ctx: &Arc<crate::session::LakehouseCtx>,
+        target: &ManagedIngestTarget,
+        batches: Vec<arrow::record_batch::RecordBatch>,
+        lineage: &datafusion_open_lineage::context::LineageContext,
+    ) -> Result<i64, DataFusionError> {
         use datafusion::common::exec_datafusion_err;
         use datafusion::sql::TableReference;
 
         // Resolve the provider (registering the UC catalog onto the session
-        // first) so we coerce the wire batches to the table schema and build the
-        // same INSERT plan the external path would, for an identical
-        // authorization decision.
+        // first) so we build the same INSERT plan the external path would, for an
+        // identical authorization decision, and learn the target schema to
+        // concatenate against.
         let table_ref = TableReference::full(
             target.catalog.clone(),
             target.schema.clone(),
@@ -458,7 +511,14 @@ impl FlightSqlServiceImpl {
         let insert_plan = FlightPlanner::build_insert_plan_for_auth(&qualified, provider.clone())?;
         ctx.authorize_logical_plan(insert_plan).await?;
 
-        let batches = collect_coerced_batches(stream, target_schema.clone()).await?;
+        // Coerce every batch to the resolved table schema before concatenating.
+        // The source batches' column types often differ from the managed table's
+        // kernel schema — notably `Utf8` from the Parquet/IPC reader vs the
+        // `Utf8View` delta-rs resolves Delta string columns as — and
+        // `concat_batches` requires an exact type match. Casts are no-ops when the
+        // types already match (so the Flight path, already coerced upstream, is
+        // unaffected).
+        let batches = coerce_batches_to_schema(batches, &target_schema)?;
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         if total_rows == 0 {
             return Ok(0);
@@ -467,7 +527,7 @@ impl FlightSqlServiceImpl {
             .map_err(|e| exec_datafusion_err!("failed to concatenate ingest batches: {e}"))?;
 
         datafusion_unitycatalog::managed::append_to_managed_table(
-            target.factory,
+            target.factory.clone(),
             &target.catalog,
             &target.schema,
             &target.table,
@@ -482,7 +542,7 @@ impl FlightSqlServiceImpl {
         // without this the write would surface as a job with empty outputs and the
         // table would not appear as a dataset in the lineage graph. Schema-only
         // (no column lineage): a bulk ingest has no upstream column mapping.
-        self.emit_managed_ingest(&lineage, &qualified, &target_schema);
+        self.emit_managed_ingest(lineage, &qualified, &target_schema);
 
         Ok(total_rows as i64)
     }
@@ -587,11 +647,11 @@ impl FlightSqlServiceImpl {
 
 /// A resolved managed-table ingest target (see
 /// [`FlightSqlServiceImpl::resolve_managed_ingest`]).
-struct ManagedIngestTarget {
-    factory: Arc<UnityObjectStoreFactory>,
-    catalog: String,
-    schema: String,
-    table: String,
+pub(crate) struct ManagedIngestTarget {
+    pub(crate) factory: Arc<UnityObjectStoreFactory>,
+    pub(crate) catalog: String,
+    pub(crate) schema: String,
+    pub(crate) table: String,
 }
 
 #[tonic::async_trait]

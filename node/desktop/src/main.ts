@@ -12,12 +12,14 @@ import {
   setCatalogProvider,
   unityCatalogProvider,
 } from "@/lib/editor/catalogProvider";
+import { registerFilePicker } from "@/lib/ingest/registry";
 // Desktop stylesheet: re-exports the UI's globals AND declares the UI source as a
 // Tailwind content root, so utility classes used by the UI components are emitted
 // when building from node/desktop (see styles.css).
 import "./styles.css";
 import { tauriEnvironmentHost } from "./tauri-environments";
 import { tauriFetch } from "./tauri-fetch";
+import { tauriFilePicker } from "./tauri-ingest";
 import { tauriTransport } from "./tauri-transport";
 
 // Route ConnectRPC clients (QueryService, Tags, Files) to the in-process
@@ -32,6 +34,9 @@ registerEnvironmentHost(tauriEnvironmentHost);
 // SQL IntelliSense uses real catalog metadata: on desktop UC is reachable (via
 // the proxy above), so swap the editor's fixture catalog for the live one.
 setCatalogProvider(unityCatalogProvider);
+// The import page reads a local file by path; supply the native file picker so
+// the page (and its nav entry) light up on desktop.
+registerFilePicker(tauriFilePicker);
 
 // Dynamically import the UI bootstrap so it (and the api.ts client it pulls in)
 // evaluates only AFTER the fetch is registered. The registry is late-binding so

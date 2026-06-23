@@ -106,7 +106,6 @@ pub(crate) async fn collect_coerced_batches(
     stream: PeekableFlightDataStream,
     target_schema: SchemaRef,
 ) -> Result<Vec<RecordBatch>> {
-    use arrow::compute::cast;
     use arrow_flight::decode::FlightRecordBatchStream;
     use datafusion::common::exec_datafusion_err;
 
@@ -116,7 +115,28 @@ pub(crate) async fn collect_coerced_batches(
         .await
         .map_err(|e| exec_datafusion_err!("Failed to receive flight stream: {e}"))?;
 
-    raw.into_iter()
+    coerce_batches_to_schema(raw, &target_schema)
+}
+
+/// Cast each batch column-by-column to `target_schema`, matching columns by name.
+///
+/// Managed appends concatenate the batches against the table's kernel schema, but
+/// the source batches' types often differ — ADBC type quirks (timestamp units,
+/// dictionary-encoded strings) on the Flight path, and `Utf8` vs the managed
+/// schema's `Utf8View` (delta-rs resolves Delta string columns as view types) on
+/// the file-ingest path. Coercing here lets `concat_batches` succeed regardless of
+/// source. Casts are no-ops when the types already match, so this is safe to apply
+/// to already-coerced batches. Shared by [`collect_coerced_batches`] (Flight) and
+/// the ConnectRPC ingest path's `append_managed_batches`.
+pub(crate) fn coerce_batches_to_schema(
+    batches: Vec<RecordBatch>,
+    target_schema: &SchemaRef,
+) -> Result<Vec<RecordBatch>> {
+    use arrow::compute::cast;
+    use datafusion::common::exec_datafusion_err;
+
+    batches
+        .into_iter()
         .map(|batch| {
             let columns = target_schema
                 .fields()
