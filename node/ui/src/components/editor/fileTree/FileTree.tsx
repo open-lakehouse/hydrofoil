@@ -3,10 +3,18 @@
 // Reuses the catalog tree's primitives (TreeRow / ListStates) and an expansion
 // store keyed by path. Directories lazily fetch their contents via `useDirectory`
 // (cursor-paginated) only once expanded; files invoke `onOpenFile` on click.
-import { FileCode, FileText, FileType, Folder, NotebookPen } from "lucide-react";
+import {
+  FileCode,
+  FileText,
+  FileType,
+  Folder,
+  NotebookPen,
+  Plus,
+} from "lucide-react";
 import { useMemo } from "react";
 
 import { ListStates, TreeRow } from "@/components/catalog/TreeRow";
+import { Button } from "@/components/ui/button";
 import { type EditorLanguage, languageOf } from "@/lib/editor/language";
 import { useDirectory } from "@/lib/files/queries";
 import type { FileEntry } from "@/lib/files/store";
@@ -25,18 +33,34 @@ export function FileTree({
   root,
   activePath,
   onOpenFile,
+  onNewNotebook,
 }: {
   /** Absolute directory path the tree is rooted at. */
   root: string;
   /** Path of the active tab, highlighted in the tree. */
   activePath?: string;
   onOpenFile: (path: string) => void;
+  /** Open the "new notebook" dialog (header "New" button). Omitted = no button. */
+  onNewNotebook?: () => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <Folder className="h-4 w-4" />
-        Files
+      <div className="flex items-center justify-between border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="flex items-center gap-2">
+          <Folder className="h-4 w-4" />
+          Files
+        </span>
+        {onNewNotebook && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-xs"
+            onClick={onNewNotebook}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-1">
         <DirectoryChildren

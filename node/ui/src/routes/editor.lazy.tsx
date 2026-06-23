@@ -12,6 +12,7 @@ import { FileTree } from "@/components/editor/fileTree/FileTree";
 import { FileExpansionProvider } from "@/components/editor/fileTree/fileExpansion";
 import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { MonacoHost } from "@/components/editor/MonacoHost";
+import { NewNotebookDialog } from "@/components/editor/NewNotebookDialog";
 import { NotebookPane } from "@/components/editor/NotebookPane";
 import { ResultsPane } from "@/components/editor/ResultsPane";
 import { TabStrip } from "@/components/editor/TabStrip";
@@ -23,6 +24,7 @@ import {
   persistAddedVolumes,
   type Volume,
 } from "@/lib/editor/volumes";
+import { notebookSupported } from "@/lib/notebook/registry";
 
 export const Route = createLazyRoute("/editor")({
   component: EditorPage,
@@ -60,6 +62,10 @@ function Workspace() {
   const builtin = env.volumes;
   const [added, setAdded] = useState<Volume[]>(() => loadAddedVolumes(env.id));
   const volumes = useMemo(() => [...builtin, ...added], [builtin, added]);
+
+  // Whether the "+ New" (create notebook) affordance is offered: only where
+  // notebooks are supported (the desktop host) and a volume is selected.
+  const [creatingNotebook, setCreatingNotebook] = useState(false);
 
   // The active volume's root lives in the URL (`?volume=`), defaulting to the
   // first available volume. The FileTree re-roots whenever this changes.
@@ -108,6 +114,9 @@ function Workspace() {
             root={activeRoot}
             activePath={activeId ?? undefined}
             onOpenFile={(path) => void openFile(path)}
+            onNewNotebook={
+              notebookSupported() ? () => setCreatingNotebook(true) : undefined
+            }
           />
         ) : (
           <div className="p-4 text-xs text-muted-foreground">
@@ -115,6 +124,13 @@ function Workspace() {
           </div>
         )}
       </div>
+      {creatingNotebook && activeRoot && (
+        <NewNotebookDialog
+          root={activeRoot}
+          onClose={() => setCreatingNotebook(false)}
+          onCreated={(path) => void openFile(path)}
+        />
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         <TabStrip />
         {/* The single MonacoHost is shared across layouts. SQL tabs stack the

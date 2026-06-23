@@ -17,10 +17,39 @@
 //! open notebook is served by the same marimo process from one working dir, so
 //! no per-tab process lifecycle is needed.
 //!
+//! Python environment: marimo is run via `uvx` with the Unity Catalog client
+//! (`unitycatalog-client[obstore]` + `obstore`) injected as `--with` deps, and
+//! **not** `--sandbox`. `uvx` already gives the marimo *server* its own
+//! uv-managed environment; since there is one server per OL environment, all
+//! notebook tabs share that one Python env. `--sandbox` would add a *second*
+//! isolation layer (a per-notebook venv from each notebook's PEP 723 deps),
+//! which we don't want: it's the user's own environment, and it would re-resolve
+//! the non-PyPI UC client wheel per notebook. With obstore + the UC client in the
+//! shared env, a notebook cell can build a UC-vended `obstore` store
+//! (`unitycatalog_client.obstore.store_for_volume`) that marimo's Files panel
+//! auto-discovers as a browsable remote source. The UC client is a compiled PyO3
+//! wheel that is not on PyPI (and whose name collides with an unrelated PyPI
+//! package), so it is injected by **direct wheel path** (see [`uc_client_wheel`]);
+//! when the wheel is absent the obstore engines fail to import but the editor
+//! still works.
+//!
 //! Data access: the child inherits `OPEN_LAKEHOUSE_UC_URL` / `UC_URI` pointing
 //! at the host UC sidecar, so notebook cells can reach Unity Catalog (the same
-//! one-way host→child injection idea as `UC_HOST_URL` for compose). No UC token
-//! is forwarded yet — the desktop UC sidecar is unauthenticated today.
+//! one-way host→child injection idea as `UC_HOST_URL` for compose). When the
+//! environment carries the lineage capability it also inherits `LINEAGE_URL`
+//! (the Envoy gateway base) so notebook templates can wire OpenLineage. No UC
+//! token is forwarded yet — the desktop UC sidecar is unauthenticated today.
+//!
+//! Config: a per-environment `.marimo.toml` is generated into the workdir (see
+//! [`write_marimo_config`]). marimo discovers user config by searching from its
+//! working directory upward for a `.marimo.toml`; since the child's working
+//! directory is the workdir, the file we drop there is the closest match and
+//! wins. It turns off marimo's AI features (no phone-home until an in-network
+//! gateway exists), enables autosave + format-on-save, and sets
+//! `follow_symlink = false` so the file browser can't escape the workdir via
+//! symlinks. (marimo OSS does not bound the explorer endpoints to a hard root,
+//! so a user typing an explicit parent path can still navigate up; that is
+//! acceptable for this local, single-user, loopback-only desktop.)
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,17 +117,96 @@ fn working_name(volume_path: &str) -> String {
     format!("{hash:016x}.{ext}")
 }
 
+/// The per-environment marimo user config. Written as `.marimo.toml` into the
+/// workdir, which is the child's working directory; marimo's upward search from
+/// cwd finds it first, so it applies to this environment's notebooks only.
+///
+/// Goals: kill UI/UX noise (no AI phone-home until an in-network gateway exists),
+/// improve the editing experience (autosave + format-on-save, `ty` language
+/// server), match the app chrome (dark theme), and keep the file browser from
+/// escaping the workdir via symlinks (`follow_symlink = false`).
+const MARIMO_CONFIG: &str = "\
+# Generated per-environment by open-lakehouse; do not edit by hand.
+[package_management]
+manager = \"uv\"
+
+[ai]
+enabled = false
+
+[save]
+autosave = \"after_delay\"
+autosave_delay = 1000
+format_on_save = true
+
+[formatting]
+line_length = 88
+
+[language_servers.ty]
+enabled = true
+
+[display]
+theme = \"dark\"
+default_width = \"medium\"
+
+[server]
+follow_symlink = false
+";
+
+/// Write the per-environment `.marimo.toml` into `workdir`. Idempotent
+/// (overwrites): the config is static, so rewriting on each ensure is cheap and
+/// keeps the file in sync if its contents change between releases.
+fn write_marimo_config(workdir: &std::path::Path) -> Result<(), String> {
+    let path = workdir.join(".marimo.toml");
+    std::fs::write(&path, MARIMO_CONFIG).map_err(|e| format!("writing marimo config: {e}"))
+}
+
+/// The local `unitycatalog-client` wheel passed to `uvx --with` so notebooks can
+/// import the (non-PyPI) Unity Catalog client. We pass the wheel by **direct
+/// path** (`unitycatalog_client[obstore] @ /abs/path.whl`) rather than by name +
+/// `UV_FIND_LINKS`, because PyPI hosts an *unrelated* package also named
+/// `unitycatalog-client` (the official client, a higher version) that would
+/// otherwise win resolution. A direct path is unambiguous and needs no version
+/// pin.
+///
+/// The wheel directory is `OPEN_LAKEHOUSE_UC_WHEELS` if set, else
+/// `node/desktop/wheels/` in a dev checkout (built by `just node build-uc-wheel`).
+/// Returns the first `unitycatalog_client-*.whl` found, or `None` when absent —
+/// the spawn then omits the `--with`, so the obstore engines fail to import but
+/// the editor still works.
+fn uc_client_wheel() -> Option<PathBuf> {
+    let dir = match std::env::var("OPEN_LAKEHOUSE_UC_WHEELS") {
+        Ok(d) => PathBuf::from(d),
+        // Dev fallback: the desktop crate's manifest dir is
+        // `node/desktop/src-tauri`, so the wheels live one level up.
+        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .join("wheels"),
+    };
+    let entries = std::fs::read_dir(&dir).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("unitycatalog_client-") && n.ends_with(".whl"))
+        })
+}
+
 /// Ensure the shared marimo server is running for the active environment and
 /// return its loopback base (`http://127.0.0.1:PORT`). Idempotent: the first
 /// call spawns the child (tracked in the supervisor) and scrapes its port;
 /// later calls return the cached endpoint.
 ///
 /// `uc_url` is the host UC REST base injected into the child so notebook cells
-/// can reach Unity Catalog; `None` when UC is disabled.
+/// can reach Unity Catalog; `None` when UC is disabled. `lineage_url` is the
+/// OpenLineage sink base injected as `LINEAGE_URL`; `None` when the environment
+/// has no lineage capability.
 async fn ensure_marimo(
     app: &tauri::AppHandle,
     workdir: &std::path::Path,
     uc_url: Option<&str>,
+    lineage_url: Option<&str>,
 ) -> Result<String, String> {
     use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
@@ -113,17 +221,33 @@ async fn ensure_marimo(
     }
 
     std::fs::create_dir_all(workdir).map_err(|e| format!("creating notebook workdir: {e}"))?;
+    write_marimo_config(workdir)?;
 
     // `marimo edit --headless` serves every notebook under `workdir`. `-p 0`
     // asks for a free port (marimo falls back to its default 2718 and increments
     // if busy — we scrape the actual port from stdout regardless). `--no-token`
-    // is acceptable because the server is loopback-only. Run via `uvx` so marimo
-    // (and each notebook's PEP 723 deps under `--sandbox`) live in an isolated,
-    // uv-managed environment.
-    let mut cmd = app
-        .shell()
-        .command("uvx")
-        .args([
+    // is acceptable because the server is loopback-only. Run via `uvx`, injecting
+    // the Unity Catalog client (`unitycatalog-client[obstore]` + `obstore`) into
+    // the marimo server's shared environment so notebook cells can build a
+    // UC-vended obstore store. `--no-sandbox`: `uvx` already isolates the server's
+    // env, and we don't want a second per-notebook venv (see module docs). The
+    // child's working directory is the workdir so marimo's file explorer
+    // (`os.getcwd()`) defaults there.
+    let mut uvx_args: Vec<String> = Vec::new();
+    // Inject the local UC client wheel by direct path (see `uc_client_wheel`),
+    // plus obstore from PyPI. When the wheel is absent, the obstore engines fail
+    // to import but the editor still works.
+    if let Some(wheel) = uc_client_wheel() {
+        uvx_args.push("--with".into());
+        uvx_args.push(format!(
+            "unitycatalog_client[obstore] @ {}",
+            wheel.to_string_lossy()
+        ));
+        uvx_args.push("--with".into());
+        uvx_args.push("obstore".into());
+    }
+    uvx_args.extend(
+        [
             "marimo",
             "edit",
             "--headless",
@@ -132,13 +256,22 @@ async fn ensure_marimo(
             "-p",
             "0",
             "--no-token",
-            "--sandbox",
+            "--no-sandbox",
             &workdir.to_string_lossy(),
-        ]);
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let mut cmd = app.shell().command("uvx").current_dir(workdir).args(uvx_args);
     if let Some(url) = uc_url {
         // Inject under both names notebooks look for (see notebooks/_caspers_read
         // / _demo_auth conventions); host→child, one direction only.
         cmd = cmd.env("OPEN_LAKEHOUSE_UC_URL", url).env("UC_URI", url);
+    }
+    if let Some(url) = lineage_url {
+        // Notebook templates append `/api/v1/lineage` to this base (matching
+        // notebooks/spark_lineage.py); host→child, one direction only.
+        cmd = cmd.env("LINEAGE_URL", url);
     }
 
     let (mut rx, child) = cmd
@@ -220,7 +353,7 @@ pub async fn open_notebook(
     path: String,
 ) -> Result<OpenedNotebook, String> {
     let state = app.state::<crate::AppState>();
-    let (env_id, files, uc_url) = {
+    let (env_id, files, uc_url, lineage_url) = {
         let active = state.active.read().unwrap();
         let id = active
             .id
@@ -232,7 +365,12 @@ pub async fn open_notebook(
             .ok_or("no environment selected")?
             .files
             .clone();
-        (id, files, active.unity_endpoint.clone())
+        (
+            id,
+            files,
+            active.unity_endpoint.clone(),
+            active.lineage_endpoint.clone(),
+        )
     };
 
     let workdir = env_notebooks_dir(&env_id);
@@ -247,7 +385,7 @@ pub async fn open_notebook(
     let working_path = workdir.join(working_name(&path));
     std::fs::write(&working_path, &bytes).map_err(|e| format!("writing working copy: {e}"))?;
 
-    let base = ensure_marimo(&app, &workdir, uc_url.as_deref()).await?;
+    let base = ensure_marimo(&app, &workdir, uc_url.as_deref(), lineage_url.as_deref()).await?;
 
     // Record the session and remember the workdir for the proxy's sake.
     let session_id = working_name(&path); // stable per volume path → reopen reuses it

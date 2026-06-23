@@ -23,6 +23,7 @@ ui-build:
 # tasks work from any cwd. Override the binary with OPEN_LAKEHOUSE_UC_BIN.
 uc_repo := justfile_directory() / ".." / ".." / "unitycatalog-rs"
 uc_binaries := justfile_directory() / "desktop" / "src-tauri" / "binaries"
+uc_wheels := justfile_directory() / "desktop" / "wheels"
 
 # Build the sibling unitycatalog-rs `uc` server and symlink it as the Tauri
 # sidecar binary (binaries/uc-server-<target-triple>, per tauri.conf.json
@@ -39,6 +40,22 @@ uc-setup:
     mkdir -p "{{uc_binaries}}"
     ln -sf "$uc_bin" "{{uc_binaries}}/uc-server-$triple"
     echo "linked {{uc_binaries}}/uc-server-$triple -> $uc_bin"
+
+# Build a NATIVE-host wheel of the sibling unitycatalog-rs Python client (with the
+# `obstore` extra) into node/desktop/wheels, where the desktop marimo launch
+# points uv (UV_FIND_LINKS) so notebook cells can `import unitycatalog_client` /
+# build a UC-vended obstore store. Unlike unitycatalog-rs's `build-py-wheels`
+# (which cross-compiles manylinux wheels via zig for the Docker image), this
+# builds for THIS host (macOS), since desktop runs marimo natively. The wheel is
+# abi3 (pyo3 abi3-py39), so one wheel covers every Python >= 3.9. Run once for a
+# dev checkout; rerun after updating the sibling client. Requires `maturin` + `uv`.
+[script('bash', '-eu')]
+build-uc-wheel:
+    mkdir -p "{{uc_wheels}}"
+    uv run --project "{{uc_repo}}" maturin build --release \
+        --manifest-path "{{uc_repo}}/python/client/Cargo.toml" \
+        --out "{{uc_wheels}}"
+    echo "built unitycatalog-client wheel into {{uc_wheels}}"
 
 # Run the Tauri desktop app in dev with the embedded Unity Catalog server (SQLite
 # persisted under node/desktop/.uc-data/). Requires `just uc-setup` first. The
