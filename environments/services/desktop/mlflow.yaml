@@ -1,0 +1,43 @@
+# MLflow for the DESKTOP stack — Postgres backend, Azurite artifact store.
+#
+# Self-contained fragment: artifacts go to Azurite via a wasbs:// URL and the
+# Azure connection string. There are deliberately NO AWS_* keys here — MLflow's
+# storage SDK selection keys off which credentials are present, and leaving
+# contradictory AWS creds set alongside Azure can make the backend non-
+# deterministic. The `-full` image bundles azure-storage-blob.
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.12.0-full
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      azurite-init:
+        condition: service_completed_successfully
+    command:
+      - "mlflow"
+      - "server"
+      - "--backend-store-uri"
+      - "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/mlflow"
+      - "--artifacts-destination"
+      - "wasbs://${AZURITE_CONTAINER:-lakehouse}@devstoreaccount1.blob.core.windows.net/mlflow"
+      - "--serve-artifacts"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5000"
+      - "--static-prefix"
+      - "${MLFLOW_STATIC_PREFIX:-/mlflow}"
+    environment:
+      AZURE_STORAGE_CONNECTION_STRING: >-
+        DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    expose:
+      - "5000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'python3 -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:5000${MLFLOW_STATIC_PREFIX:-/mlflow}/health'')"'
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

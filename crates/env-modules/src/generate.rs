@@ -1,4 +1,4 @@
-//! Artifact generation: a [`ResolvedGraph`] → runnable Docker Compose + uvx launches.
+//! Artifact generation: a [`ResolvedGraph`] → a runnable Docker Compose file.
 //!
 //! Kept separate from resolution ([`crate::resolve`]) so the analysis stays pure
 //! and reusable. Generation is *also* pure: it takes a graph and a
@@ -6,41 +6,40 @@
 //! string/struct artifacts. The desktop crate owns the side effects (writing the
 //! file, running `docker compose`, spawning uvx).
 //!
-//! The generated compose file does not re-emit service definitions; it `include:`s
-//! the existing `environments/services/*.yaml` fragments (reuse over regeneration)
-//! and supplies the env-var values they interpolate. The single boundary value is
-//! the **UC host URL**, injected outward (Docker→UC); marimo gets `UC_URI` instead.
+//! The generated compose file `include:`s the self-contained desktop fragments
+//! under `environments/services/desktop/` — written specifically for this stack,
+//! so there are no cross-stack defaults, profiles, or contradictory credentials
+//! to override. The single boundary value the generator supplies is the **UC host
+//! URL**, injected outward (Docker→UC) for any module that consumes it; marimo
+//! (uvx) gets `UC_URI` instead (see [`uvx_uc_uri`]).
 
 use std::collections::BTreeMap;
 
 use crate::resolve::ResolvedGraph;
 
 /// Host-side facts needed to turn a graph into runnable artifacts. The desktop
-/// crate fills this in at start time (the UC sidecar's resolved port; resolved
-/// filesystem paths).
+/// crate fills this in at start time (the UC sidecar's resolved port; the
+/// resolved `environments/` paths).
 #[derive(Clone, Debug)]
 pub struct LaunchContext {
     /// The Unity Catalog host port the sidecar bound to. Injected outward so
     /// Docker services reach UC at `host.docker.internal:<uc_port>` and uvx
     /// sidecars at `localhost:<uc_port>`. `None` when UC is disabled.
     pub uc_port: Option<u16>,
-    /// Absolute path to the `environments/services/` directory, where the shared
-    /// service fragments live. The generated compose `include:`s fragments here.
-    pub services_dir: String,
-    /// Absolute path to the desktop Envoy config (e.g.
-    /// `environments/config/tauri/envoy.yaml`), mounted by the `envoy` fragment.
-    pub envoy_config: String,
-    /// Whether to emit `extra_hosts: ["host.docker.internal:host-gateway"]` for
-    /// each service. Needed on Linux (where the alias is not automatic); harmless
-    /// to omit on macOS/Windows Docker Desktop. The desktop crate sets this per-OS.
-    pub host_gateway_alias: bool,
+    /// Absolute path to `environments/services/desktop/`, where the self-contained
+    /// desktop fragments live. The generated compose `include:`s fragments here.
+    pub fragments_dir: String,
+    /// Absolute path to `environments/` — the `project_directory` the included
+    /// fragments resolve their relative `./.data`, `./config`, `./docker` paths
+    /// against.
+    pub environments_dir: String,
 }
 
-/// The generated, runnable artifacts for an environment's modules.
+/// The generated, runnable artifacts for an environment's Docker modules.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposeArtifacts {
-    /// The generated top-level compose file contents (`include:`s the fragments
-    /// + env overrides). Empty when the graph has no Docker modules.
+    /// The generated top-level compose file contents (`include:`s the desktop
+    /// fragments). Empty when the graph has no Docker modules.
     pub compose_yaml: String,
     /// Environment variables to pass to `docker compose` (the values the fragments
     /// interpolate, including the UC host URL). Empty when no Docker modules.
@@ -68,35 +67,28 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
         };
     }
 
-    // Build the env map the fragments interpolate. The one boundary value is the
-    // UC host URL; the rest are well-known local defaults the fragments already
-    // reference (the desktop crate may extend this before running).
+    // The one boundary value: the UC host URL, injected outward. The desktop
+    // fragments otherwise carry their own (desktop-specific) configuration, so
+    // there is nothing else to override here.
     let mut env = BTreeMap::new();
     if let Some(port) = ctx.uc_port {
         env.insert("UC_HOST_URL".to_string(), docker_uc_url(port));
     }
 
-    // Emit `include:` entries for each Docker module's fragment, plus per-service
-    // `extra_hosts` when targeting Linux. We keep this as hand-built YAML (it's a
-    // tiny, fixed shape) rather than pulling in a YAML serializer dependency.
+    // Generated top-level file: just `include:`s each module's self-contained
+    // desktop fragment, all sharing the `environments/` project directory so
+    // their relative paths resolve. Hand-built YAML (a tiny, fixed shape) rather
+    // than pulling in a YAML serializer dependency.
     let mut yaml = String::from("# Generated by env-modules — do not edit.\n");
     yaml.push_str("name: ${COMPOSE_PROJECT_NAME}\n\n");
     yaml.push_str("include:\n");
     for module in &docker {
         if let crate::model::ModuleKind::DockerService { fragment } = &module.kind {
-            yaml.push_str(&format!("  - path: {}/{}\n", ctx.services_dir, fragment));
-            yaml.push_str(&format!("    project_directory: {}\n", ctx.services_dir));
-        }
-    }
-
-    if ctx.host_gateway_alias {
-        // Map the host-gateway alias onto every included service so Linux hosts
-        // resolve `host.docker.internal` (automatic on Docker Desktop).
-        yaml.push_str("\nservices:\n");
-        for module in &docker {
-            yaml.push_str(&format!("  {}:\n", module.id));
-            yaml.push_str("    extra_hosts:\n");
-            yaml.push_str("      - \"host.docker.internal:host-gateway\"\n");
+            yaml.push_str(&format!("  - path: {}/{}\n", ctx.fragments_dir, fragment));
+            yaml.push_str(&format!(
+                "    project_directory: {}\n",
+                ctx.environments_dir
+            ));
         }
     }
 
@@ -114,9 +106,8 @@ mod tests {
     fn ctx() -> LaunchContext {
         LaunchContext {
             uc_port: Some(54321),
-            services_dir: "/repo/environments/services".into(),
-            envoy_config: "/repo/environments/config/tauri/envoy.yaml".into(),
-            host_gateway_alias: false,
+            fragments_dir: "/repo/environments/services/desktop".into(),
+            environments_dir: "/repo/environments".into(),
         }
     }
 
@@ -132,28 +123,23 @@ mod tests {
     fn mlflow_includes_fragments_and_injects_uc_url() {
         let graph = resolve(&["mlflow".into()]).unwrap();
         let artifacts = generate_compose(&graph, &ctx());
-        // Includes each docker fragment.
+        // Includes each docker fragment from the desktop dir.
         for fragment in ["mlflow.yaml", "postgres.yaml", "azurite.yaml", "envoy.yaml"] {
             assert!(
-                artifacts.compose_yaml.contains(fragment),
-                "expected include of {fragment} in:\n{}",
+                artifacts
+                    .compose_yaml
+                    .contains(&format!("services/desktop/{fragment}")),
+                "expected include of desktop/{fragment} in:\n{}",
                 artifacts.compose_yaml
             );
         }
+        // All includes share the environments/ project directory.
+        assert!(artifacts.compose_yaml.contains("project_directory: /repo/environments\n"));
         // Injects the UC host URL pointing at host.docker.internal.
         assert_eq!(
             artifacts.env.get("UC_HOST_URL").map(String::as_str),
             Some("http://host.docker.internal:54321/api/2.1/unity-catalog/")
         );
-    }
-
-    #[test]
-    fn linux_emits_host_gateway_alias() {
-        let graph = resolve(&["mlflow".into()]).unwrap();
-        let mut c = ctx();
-        c.host_gateway_alias = true;
-        let artifacts = generate_compose(&graph, &c);
-        assert!(artifacts.compose_yaml.contains("host.docker.internal:host-gateway"));
     }
 
     #[test]

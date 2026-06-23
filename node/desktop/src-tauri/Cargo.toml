@@ -34,6 +34,9 @@ serde_json = "1"
 # (empty) standalone workspace above.
 desktop-host = { path = "../../../crates/desktop-host" }
 portal = { path = "../../../crates/portal" }
+# Pure dependency resolution + compose/uvx artifact generation for the optional
+# service modules an environment can run (path dep, same cross-workspace pattern).
+env-modules = { path = "../../../crates/env-modules" }
 connectrpc = { version = "0.7", features = ["server", "client"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 bytes = "1"

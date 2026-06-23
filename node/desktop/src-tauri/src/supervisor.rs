@@ -25,8 +25,6 @@ pub enum ManagedProcess {
     /// with `docker compose -p <project> down`. The deterministic project name is
     /// also our crash-recovery handle: a stale project from a prior force-quit is
     /// reconciled by running `down` again on next start.
-    // Constructed once service modules are wired into the lifecycle (Phase 4).
-    #[allow(dead_code)]
     Compose { project: String },
 }
 

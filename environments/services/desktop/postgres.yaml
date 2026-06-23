@@ -1,0 +1,27 @@
+# Postgres backing MLflow + Marquez for the DESKTOP stack.
+#
+# Self-contained fragment for the desktop app's generated compose (env-modules).
+# Unlike the live stack, Unity Catalog is NOT a Postgres tenant here (UC runs on
+# the host with its own SQLite), so this exists only for MLflow + Marquez. The
+# init script still creates all three DBs (the unused `unitycatalog` DB is
+# harmless); the healthcheck waits on `mlflow` since that's what we depend on.
+#
+# Paths are relative to the `environments/` directory (the generated compose sets
+# `project_directory` there), so `.data/` and `docker/` resolve to the repo tree.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ./.data/desktop/db:/var/lib/postgresql/data
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

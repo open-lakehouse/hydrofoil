@@ -30,6 +30,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
 mod kek;
+mod modules;
 mod supervisor;
 
 use supervisor::{ManagedProcess, Supervisor};
@@ -505,13 +506,18 @@ fn seed_home_dir(home: &std::path::Path) {
     write("README.md", "# Home\n\nLocal scratch space for SQL and notes.\n");
 }
 
-/// One environment: a named bundle of service configuration. This iteration
-/// carries only an id + display name; the UC config is derived from the id's
-/// directory.
+/// One environment: a named bundle of service configuration. Carries an id +
+/// display name (the UC config is derived from the id's directory) and the set of
+/// optional service modules to run alongside UC (MLflow, Marquez, marimo, …).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Environment {
     id: String,
     name: String,
+    /// Selected service-module ids (see the `env-modules` registry). Empty =
+    /// UC-only (no Docker). `#[serde(default)]` keeps pre-modules
+    /// `environments.json` files parsing.
+    #[serde(default)]
+    modules: Vec<String>,
 }
 
 /// Read the environments registry (`environments.json`). Returns an empty list
@@ -852,7 +858,11 @@ fn create_environment(name: String) -> Result<Environment, String> {
         eprintln!("[kek] key provisioning deferred for {id}: {e}");
     }
 
-    let env = Environment { id, name };
+    let env = Environment {
+        id,
+        name,
+        modules: Vec::new(),
+    };
     envs.push(env.clone());
     write_environments(&envs)?;
     Ok(env)
@@ -868,9 +878,11 @@ async fn start_environment(
     id: String,
 ) -> Result<serde_json::Value, String> {
     let envs = read_environments()?;
-    if !envs.iter().any(|e| e.id == id) {
-        return Err(format!("unknown environment: {id}"));
-    }
+    let env = envs
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    let env_modules = env.modules.clone();
 
     // Already active → no-op (the UI re-opens an already-running environment
     // without calling start, but keep the command idempotent so a redundant
@@ -905,8 +917,34 @@ async fn start_environment(
     let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
     activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone())).await?;
+
+    // Bring up the environment's service modules (Docker compose project + uvx
+    // sidecars), injecting the UC sidecar's port outward. Tracked in the
+    // supervisor so they tear down with the environment. A failure here tears the
+    // environment back down so we don't leave UC running without its services.
+    if !env_modules.is_empty() {
+        let uc_port = uc_port_from_endpoint(&endpoint);
+        let supervisor = app.state::<Supervisor>();
+        if let Err(e) =
+            modules::start_modules(&app, &id, &env_modules, uc_port, &supervisor).await
+        {
+            supervisor.shut_down_all();
+            *app.state::<AppState>().active.write().unwrap() = ActiveEnv::default();
+            return Err(e);
+        }
+    }
+
     active_environment_descriptor(&app.state::<AppState>())
         .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
+}
+
+/// Extract the port from a UC endpoint like
+/// `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` if it can't be parsed
+/// (modules then run without a UC URL injected — they fall back to their defaults).
+fn uc_port_from_endpoint(endpoint: &str) -> Option<u16> {
+    let after_scheme = endpoint.split("://").nth(1)?;
+    let authority = after_scheme.split('/').next()?;
+    authority.rsplit(':').next()?.parse().ok()
 }
 
 /// Stop an environment: kill its UC sidecar and clear the active services so the
@@ -964,6 +1002,27 @@ fn configure_environment_key(
     kek::configure(&id, &env_uc_dir(&id), provider)
 }
 
+/// Whether the Docker daemon is reachable. Drives the UI availability banner
+/// (Docker-backed modules are disabled, with install hints, when this is false)
+/// and is re-checked at start before bringing a Docker-backed environment up.
+#[tauri::command]
+fn docker_status() -> bool {
+    modules::docker_available()
+}
+
+/// Set an environment's selected service modules, persisting the registry. Takes
+/// effect on the next start (a running environment is not hot-reconfigured).
+#[tauri::command]
+fn set_environment_modules(id: String, modules: Vec<String>) -> Result<(), String> {
+    let mut envs = read_environments()?;
+    let env = envs
+        .iter_mut()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    env.modules = modules;
+    write_environments(&envs)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -1011,6 +1070,8 @@ pub fn run() {
             stop_environment,
             environment_key_status,
             configure_environment_key,
+            docker_status,
+            set_environment_modules,
             connect_unary,
             connect_unary_proto,
             connect_stream,

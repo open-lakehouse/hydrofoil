@@ -20,8 +20,11 @@ pub type ModuleId = String;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModuleKind {
-    /// A Docker Compose service composed from an `environments/services/*.yaml`
-    /// fragment. `fragment` is the fragment filename (relative to `services/`).
+    /// A Docker Compose service from a self-contained desktop fragment under
+    /// `environments/services/desktop/` (filename relative to that dir). The
+    /// fragments are written specifically for the desktop stack — no cross-stack
+    /// defaults, profiles, or contradictory creds to override — so the generator
+    /// just `include:`s them and injects the UC host URL where needed.
     DockerService { fragment: String },
     /// A native host sidecar launched via `uvx` (e.g. marimo). `spec` is the uvx
     /// package/tool spec (e.g. `"marimo"`).
@@ -93,7 +96,8 @@ pub fn registry() -> Vec<Module> {
             },
             requires: vec![],
         },
-        // MLflow: Postgres backend + Azurite artifacts, reached via Envoy.
+        // MLflow: Postgres backend + Azurite artifacts, reached via Envoy. The
+        // desktop fragment is self-contained (Azurite-backed, no AWS_* creds).
         Module {
             id: "mlflow".into(),
             name: "MLflow".into(),
@@ -103,6 +107,7 @@ pub fn registry() -> Vec<Module> {
             requires: vec!["postgres".into(), "azurite".into(), "envoy".into()],
         },
         // Marquez (Java backend + web UI): Postgres backend, reached via Envoy.
+        // The desktop fragment is profile-free (no compose profile to activate).
         Module {
             id: "marquez".into(),
             name: "Marquez (lineage)".into(),

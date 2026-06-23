@@ -1,0 +1,43 @@
+# Azurite (Azure Blob emulator) for the DESKTOP stack — MLflow artifact store.
+#
+# Self-contained fragment for the desktop app's generated compose. The blob
+# endpoint is path-style (http://azurite:10000/devstoreaccount1) reachable from
+# the other containers on the compose network. A one-shot init creates the
+# container MLflow writes artifacts into.
+#
+# Paths are relative to the `environments/` directory.
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    restart: unless-stopped
+    command:
+      ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
+    volumes:
+      - ./.data/desktop/azurite:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('net').connect(10000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  azurite-init:
+    image: mcr.microsoft.com/azure-cli:2.87.0
+    restart: "no"
+    depends_on:
+      azurite:
+        condition: service_healthy
+    environment:
+      AZURE_STORAGE_CONNECTION_STRING: >-
+        DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Creating Azurite container '${AZURITE_CONTAINER:-lakehouse}'...";
+        az storage container create --name "${AZURITE_CONTAINER:-lakehouse}" 2>&1 || true;
+        echo "Container ready.";
