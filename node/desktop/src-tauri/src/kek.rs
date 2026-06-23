@@ -86,7 +86,7 @@ pub fn key_config_path(uc_dir: &Path) -> PathBuf {
     uc_dir.join("key.json")
 }
 
-/// Read the persisted key record, or `None` when absent / unparseable.
+/// Read the persisted key record, or `None` when absent / unparsable.
 pub fn read_key_config(uc_dir: &Path) -> Option<KeyConfig> {
     let bytes = std::fs::read(key_config_path(uc_dir)).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -96,8 +96,7 @@ pub fn read_key_config(uc_dir: &Path) -> Option<KeyConfig> {
 fn write_key_config(uc_dir: &Path, cfg: &KeyConfig) -> Result<(), String> {
     std::fs::create_dir_all(uc_dir).map_err(|e| format!("creating {uc_dir:?}: {e}"))?;
     let json = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(key_config_path(uc_dir), json)
-        .map_err(|e| format!("writing key.json: {e}"))
+    std::fs::write(key_config_path(uc_dir), json).map_err(|e| format!("writing key.json: {e}"))
 }
 
 /// Build the keychain entry for an environment (service `open-lakehouse`, account

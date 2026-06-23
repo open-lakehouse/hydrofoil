@@ -1136,7 +1136,7 @@ mod integration_tests {
     #[tokio::test]
     async fn governance_records_observed_taints() {
         use datafusion::sql::TableReference;
-        use datafusion_cedar::{FactStore as _, TableFacts};
+        use datafusion_cedar::TableFacts;
         use std::collections::HashMap;
 
         use crate::engine::Engine;
@@ -1211,7 +1211,6 @@ mod integration_tests {
         use std::collections::BTreeSet;
 
         use cedar_oci::Decision;
-        use datafusion_cedar::FactStore as _;
 
         use crate::engine::Engine;
         use crate::policy::Policy;
