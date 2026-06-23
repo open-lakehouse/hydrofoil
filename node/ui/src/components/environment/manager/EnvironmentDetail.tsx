@@ -5,10 +5,19 @@
 // (with an explanatory tooltip) until the environment is running. The Overview
 // tab is read-only metadata (editable config is a separate task).
 
-import { Boxes, ChevronDown, CircleStop, Loader2, Play } from "lucide-react";
+import {
+  Boxes,
+  ChevronDown,
+  CircleStop,
+  KeyRound,
+  Loader2,
+  Play,
+  TriangleAlert,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Meta, MetaGrid } from "@/components/catalog/detail/Meta";
 import { StorageTable } from "@/components/storage/StorageTable";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,12 +30,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type {
-  ActiveEnvironment,
-  Environment,
-  EnvironmentStatus,
+import {
+  type ActiveEnvironment,
+  type Environment,
+  type EnvironmentStatus,
+  getEnvironmentHost,
+  type KeyStatus,
 } from "@/lib/client/environments";
 import { cn } from "@/lib/utils";
+import { ConfigureKeyDialog } from "../ConfigureKeyDialog";
 import { capabilitySummary } from "../capabilitySummary";
 import {
   type EnvironmentTransition,
@@ -75,6 +87,11 @@ export function EnvironmentDetail({
     : "idle";
   const isRunning = status === "running";
 
+  // Key status is shared between the blocking banner here (above the tabs) and
+  // the configurable card in the Overview tab, so configuring from the card
+  // clears the banner without a refetch.
+  const keyStatus = useKeyStatus(selected?.id ?? null);
+
   // If the selected tab requires a running environment but it is no longer
   // running (e.g. it was just stopped while viewing Credentials), fall back to
   // Overview so the pane never shows a disabled tab's content.
@@ -111,6 +128,18 @@ export function EnvironmentDetail({
       {lastError ? (
         <p className="border-b bg-destructive/5 px-4 py-1.5 text-sm text-destructive">
           {lastError}
+        </p>
+      ) : null}
+
+      {keyStatus.status === "unconfigured" ||
+      keyStatus.status === "unavailable" ? (
+        <p className="flex items-start gap-1.5 border-b bg-destructive/5 px-4 py-1.5 text-sm text-destructive">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            {keyStatus.status === "unavailable"
+              ? "The OS keychain is unavailable, so no encryption key could be stored. Configure a key store before starting this environment."
+              : "No encryption key is configured yet. Configure one before starting this environment."}
+          </span>
         </p>
       ) : null}
 
@@ -153,7 +182,12 @@ export function EnvironmentDetail({
 
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "overview" ? (
-          <Overview selected={selected} running={running} status={status} />
+          <Overview
+            selected={selected}
+            running={running}
+            status={status}
+            keyStatus={keyStatus}
+          />
         ) : tab === "external_locations" ? (
           <StorageTable kind="external_location" />
         ) : (
@@ -244,10 +278,12 @@ function Overview({
   selected,
   running,
   status,
+  keyStatus,
 }: {
   selected: Environment;
   running: ActiveEnvironment | null;
   status: EnvironmentStatus;
+  keyStatus: KeyStatusState;
 }) {
   const isRunning = status === "running";
   return (
@@ -260,6 +296,109 @@ function Overview({
           <Meta label="Capabilities" value={capabilitySummary(running)} />
         ) : null}
       </MetaGrid>
+      <KeyManagement
+        environmentId={selected.id}
+        editable={!isRunning}
+        keyStatus={keyStatus}
+      />
+    </div>
+  );
+}
+
+type KeyStatusState = {
+  status: KeyStatus | null;
+  setStatus: (status: KeyStatus) => void;
+};
+
+// Fetch (and hold) an environment's credential-encryption (KEK) status. Shared
+// by the blocking banner and the Overview card so configuring from the card
+// updates both. A null id (no selection) leaves the status unfetched.
+function useKeyStatus(environmentId: string | null): KeyStatusState {
+  const host = getEnvironmentHost();
+  const [status, setStatus] = useState<KeyStatus | null>(null);
+
+  useEffect(() => {
+    if (!environmentId) {
+      setStatus(null);
+      return;
+    }
+    let cancelled = false;
+    host
+      .keyStatus(environmentId)
+      .then((s) => {
+        if (!cancelled) setStatus(s);
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("unavailable");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [host, environmentId]);
+
+  return { status, setStatus };
+}
+
+// The credential-encryption (KEK) status card, with a configure affordance.
+// Editing is idle-only — the key is fixed for a running environment (changing it
+// would orphan already-sealed secrets), so when running we show the status
+// read-only. The blocking `unconfigured`/`unavailable` warning is rendered as a
+// banner above the tabs (see EnvironmentDetail), not here.
+function KeyManagement({
+  environmentId,
+  editable,
+  keyStatus,
+}: {
+  environmentId: string;
+  editable: boolean;
+  keyStatus: KeyStatusState;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { status, setStatus } = keyStatus;
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center gap-2">
+        <KeyRound className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Encryption key</span>
+        {status === "keychain" ? (
+          <Badge variant="outline">OS keychain</Badge>
+        ) : status === "remote" ? (
+          <Badge variant="outline">Remote store</Badge>
+        ) : null}
+        {editable ? (
+          <Button
+            className="ml-auto h-7"
+            size="sm"
+            variant="outline"
+            onClick={() => setDialogOpen(true)}
+          >
+            Configure key
+          </Button>
+        ) : null}
+      </div>
+
+      {status === "keychain" ? (
+        <p className="text-xs text-muted-foreground">
+          Credentials are encrypted with a key stored in your OS keychain.
+        </p>
+      ) : status === "remote" ? (
+        <p className="text-xs text-muted-foreground">
+          Credentials are encrypted with a key from a remote key store.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Configure where this environment's credential-encryption key is
+          stored.
+        </p>
+      )}
+
+      <ConfigureKeyDialog
+        environmentId={environmentId}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        onConfigured={setStatus}
+      />
     </div>
   );
 }

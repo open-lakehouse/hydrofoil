@@ -29,6 +29,8 @@ use http::HeaderMap;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
 
+mod kek;
+
 /// The services bound to the currently-active environment: the in-process
 /// executors plus the resolved UC endpoint. `None` until an environment is
 /// selected (the outer shell spawns services lazily on selection).
@@ -563,7 +565,13 @@ fn allocate_env_id(name: &str, existing: &[Environment]) -> String {
 /// under the given `data_dir`) and return its path. We supply the config explicitly
 /// because a provided config file with no `encryption` block deserializes to
 /// `None` (the dev-KEK default only applies to a config-LESS launch), which the
-/// server rejects — so we include the dev KEK.
+/// server rejects — so we include an `encryption` block.
+///
+/// The KEK is **not** written inline. Instead the config references it via UC's
+/// `key: { env: OPEN_LAKEHOUSE_UC_KEK }` indirection; the per-environment key
+/// material lives in the OS keychain (see [`kek`]) and is injected into the
+/// sidecar process env at spawn. `encryption.active.id` is the stable key id from
+/// `key.json` (defaults to the env id), recorded in every sealed secret.
 ///
 /// `managed_storage_root` is `file://<.uc-data/storage>` so catalog data persists
 /// on disk (inspectable). A managed catalog requires a resolvable storage root,
@@ -572,12 +580,18 @@ fn allocate_env_id(name: &str, existing: &[Environment]) -> String {
 /// `Config` fields are snake_case (`local_storage`, `managed_storage_root`) but
 /// the nested `LocalStorageConfig` is kebab-case (`allowed-roots`). Using the
 /// wrong case silently drops the allow-root → "local storage is not enabled".
-fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+fn write_uc_config(env_id: &str, data_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
     std::fs::create_dir_all(data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
     let canonical = std::fs::canonicalize(data_dir).map_err(|e| e.to_string())?;
     let db_path = canonical.join("catalog.db");
     let storage_root = canonical.join("storage");
     std::fs::create_dir_all(&storage_root).map_err(|e| e.to_string())?;
+
+    // Stable KEK id stamped into every sealed secret. From `key.json` when present
+    // (set at create/configure time), else the env id.
+    let key_id = kek::read_key_config(&canonical)
+        .map(|c| c.key_id)
+        .unwrap_or_else(|| env_id.to_string());
 
     let config = format!(
         "host: 127.0.0.1\n\
@@ -587,13 +601,15 @@ fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, Str
          \x20\x20path: {db}\n\
          encryption:\n\
          \x20\x20active:\n\
-         \x20\x20\x20\x20id: dev\n\
-         \x20\x20\x20\x20key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n\
+         \x20\x20\x20\x20id: {key_id}\n\
+         \x20\x20\x20\x20key:\n\
+         \x20\x20\x20\x20\x20\x20env: {kek_env}\n\
          local_storage:\n\
          \x20\x20allowed-roots:\n\
          \x20\x20\x20\x20- {root}\n\
          managed_storage_root: \"file://{root}\"\n",
         db = db_path.display(),
+        kek_env = kek::KEK_ENV_VAR,
         root = storage_root.display(),
     );
     let config_path = canonical.join("config.yaml");
@@ -606,10 +622,16 @@ fn write_uc_config(data_dir: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// so the exit hook can kill it.
 async fn spawn_uc_sidecar(
     app: &tauri::AppHandle,
+    env_id: &str,
     config_path: &std::path::Path,
 ) -> Result<String, String> {
     use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
+
+    // Resolve the per-environment KEK from the OS keychain (get-or-create) and
+    // hand it to the child via env only — the config references it as
+    // `key: { env: OPEN_LAKEHOUSE_UC_KEK }`, so the material never hits disk.
+    let kek = kek::ensure_kek(env_id)?;
 
     // Spawn as a Tauri sidecar: the binary lives at
     // `src-tauri/binaries/uc-server-<target-triple>` (declared in tauri.conf.json
@@ -620,6 +642,7 @@ async fn spawn_uc_sidecar(
         .shell()
         .sidecar("uc-server")
         .map_err(|e| format!("uc-server sidecar not found (run `just uc-setup`?): {e}"))?
+        .env(kek::KEK_ENV_VAR, kek)
         .args([
             "server",
             "--config",
@@ -819,6 +842,15 @@ fn create_environment(name: String) -> Result<Environment, String> {
     std::fs::create_dir_all(&uc_dir).map_err(|e| format!("creating {uc_dir:?}: {e}"))?;
     let home_dir = env_home_dir(&id);
     std::fs::create_dir_all(&home_dir).map_err(|e| format!("creating {home_dir:?}: {e}"))?;
+
+    // Mint a fresh per-environment KEK in the OS keychain (the default provider)
+    // so credentials are protected from first use. A keychain failure is NOT
+    // fatal to creation — the environment is created in an `Unavailable` key
+    // status so the UI can warn and let the user choose a provider before start.
+    if let Err(e) = kek::configure(&id, &uc_dir, kek::KeyProvider::Keychain) {
+        eprintln!("[kek] key provisioning deferred for {id}: {e}");
+    }
+
     let env = Environment { id, name };
     envs.push(env.clone());
     write_environments(&envs)?;
@@ -849,8 +881,20 @@ async fn start_environment(
             .ok_or_else(|| "environment reported active but has no descriptor".to_string());
     }
 
-    let config_path = write_uc_config(&env_uc_dir(&id))?;
-    let endpoint = spawn_uc_sidecar(&app, &config_path).await?;
+    // Refuse to start with an unusable encryption key rather than spawning a
+    // sidecar that would fail to decrypt credentials (or silently fall back to a
+    // shared key — which we never do). The UI surfaces this as a blocking warning.
+    let uc_dir = env_uc_dir(&id);
+    if kek::status(&id, &uc_dir) == kek::KeyStatus::Unavailable {
+        return Err(
+            "no usable encryption key for this environment — the OS keychain is \
+             unavailable. Configure a key store before starting."
+                .into(),
+        );
+    }
+
+    let config_path = write_uc_config(&id, &uc_dir)?;
+    let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
     activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone())).await?;
     active_environment_descriptor(&app.state::<AppState>())
@@ -885,6 +929,32 @@ async fn stop_environment(app: tauri::AppHandle, id: String) -> Result<(), Strin
     // the proxy reports "Unity Catalog is not running" until the next start.
     *state.active.write().unwrap() = ActiveEnv::default();
     Ok(())
+}
+
+/// Current encryption-key status for an environment (without starting it). Drives
+/// the key-management surface in the environment overview.
+#[tauri::command]
+fn environment_key_status(id: String) -> Result<kek::KeyStatus, String> {
+    let envs = read_environments()?;
+    if !envs.iter().any(|e| e.id == id) {
+        return Err(format!("unknown environment: {id}"));
+    }
+    Ok(kek::status(&id, &env_uc_dir(&id)))
+}
+
+/// Configure the encryption-key provider for an environment, returning the
+/// resulting status. For the keychain provider this mints the key eagerly so a
+/// broken keychain surfaces here rather than at start.
+#[tauri::command]
+fn configure_environment_key(
+    id: String,
+    provider: kek::KeyProvider,
+) -> Result<kek::KeyStatus, String> {
+    let envs = read_environments()?;
+    if !envs.iter().any(|e| e.id == id) {
+        return Err(format!("unknown environment: {id}"));
+    }
+    kek::configure(&id, &env_uc_dir(&id), provider)
 }
 
 pub fn run() {
@@ -931,6 +1001,8 @@ pub fn run() {
             create_environment,
             start_environment,
             stop_environment,
+            environment_key_status,
+            configure_environment_key,
             connect_unary,
             connect_unary_proto,
             connect_stream,
