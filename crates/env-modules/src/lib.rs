@@ -1,12 +1,12 @@
 //! Desktop environment **service modules**: the pure model and dependency
 //! resolver for the optional services an environment can run alongside its Unity
-//! Catalog server (MLflow, Marquez, Azurite, marimo, …).
+//! Catalog server (MLflow, Marquez, Azurite, …).
 //!
 //! This crate is intentionally side-effect-free — no process spawning, no I/O, no
 //! Tauri. It answers one question: given a user's module selection, what is the
 //! full, ordered set of modules to run and how do they depend on each other? The
 //! desktop crate (`node/desktop/src-tauri`) consumes [`resolve`] and turns the
-//! resulting [`ResolvedGraph`] into compose artifacts + uvx launches.
+//! resulting [`ResolvedGraph`] into compose artifacts.
 //!
 //! Topology: Unity Catalog runs on the host (not as a module); modules consume it
 //! via an injected URL. See `docs/adr` / the env-service-modules design.
@@ -19,7 +19,7 @@ pub mod resolve;
 
 pub use capability::{Capability, Provider};
 pub use effect::{Effect, EffectConsumer, EffectKind};
-pub use generate::{ComposeArtifacts, LaunchContext, generate_compose, uvx_uc_uri};
+pub use generate::{ComposeArtifacts, LaunchContext, generate_compose};
 pub use model::{Module, ModuleId, ModuleKind, registry};
 pub use resolve::{
     Edge, ResolveError, ResolvedGraph, resolve, resolve_capabilities, resolve_with,
@@ -78,11 +78,10 @@ mod tests {
     }
 
     #[test]
-    fn marimo_alone_needs_no_docker() {
-        let graph = resolve(&["marimo".into()]).unwrap();
-        assert_eq!(ids(&graph), vec!["marimo".to_string()]);
+    fn empty_selection_needs_no_docker() {
+        let graph = resolve(&[]).unwrap();
+        assert!(graph.nodes.is_empty());
         assert!(!graph.needs_docker());
-        assert_eq!(graph.uvx_modules().len(), 1);
         assert!(graph.docker_modules().is_empty());
     }
 

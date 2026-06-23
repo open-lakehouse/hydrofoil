@@ -1,13 +1,21 @@
-# MLflow for the DESKTOP stack — Postgres backend, Azurite artifact store.
+# MLflow for the DESKTOP stack — Postgres backend, Azurite artifact store, with
+# OpenTelemetry auto-instrumentation emitting to the shared Jaeger collector.
 #
 # Self-contained fragment: artifacts go to Azurite via a wasbs:// URL and the
 # Azure connection string. There are deliberately NO AWS_* keys here — MLflow's
 # storage SDK selection keys off which credentials are present, and leaving
 # contradictory AWS creds set alongside Azure can make the backend non-
 # deterministic. The `-full` image bundles azure-storage-blob.
+#
+# Tracing: the mlflow-otel shim image (docker/mlflow-otel) makes
+# `opentelemetry-instrument` the entrypoint, so the command below runs
+# auto-instrumented. `OTEL_EXPORTER_OTLP_ENDPOINT` (base var → SDK appends
+# /v1/traces) is injected by env-modules to point at the host's shared Jaeger;
+# when unset, instrumentation is a no-op. `--workers 1` avoids the gunicorn
+# pre-fork pitfall that can swallow spans.
 services:
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.12.0-full
+    image: open-lakehouse/mlflow-otel:local
     restart: unless-stopped
     depends_on:
       db:
@@ -26,11 +34,23 @@ services:
       - "0.0.0.0"
       - "--port"
       - "5000"
+      - "--workers"
+      - "1"
       - "--static-prefix"
       - "${MLFLOW_STATIC_PREFIX:-/mlflow}"
     environment:
       AZURE_STORAGE_CONNECTION_STRING: >-
         DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+      # OpenTelemetry zero-code config. ENDPOINT is the base var (SDK appends
+      # /v1/traces); empty default = instrumentation no-op. PROPAGATORS pinned to
+      # W3C so it continues Envoy's traceparent.
+      OTEL_SERVICE_NAME: mlflow
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_COLLECTOR_HTTP:-}
+      OTEL_PROPAGATORS: tracecontext,baggage
     expose:
       - "5000"
     healthcheck:

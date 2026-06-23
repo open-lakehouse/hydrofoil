@@ -930,35 +930,37 @@ async fn start_environment(
     let endpoint = spawn_uc_sidecar(&app, &id, &config_path).await?;
     eprintln!("[uc] environment {id} listening at {endpoint}");
 
-    // Bring up the environment's capabilities (Docker compose project + uvx
-    // sidecars) BEFORE building the in-process engine: an effect like lineage
-    // produces an endpoint (the Marquez sink via the gateway) that the engine
-    // must be configured with, and that endpoint only exists once the services
-    // are healthy. Tracked in the supervisor so they tear down with the
-    // environment; a failure tears UC back down rather than leaving it orphaned.
+    // Observability is a per-env opt-in that emits to the SHARED, app-level
+    // telemetry collector (not a per-env service). Bring the collector up + init
+    // the global tracer lazily on the first opt-in env; later envs reuse it. This
+    // lives in the app-level Telemetry slot, not the per-env supervisor, so it
+    // survives env switches. Done FIRST (before the compose services) so the
+    // collector exists when the services' OTLP exporters point at it, and so the
+    // in-process engine emits too. A failure tears UC back down (the user asked
+    // for observability and we couldn't provide it).
+    if env_modules::Capability::wants_observability(&capabilities) {
+        if let Err(e) = telemetry::ensure(&app.state::<Telemetry>()) {
+            app.state::<Supervisor>().shut_down_all();
+            return Err(e);
+        }
+    }
+
+    // Bring up the environment's capability services (Docker compose project)
+    // BEFORE building the in-process engine: an effect like lineage produces an
+    // endpoint (the Marquez sink via the gateway) that the engine must be
+    // configured with, and that endpoint only exists once the services are
+    // healthy. Tracked in the supervisor so they tear down with the environment;
+    // a failure tears UC back down rather than leaving it orphaned.
     let mut lineage_endpoint = None;
     if !capabilities.is_empty() {
         let uc_port = uc_port_from_endpoint(&endpoint);
         let supervisor = app.state::<Supervisor>();
-        match modules::start_modules(&app, &id, &capabilities, uc_port, &supervisor).await {
+        match modules::start_modules(&id, &capabilities, uc_port, &supervisor) {
             Ok(graph) => lineage_endpoint = modules::lineage_endpoint(&graph),
             Err(e) => {
                 supervisor.shut_down_all();
                 return Err(e);
             }
-        }
-    }
-
-    // Observability is a per-env opt-in that emits to the SHARED, app-level
-    // telemetry collector (not a per-env service). Bring the collector up + init
-    // the global tracer lazily on the first opt-in env; later envs reuse it. This
-    // lives in the app-level Telemetry slot, not the per-env supervisor, so it
-    // survives env switches. A failure tears the env back down (it asked for
-    // observability and we couldn't provide it).
-    if env_modules::Capability::wants_observability(&capabilities) {
-        if let Err(e) = telemetry::ensure(&app.state::<Telemetry>()) {
-            app.state::<Supervisor>().shut_down_all();
-            return Err(e);
         }
     }
 

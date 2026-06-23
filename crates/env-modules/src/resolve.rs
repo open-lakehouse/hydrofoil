@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Module, ModuleId, ModuleKind};
+use crate::model::{Module, ModuleId};
 
 /// What can go wrong resolving a selection.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -54,14 +54,6 @@ impl ResolvedGraph {
         self.nodes
             .iter()
             .filter(|m| m.kind.needs_docker())
-            .collect()
-    }
-
-    /// The uvx sidecar modules in startup order.
-    pub fn uvx_modules(&self) -> Vec<&Module> {
-        self.nodes
-            .iter()
-            .filter(|m| matches!(m.kind, ModuleKind::UvxSidecar { .. }))
             .collect()
     }
 

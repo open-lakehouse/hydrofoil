@@ -1,7 +1,7 @@
 //! The service-module model and the static registry.
 //!
 //! A *module* is one selectable capability a desktop environment can run
-//! alongside its Unity Catalog server (e.g. MLflow, Marquez, marimo). Modules
+//! alongside its Unity Catalog server (e.g. MLflow, Marquez). Modules
 //! declare their dependencies on other modules; the resolver ([`crate::resolve`])
 //! closes over those edges. The registry here is the single source of truth for
 //! what modules exist and how they relate — it mirrors the `depends_on:` edges in
@@ -25,16 +25,16 @@ pub enum ModuleKind {
     /// fragments are written specifically for the desktop stack — no cross-stack
     /// defaults, profiles, or contradictory creds to override — so the generator
     /// just `include:`s them and injects the UC host URL where needed.
+    ///
+    /// (Native host sidecars — e.g. marimo via `uvx` — are intentionally not
+    /// modelled yet; that launch path is future work.)
     DockerService { fragment: String },
-    /// A native host sidecar launched via `uvx` (e.g. marimo). `spec` is the uvx
-    /// package/tool spec (e.g. `"marimo"`).
-    UvxSidecar { spec: String },
 }
 
 impl ModuleKind {
-    /// Whether this module requires a running Docker daemon. Drives the graceful
-    /// degrade in the UI (Docker modules are disabled when the daemon is absent;
-    /// uvx modules stay addable).
+    /// Whether this module requires a running Docker daemon. Every module is
+    /// Docker-backed today; this gates the UI's graceful degrade when the daemon
+    /// is absent.
     pub fn needs_docker(&self) -> bool {
         matches!(self, ModuleKind::DockerService { .. })
     }
@@ -58,9 +58,9 @@ pub struct Module {
 /// and their dependency edges, mirroring `environments/services/*.yaml`.
 ///
 /// Topology reminder: in the desktop context Unity Catalog runs on the host (not
-/// in Docker), and dependencies flow one direction only — Docker→UC, marimo→UC.
-/// UC is therefore NOT a module here; it's always-present infrastructure that
-/// modules consume via an injected host URL. The `envoy` gateway IS a module:
+/// in Docker), and dependencies flow one direction only — Docker→UC. UC is
+/// therefore NOT a module here; it's always-present infrastructure that modules
+/// consume via an injected host URL. The `envoy` gateway IS a module:
 /// it's the single published entry point the app reaches Docker services through,
 /// so it is pulled in whenever any Docker service is selected (see the registry
 /// note below — every Docker service requires `envoy`).
@@ -115,16 +115,6 @@ pub fn registry() -> Vec<Module> {
                 fragment: "marquez.yaml".into(),
             },
             requires: vec!["postgres".into(), "envoy".into()],
-        },
-        // marimo notebooks: a native uvx sidecar on the host. Consumes UC via an
-        // injected UC_URI (host port); no module dependencies.
-        Module {
-            id: "marimo".into(),
-            name: "marimo notebooks".into(),
-            kind: ModuleKind::UvxSidecar {
-                spec: "marimo".into(),
-            },
-            requires: vec![],
         },
     ]
 }

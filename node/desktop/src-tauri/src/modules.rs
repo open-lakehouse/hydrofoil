@@ -3,7 +3,7 @@
 //! The pure resolution + artifact generation lives in the `env-modules` crate;
 //! this module owns the side effects: resolving paths into a `LaunchContext`,
 //! the Docker daemon preflight, writing the generated compose file, running
-//! `docker compose up`/`down`, and spawning uvx sidecars. Everything started here
+//! `docker compose up`/`down`. Everything started here
 //! is tracked in the [`Supervisor`] so it is torn down with the environment.
 
 use std::path::{Path, PathBuf};
@@ -51,21 +51,27 @@ fn fragments_dir() -> PathBuf {
 }
 
 /// Build the `LaunchContext` from the resolved UC port and host facts.
-fn launch_context(uc_port: Option<u16>) -> LaunchContext {
+/// `observability` opts the env's services in to emitting to the shared host
+/// Jaeger (reached from containers via host.docker.internal on its OTLP/HTTP port).
+fn launch_context(uc_port: Option<u16>, observability: bool) -> LaunchContext {
     LaunchContext {
         uc_port,
         fragments_dir: fragments_dir().to_string_lossy().into_owned(),
         environments_dir: environments_dir().to_string_lossy().into_owned(),
+        otel_collector_http: observability.then(|| {
+            let port = std::env::var("JAEGER_OTLP_HTTP_PORT").unwrap_or_else(|_| "4318".into());
+            format!("http://host.docker.internal:{port}")
+        }),
     }
 }
 
 /// Start an environment's service modules after UC is up. `uc_port` is the
-/// sidecar's bound port (for outward UC injection). Tracks every started process
-/// in the supervisor. Returns an error (after best-effort cleanup) if a required
-/// Docker daemon is absent or `docker compose up` fails — so a failed module
-/// start surfaces to the user rather than leaving a half-running environment.
-pub async fn start_modules(
-    app: &tauri::AppHandle,
+/// sidecar's bound port (for outward UC injection); `observability` opts the
+/// services in to emitting traces to the shared collector. Tracks every started
+/// process in the supervisor. Returns an error (after best-effort cleanup) if a
+/// required Docker daemon is absent or `docker compose up` fails — so a failed
+/// module start surfaces to the user rather than leaving a half-running env.
+pub fn start_modules(
     env_id: &str,
     capabilities: &[env_modules::Capability],
     uc_port: Option<u16>,
@@ -73,6 +79,7 @@ pub async fn start_modules(
 ) -> Result<ResolvedGraph, String> {
     let graph = env_modules::resolve_capabilities(capabilities)
         .map_err(|e| format!("resolving capabilities: {e}"))?;
+    let observability = env_modules::Capability::wants_observability(capabilities);
 
     if graph.needs_docker() {
         if !docker_available() {
@@ -82,10 +89,9 @@ pub async fn start_modules(
                     .into(),
             );
         }
-        start_compose(env_id, &graph, uc_port, supervisor)?;
+        start_compose(env_id, &graph, uc_port, observability, supervisor)?;
     }
 
-    start_uvx_sidecars(app, &graph, uc_port, supervisor).await?;
     Ok(graph)
 }
 
@@ -113,13 +119,14 @@ fn start_compose(
     env_id: &str,
     graph: &ResolvedGraph,
     uc_port: Option<u16>,
+    observability: bool,
     supervisor: &Supervisor,
 ) -> Result<(), String> {
     let project = compose_project(env_id);
     // Reconcile a stale project from a prior force-quit before bringing ours up.
     compose_down(&project);
 
-    let ctx = launch_context(uc_port);
+    let ctx = launch_context(uc_port, observability);
     let ComposeArtifacts { compose_yaml, env } = env_modules::generate_compose(graph, &ctx);
 
     let dir = env_modules_dir(env_id);
@@ -163,24 +170,3 @@ fn start_compose(
     Ok(())
 }
 
-/// Spawn each uvx sidecar module (e.g. marimo) as a tracked Tauri child, with the
-/// host-local UC URI injected.
-///
-/// Phase 5 wires the concrete marimo launch recipe (`marimo edit --headless …`)
-/// and the matching `shell:allow-spawn` scope entry. Until then, selecting a uvx
-/// module fails fast rather than spawning a command the shell scope would reject
-/// at runtime — keeping the Docker path fully functional and the error honest.
-async fn start_uvx_sidecars(
-    _app: &tauri::AppHandle,
-    graph: &ResolvedGraph,
-    _uc_port: Option<u16>,
-    _supervisor: &Supervisor,
-) -> Result<(), String> {
-    if let Some(module) = graph.uvx_modules().first() {
-        return Err(format!(
-            "service module '{}' (uvx sidecar) is not yet supported",
-            module.id
-        ));
-    }
-    Ok(())
-}

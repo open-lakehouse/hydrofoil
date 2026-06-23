@@ -10,8 +10,7 @@
 //! under `environments/services/desktop/` — written specifically for this stack,
 //! so there are no cross-stack defaults, profiles, or contradictory credentials
 //! to override. The single boundary value the generator supplies is the **UC host
-//! URL**, injected outward (Docker→UC) for any module that consumes it; marimo
-//! (uvx) gets `UC_URI` instead (see [`uvx_uc_uri`]).
+//! URL**, injected outward (Docker→UC) for any module that consumes it.
 
 use std::collections::BTreeMap;
 
@@ -33,6 +32,12 @@ pub struct LaunchContext {
     /// fragments resolve their relative `./.data`, `./config`, `./docker` paths
     /// against.
     pub environments_dir: String,
+    /// The shared telemetry collector's OTLP/HTTP base URL (the host Jaeger, e.g.
+    /// `http://host.docker.internal:4318`), set when this environment opted in to
+    /// observability. Injected as `OTEL_COLLECTOR_HTTP` so the service fragments'
+    /// OpenTelemetry exporters emit to it; `None` leaves it empty and the bundled
+    /// instrumentation is a no-op.
+    pub otel_collector_http: Option<String>,
 }
 
 /// The generated, runnable artifacts for an environment's Docker modules.
@@ -51,13 +56,8 @@ fn docker_uc_url(uc_port: u16) -> String {
     format!("http://host.docker.internal:{uc_port}/api/2.1/unity-catalog/")
 }
 
-/// The UC URL injected into uvx sidecars (host-local).
-pub fn uvx_uc_uri(uc_port: u16) -> String {
-    format!("http://localhost:{uc_port}/api/2.1/unity-catalog/")
-}
-
 /// Generate the Docker Compose artifacts for a graph. Returns empty artifacts
-/// when the graph has no Docker modules (a marimo-only environment needs none).
+/// when the graph has no Docker modules.
 pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeArtifacts {
     let docker = graph.docker_modules();
     if docker.is_empty() {
@@ -74,6 +74,12 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
     if let Some(port) = ctx.uc_port {
         env.insert("UC_HOST_URL".to_string(), docker_uc_url(port));
     }
+    // When the env opted in to observability, point the service fragments' OTLP
+    // exporters at the shared host collector; otherwise leave it unset so the
+    // baked-in instrumentation is a no-op.
+    if let Some(collector) = &ctx.otel_collector_http {
+        env.insert("OTEL_COLLECTOR_HTTP".to_string(), collector.clone());
+    }
 
     // Generated top-level file: just `include:`s each module's self-contained
     // desktop fragment, all sharing the `environments/` project directory so
@@ -83,13 +89,16 @@ pub fn generate_compose(graph: &ResolvedGraph, ctx: &LaunchContext) -> ComposeAr
     yaml.push_str("name: ${COMPOSE_PROJECT_NAME}\n\n");
     yaml.push_str("include:\n");
     for module in &docker {
-        if let crate::model::ModuleKind::DockerService { fragment } = &module.kind {
-            yaml.push_str(&format!("  - path: {}/{}\n", ctx.fragments_dir, fragment));
-            yaml.push_str(&format!(
-                "    project_directory: {}\n",
-                ctx.environments_dir
-            ));
-        }
+        // `docker_modules()` already filtered to Docker services; destructure to
+        // get the fragment. `ModuleKind` has one variant today (hence the allow);
+        // `let-else` keeps this correct if more kinds are added later.
+        #[allow(irrefutable_let_patterns)]
+        let crate::model::ModuleKind::DockerService { fragment } = &module.kind
+        else {
+            continue;
+        };
+        yaml.push_str(&format!("  - path: {}/{}\n", ctx.fragments_dir, fragment));
+        yaml.push_str(&format!("    project_directory: {}\n", ctx.environments_dir));
     }
 
     ComposeArtifacts {
@@ -108,12 +117,13 @@ mod tests {
             uc_port: Some(54321),
             fragments_dir: "/repo/environments/services/desktop".into(),
             environments_dir: "/repo/environments".into(),
+            otel_collector_http: None,
         }
     }
 
     #[test]
-    fn marimo_only_generates_no_compose() {
-        let graph = resolve(&["marimo".into()]).unwrap();
+    fn empty_graph_generates_no_compose() {
+        let graph = resolve(&[]).unwrap();
         let artifacts = generate_compose(&graph, &ctx());
         assert!(artifacts.compose_yaml.is_empty());
         assert!(artifacts.env.is_empty());
@@ -140,13 +150,19 @@ mod tests {
             artifacts.env.get("UC_HOST_URL").map(String::as_str),
             Some("http://host.docker.internal:54321/api/2.1/unity-catalog/")
         );
+        // No collector by default → no OTEL_COLLECTOR_HTTP (instrumentation no-op).
+        assert!(!artifacts.env.contains_key("OTEL_COLLECTOR_HTTP"));
     }
 
     #[test]
-    fn uvx_uc_uri_is_localhost() {
+    fn collector_injected_when_observability_opted_in() {
+        let graph = resolve(&["mlflow".into()]).unwrap();
+        let mut c = ctx();
+        c.otel_collector_http = Some("http://host.docker.internal:4318".into());
+        let artifacts = generate_compose(&graph, &c);
         assert_eq!(
-            uvx_uc_uri(54321),
-            "http://localhost:54321/api/2.1/unity-catalog/"
+            artifacts.env.get("OTEL_COLLECTOR_HTTP").map(String::as_str),
+            Some("http://host.docker.internal:4318")
         );
     }
 }

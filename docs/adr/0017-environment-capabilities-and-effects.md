@@ -98,6 +98,33 @@ spans collected. True per-engine gating isn't achievable with a process-global s
 the opt-in faithfully controls whether the collector + global init happen at all, which is the
 meaningful user-facing control. Spans are tagged with `environment.id` for per-env filtering.
 
+### Trace quality: emit from every component to the shared collector
+
+Beyond the engine, the containerised services emit OTLP to the shared Jaeger so a request
+produces rich, multi-component spans. This is config-only (no per-service code), gated by the
+observability opt-in (the generator injects `OTEL_COLLECTOR_HTTP` =
+`host.docker.internal:<jaeger-otlp-http>` only when the env opted in; unset → instrumentation
+is a no-op):
+
+- **Envoy** — `tracing.provider` (`envoy.tracers.opentelemetry`) + an `otel_collector` cluster
+  (OTLP/**gRPC** to `host.docker.internal:4317`, which is why `jaeger.yaml` now also publishes
+  4317; the cluster needs explicit HTTP/2). Envoy propagates W3C `traceparent` to upstreams.
+- **MLflow** — a thin shim image (`docker/mlflow-otel`) adds `opentelemetry-distro` and makes
+  `opentelemetry-instrument` the entrypoint; `OTEL_*` env (HTTP/protobuf to the base endpoint,
+  `--workers 1` to dodge gunicorn pre-fork span loss) drive it.
+- **Marquez** — a shim image (`docker/marquez-otel`) bakes the OTel Java agent (pinned); the
+  JVM attaches it via `JAVA_TOOL_OPTIONS` regardless of entrypoint.
+
+Endpoint-var gotcha (encoded in the fragments): the **base** `OTEL_EXPORTER_OTLP_ENDPOINT` is
+set to the collector root (no `/v1/traces`) because the SDKs/agent append the path; the
+in-process engine, which uses the signal-specific verbatim var, includes the full path.
+
+**Deferred (code, not config):** full end-to-end *stitching* needs two Rust changes — the UC
+proxy must inject `traceparent`, and hydrofoil must extract inbound `traceparent` so engine
+spans parent under the request. Until then, each component emits rich spans to one backend but
+cross-process parenting is partial (Envoy→backends stitches; the UC-proxy and engine-inbound
+hops do not yet).
+
 ### Deferred (designed, not wired)
 
 - **UC credential vending.** The `ObjectStorage` effect *carries* the credential payload

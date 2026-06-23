@@ -4,9 +4,14 @@
 # behind a compose profile; the desktop generated compose wants them always-on).
 # Shares the `db` instance via its own `marquez` role + database (created by
 # docker/db/init/01-create-databases.sql). No host ports — reached via Envoy.
+#
+# Tracing: the marquez-otel shim image bakes the OTel Java agent; JAVA_TOOL_OPTIONS
+# attaches it (the JVM honors that var regardless of entrypoint). OTEL_* drive it;
+# OTEL_EXPORTER_OTLP_ENDPOINT (base var → agent appends /v1/traces) is injected by
+# env-modules to the host's shared Jaeger, and is a no-op when unset.
 services:
   marquez-api:
-    image: marquezproject/marquez:0.50.0
+    image: open-lakehouse/marquez-otel:local
     restart: unless-stopped
     depends_on:
       db:
@@ -17,6 +22,14 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       SEARCH_ENABLED: "false"
+      JAVA_TOOL_OPTIONS: "-javaagent:/otel/opentelemetry-javaagent.jar"
+      OTEL_SERVICE_NAME: marquez
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_COLLECTOR_HTTP:-}
+      OTEL_PROPAGATORS: tracecontext,baggage
     expose:
       - "5000"
       - "5001"

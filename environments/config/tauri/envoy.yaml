@@ -25,6 +25,23 @@ static_resources:
                 upgrade_configs:
                   upgrade_type: "websocket"
                 stat_prefix: ingress_http
+                # Emit gateway spans to the shared Jaeger collector via OTLP/gRPC
+                # and propagate W3C traceparent to upstreams (MLflow, Marquez) so
+                # they continue the same trace. The collector runs on the host
+                # (app-level, outside this compose network) — reached at
+                # host.docker.internal:4317. random_sampling 100% for a dev stack.
+                tracing:
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      service_name: envoy-gateway
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: otel_collector
+                        timeout: 5s
+                  random_sampling:
+                    value: 100.0
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
@@ -82,6 +99,26 @@ static_resources:
                             operation: marquez_web
 
   clusters:
+    # Shared Jaeger OTLP/gRPC collector on the host. gRPC requires HTTP/2 — the
+    # explicit http2 option is mandatory or the tracer silently fails to connect.
+    - name: otel_collector
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: otel_collector
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: host.docker.internal
+                      port_value: 4317
+
     - name: mlflow
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
