@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "The name of the registered model",
+      "type": "string"
+    },
+    "catalog_name": {
+      "description": "The name of the catalog where the schema and the registered model reside",
+      "type": "string"
+    },
+    "schema_name": {
+      "description": "The name of the schema where the registered model resides",
+      "type": "string"
+    },
+    "storage_location": {
+      "description": "The storage location on the cloud under which model version data files are stored",
+      "type": "string"
+    },
+    "full_name": {
+      "description": "The three-level (fully qualified) name of the registered model",
+      "type": "string"
+    },
+    "comment": {
+      "description": "The comment attached to the registered model",
+      "type": "string"
+    },
+    "owner": {
+      "description": "The identifier of the user who owns the registered model",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Creation timestamp of the registered model in milliseconds since the Unix epoch",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_by": {
+      "description": "The identifier of the user who created the registered model",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Last-update timestamp of the registered model in milliseconds since the Unix epoch",
+      "type": "integer",
+      "format": "int64"
+    },
+    "updated_by": {
+      "description": "The identifier of the user who updated the registered model last time",
+      "type": "string"
+    },
+    "id": {
+      "description": "Unique identifier for the registered model.",
+      "type": "string"
+    }
+  }
+}

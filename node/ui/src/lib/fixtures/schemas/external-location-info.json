@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "Name of the external location.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Unique identifier for the external location.",
+      "type": "string"
+    },
+    "url": {
+      "description": "Path URL of the external location.",
+      "type": "string"
+    },
+    "credential_name": {
+      "description": "Name of the storage credential used with this location.",
+      "type": "string"
+    },
+    "comment": {
+      "description": "User-provided free-form text description.",
+      "type": "string"
+    },
+    "owner": {
+      "description": "The owner of the external location.",
+      "type": "string"
+    },
+    "credential_id": {
+      "description": "Unique ID of the location's storage credential.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Time at which this external location was created, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_by": {
+      "description": "Username of external location creator.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Time at which external location this was last modified, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "updated_by": {
+      "description": "Username of user who last modified the external location.",
+      "type": "string"
+    }
+  }
+}

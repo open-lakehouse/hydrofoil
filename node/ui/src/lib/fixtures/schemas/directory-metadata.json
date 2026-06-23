@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "description": "Metadata describing a directory.",
+  "properties": {
+    "last_modified": {
+      "default": 0,
+      "description": "Last-modified time in epoch milliseconds.",
+      "type": "integer"
+    },
+    "path": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "Directory Metadata",
+  "type": "object",
+  "$defs": {
+    "portal.files.v1.DirectoryMetadata.schema.json": {
+      "additionalProperties": false,
+      "description": "Metadata describing a directory.",
+      "properties": {
+        "last_modified": {
+          "default": 0,
+          "description": "Last-modified time in epoch milliseconds.",
+          "type": "integer"
+        },
+        "path": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "title": "Directory Metadata",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

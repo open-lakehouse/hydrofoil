@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "Name of catalog.",
+      "type": "string"
+    },
+    "comment": {
+      "description": "User-provided free-form text description.",
+      "type": "string"
+    },
+    "properties": {
+      "$ref": "#/$defs/SecurablePropertiesMap"
+    },
+    "owner": {
+      "description": "Username of current owner of catalog.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Time at which this catalog was created, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_by": {
+      "description": "Username of catalog creator.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Time at which this catalog was last modified, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "updated_by": {
+      "description": "Username of user who last modified catalog.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Unique identifier for the catalog.",
+      "type": "string"
+    },
+    "storage_root": {
+      "description": "Storage root URL for managed storage location of catalog. This can be set when creating\na catalog. Example: s3://bucket/ucroot\n",
+      "type": "string"
+    },
+    "storage_location": {
+      "description": "Storage Location URL (full path) for managed storage location of catalog. This is an\nautomatically generated unique path under storage_root.\nExample: s3://bucket/ucroot/__unitystorage/catalogs/{catalog_id}\n",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "SecurablePropertiesMap": {
+      "description": "A map of key-value properties attached to the securable.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "additionalProperties": false,
+  "description": "A single entry within a directory listing.",
+  "properties": {
+    "file_size": {
+      "default": 0,
+      "type": "integer"
+    },
+    "is_directory": {
+      "default": false,
+      "type": "boolean"
+    },
+    "last_modified": {
+      "default": 0,
+      "type": "integer"
+    },
+    "path": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "title": "Directory Entry",
+  "type": "object",
+  "$defs": {
+    "portal.files.v1.DirectoryEntry.schema.json": {
+      "additionalProperties": false,
+      "description": "A single entry within a directory listing.",
+      "properties": {
+        "file_size": {
+          "default": 0,
+          "type": "integer"
+        },
+        "is_directory": {
+          "default": false,
+          "type": "boolean"
+        },
+        "last_modified": {
+          "default": 0,
+          "type": "integer"
+        },
+        "path": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "title": "Directory Entry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

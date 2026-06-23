@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "Name of Column.",
+      "type": "string"
+    },
+    "type_text": {
+      "description": "Full data type specification as SQL/catalogString text.",
+      "type": "string"
+    },
+    "type_json": {
+      "description": "Full data type specification, JSON-serialized.",
+      "type": "string"
+    },
+    "type_name": {
+      "$ref": "#/$defs/ColumnTypeName"
+    },
+    "type_precision": {
+      "description": "Digits of precision; required for DecimalTypes.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "type_scale": {
+      "description": "Digits to right of decimal; Required for DecimalTypes.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "type_interval_type": {
+      "description": "Format of IntervalType.",
+      "type": "string"
+    },
+    "position": {
+      "description": "Ordinal position of column (starting at position 0).",
+      "type": "integer",
+      "format": "int32"
+    },
+    "comment": {
+      "description": "User-provided free-form text description.",
+      "type": "string"
+    },
+    "nullable": {
+      "description": "Whether field may be Null.",
+      "type": "boolean",
+      "default": "true"
+    },
+    "partition_index": {
+      "description": "Partition index for column.",
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "$defs": {
+    "ColumnTypeName": {
+      "description": "Name of type (INT, STRUCT, MAP, etc.).",
+      "type": "string",
+      "enum": [
+        "BOOLEAN",
+        "BYTE",
+        "SHORT",
+        "INT",
+        "LONG",
+        "FLOAT",
+        "DOUBLE",
+        "DATE",
+        "TIMESTAMP",
+        "TIMESTAMP_NTZ",
+        "STRING",
+        "BINARY",
+        "DECIMAL",
+        "INTERVAL",
+        "ARRAY",
+        "STRUCT",
+        "MAP",
+        "VARIANT",
+        "CHAR",
+        "NULL",
+        "USER_DEFINED_TYPE",
+        "TABLE_TYPE"
+      ]
+    }
+  }
+}

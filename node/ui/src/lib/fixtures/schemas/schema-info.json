@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "Name of schema, relative to parent catalog.",
+      "type": "string"
+    },
+    "catalog_name": {
+      "description": "Name of parent catalog.",
+      "type": "string"
+    },
+    "comment": {
+      "description": "User-provided free-form text description.",
+      "type": "string"
+    },
+    "properties": {
+      "$ref": "#/$defs/SecurablePropertiesMap"
+    },
+    "full_name": {
+      "description": "Full name of schema, in form of __catalog_name__.__schema_name__.",
+      "type": "string"
+    },
+    "owner": {
+      "description": "Username of current owner of schema.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Time at which this schema was created, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "created_by": {
+      "description": "Username of schema creator.",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Time at which this schema was last modified, in epoch milliseconds.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "updated_by": {
+      "description": "Username of user who last modified schema.",
+      "type": "string"
+    },
+    "schema_id": {
+      "description": "Unique identifier for the schema.",
+      "type": "string"
+    },
+    "storage_root": {
+      "description": "Storage root URL for managed storage location of schema. This can be set when creating a\nschema. Example: s3://bucket/ucroot\n",
+      "type": "string"
+    },
+    "storage_location": {
+      "description": "Storage Location URL (full path) for managed storage location of schema. This is an\nautomatically generated unique path under storage_root. If it is absent, managed\nsecurables under this schema will try to use storage_location of the parent catalog\ninstead. Example: s3://bucket/ucroot/__unitystorage/schemas/{schema_id}\n",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "SecurablePropertiesMap": {
+      "description": "A map of key-value properties attached to the securable.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

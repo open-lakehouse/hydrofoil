@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "catalog_name": {
+      "type": "string",
+      "description": "The name of the catalog where the schema and the volume are"
+    },
+    "schema_name": {
+      "type": "string",
+      "description": "The name of the schema where the volume is"
+    },
+    "name": {
+      "type": "string",
+      "description": "The name of the volume"
+    },
+    "comment": {
+      "type": "string",
+      "maxLength": 65536,
+      "minLength": 1,
+      "description": "The comment attached to the volume"
+    },
+    "owner": {
+      "description": "The identifier of the user who owns the volume",
+      "type": "string"
+    },
+    "created_at": {
+      "type": "integer",
+      "format": "int64",
+      "description": "Time at which this volume was created, in epoch milliseconds."
+    },
+    "created_by": {
+      "description": "TThe identifier of the user who created the volume",
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "integer",
+      "format": "int64",
+      "description": "Time at which this volume was last modified, in epoch milliseconds."
+    },
+    "updated_by": {
+      "description": "The identifier of the user who updated the volume last time",
+      "type": "string"
+    },
+    "volume_id": {
+      "type": "string",
+      "description": "Unique identifier of the volume"
+    },
+    "volume_type": {
+      "$ref": "#/$defs/VolumeType"
+    },
+    "storage_location": {
+      "type": "string",
+      "description": "The storage location of the volume"
+    },
+    "full_name": {
+      "type": "string",
+      "description": "Full name of volume, in form of __catalog_name__.__schema_name__.__volume_name__."
+    }
+  },
+  "$defs": {
+    "VolumeType": {
+      "type": "string",
+      "enum": [
+        "MANAGED",
+        "EXTERNAL"
+      ],
+      "description": "The type of the volume"
+    }
+  }
+}

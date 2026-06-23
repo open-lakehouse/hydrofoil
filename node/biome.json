@@ -17,6 +17,7 @@
       "!**/node_modules",
       "!**/uc-client/src/uc-api.d.ts",
       "!**/ui/src/lib/forms/schemas",
+      "!**/ui/src/lib/fixtures/schemas",
       "!**/ui/src/gen"
     ]
   },
@@ -46,7 +47,12 @@
   },
   "overrides": [
     {
-      "includes": ["ui/src/routes/**", "**/vite.config.ts"],
+      "includes": [
+        "ui/src/routes/**",
+        "**/vite.config.ts",
+        "**/*.stories.tsx",
+        "ui/.storybook/**"
+      ],
       "linter": {
         "rules": {
           "style": {

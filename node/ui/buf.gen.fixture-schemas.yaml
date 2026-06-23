@@ -1,0 +1,28 @@
+# Generates JSON Schemas for the PORTAL domain models the UI renders (Tags +
+# Files), so the curated Storybook fixtures can be validated against the real
+# proto definitions in fixtures.test.ts.
+#
+# Scope note: this template covers ONLY the portal protos. The Unity Catalog
+# entity schemas come from the committed OpenAPI spec instead (see
+# scripts/gen-fixture-schemas.mjs) — that is the exact source the
+# `@open-lakehouse/uc-client` TS types are generated from, so it matches what the
+# UI actually consumes and needs no network/git access. Query/Ingest results are
+# opaque Arrow IPC `bytes` with no JSON shape, so they are validated by
+# round-tripping through apache-arrow in the test instead.
+#
+# Emits proto-bundle (snake_case field names, dependencies inlined under $defs),
+# post-processed and checked in by scripts/gen-fixture-schemas.mjs.
+version: v2
+inputs:
+  - directory: ../../crates/portal/proto
+    types:
+      - portal.tags.v1.TagPolicy
+      - portal.tags.v1.EntityTagAssignment
+      - portal.files.v1.FileMetadata
+      - portal.files.v1.DirectoryEntry
+      - portal.files.v1.DirectoryMetadata
+plugins:
+  - remote: buf.build/bufbuild/protoschema-jsonschema:v0.6.0
+    out: .gen-fixture-jsonschema
+    opt:
+      - target=proto-bundle

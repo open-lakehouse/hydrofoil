@@ -46,8 +46,13 @@ dist-ssr
 *.local
 .hydro/
 
-# buf protoschema-jsonschema intermediate output (see node/uc-client/scripts/gen-form-schemas.mjs)
+# buf protoschema-jsonschema intermediate output (see node/uc-client/scripts/gen-form-schemas.mjs
+# and node/ui/scripts/gen-fixture-schemas.mjs)
 .gen-jsonschema/
+.gen-fixture-jsonschema/
+
+# Storybook static build output (node/ui)
+storybook-static/
 
 # Local Unity Catalog dev data + rendered config (see scripts/dev-ui.sh)
 .uc-data/
