@@ -1073,6 +1073,44 @@ fn available_capabilities() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// An environment's currently-selected capability ids (for pre-checking the
+/// checklist). Empty for a fresh or UC-only environment.
+#[tauri::command]
+fn environment_capabilities(id: String) -> Result<Vec<String>, String> {
+    let envs = read_environments()?;
+    envs.into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.capabilities)
+        .ok_or_else(|| format!("unknown environment: {id}"))
+}
+
+/// Live per-service status (state + health) for a running environment, for the
+/// UI's Services panel. Best-effort: returns an empty list when Docker is
+/// unavailable or nothing is up. The UI polls this on a gentle interval.
+#[tauri::command]
+fn environment_service_status(id: String) -> Vec<modules::ServiceStatus> {
+    modules::service_status(&id)
+}
+
+/// The read-only config artifacts (generated compose + the static fragments and
+/// gateway/collector configs) for an environment's selected capabilities, for the
+/// teaching/inspection viewer. The compose is generated on demand, so this works
+/// before the environment has ever been started.
+#[tauri::command]
+fn environment_config_artifacts(id: String) -> Result<Vec<modules::ConfigArtifact>, String> {
+    let envs = read_environments()?;
+    let env = envs
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    let capabilities: Vec<env_modules::Capability> = env
+        .capabilities
+        .iter()
+        .filter_map(|c| env_modules::Capability::from_id(c))
+        .collect();
+    modules::config_artifacts(&capabilities)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -1128,6 +1166,9 @@ pub fn run() {
             docker_status,
             set_environment_capabilities,
             available_capabilities,
+            environment_capabilities,
+            environment_config_artifacts,
+            environment_service_status,
             connect_unary,
             connect_unary_proto,
             connect_stream,

@@ -11,10 +11,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveEnvironment,
+  Capability,
+  ConfigArtifact,
   Environment,
   EnvironmentHost,
   KeyProvider,
   KeyStatus,
+  ServiceStatus,
 } from "@/lib/client/environments";
 import { HOME_VOLUME } from "@/lib/editor/volumes";
 
@@ -54,4 +57,14 @@ export const tauriEnvironmentHost: EnvironmentHost = {
     invoke<KeyStatus>("environment_key_status", { id }),
   configureKey: (id: string, provider: KeyProvider) =>
     invoke<KeyStatus>("configure_environment_key", { id, provider }),
+  dockerStatus: () => invoke<boolean>("docker_status"),
+  availableCapabilities: () => invoke<Capability[]>("available_capabilities"),
+  environmentCapabilities: (id: string) =>
+    invoke<string[]>("environment_capabilities", { id }),
+  setEnvironmentCapabilities: (id: string, capabilities: string[]) =>
+    invoke<void>("set_environment_capabilities", { id, capabilities }),
+  configArtifacts: (id: string) =>
+    invoke<ConfigArtifact[]>("environment_config_artifacts", { id }),
+  serviceStatus: (id: string) =>
+    invoke<ServiceStatus[]>("environment_service_status", { id }),
 };

@@ -170,3 +170,186 @@ fn start_compose(
     Ok(())
 }
 
+/// Live status of one container in an environment's compose project.
+#[derive(serde::Serialize)]
+pub struct ServiceStatus {
+    /// The compose service name (e.g. `mlflow`, `db`, `jaeger`).
+    pub service: String,
+    /// Compose state: `running`, `exited`, `restarting`, etc.
+    pub state: String,
+    /// Health when the service declares a healthcheck: `healthy`, `starting`,
+    /// `unhealthy`, or empty when it has none.
+    pub health: String,
+    /// Whether this is the shared, app-level telemetry collector (rendered as
+    /// "shared" in the UI) rather than a per-environment service.
+    pub shared: bool,
+}
+
+/// Live per-service status for a running environment, for the UI's Services panel.
+/// Reads `docker compose ps` for the env's project plus the shared telemetry
+/// project. Best-effort: returns an empty list if Docker is unavailable or the
+/// projects aren't up (the UI then shows nothing rather than erroring).
+pub fn service_status(env_id: &str) -> Vec<ServiceStatus> {
+    let mut all = compose_ps(&compose_project(env_id), false);
+    // The shared collector is its own app-level project; surface it too so the
+    // user sees the full picture of what their environment talks to.
+    all.extend(compose_ps(crate::telemetry::TELEMETRY_PROJECT, true));
+    all
+}
+
+/// Run `docker compose -p <project> ps --format json` and parse per-service
+/// status. Compose emits either a JSON array or newline-delimited JSON objects
+/// depending on version; handle both. Best-effort — any failure yields an empty
+/// list.
+fn compose_ps(project: &str, shared: bool) -> Vec<ServiceStatus> {
+    let Ok(output) = std::process::Command::new("docker")
+        .args(["compose", "-p", project, "ps", "--format", "json", "--all"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    // Each line is a JSON object (newline-delimited); some compose versions emit
+    // a single array. Parse line-by-line, falling back to array parsing.
+    let mut rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if rows.is_empty() {
+        if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(text.trim()) {
+            rows = arr;
+        }
+    }
+
+    rows.into_iter()
+        .filter_map(|row| {
+            let service = row.get("Service")?.as_str()?.to_string();
+            let state = row
+                .get("State")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            // Compose reports health inside the `Health` field (or empty).
+            let health = row
+                .get("Health")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(ServiceStatus {
+                service,
+                state,
+                health,
+                shared,
+            })
+        })
+        .collect()
+}
+
+/// A read-only config artifact for the teaching/inspection viewer.
+#[derive(serde::Serialize)]
+pub struct ConfigArtifact {
+    /// Stable id (used as the Monaco model key / picker value).
+    pub id: String,
+    /// Human-readable label for the picker.
+    pub label: String,
+    /// Short one-line description of what the artifact is / does.
+    pub description: String,
+    /// Editor language id (`yaml` for everything we surface today).
+    pub language: String,
+    /// The file contents (generated or read from disk).
+    pub content: String,
+}
+
+/// Build the curated list of config artifacts for an environment's selected
+/// capabilities — for the read-only viewer. The generated compose is produced
+/// **on demand** (illustrative `LaunchContext`, no side effects), so it's
+/// viewable before the environment has ever started; the static fragments + the
+/// gateway/collector configs are read from the repo `environments/` tree. All
+/// file reads are confined to that tree (no arbitrary paths cross from the UI).
+pub fn config_artifacts(
+    capabilities: &[env_modules::Capability],
+) -> Result<Vec<ConfigArtifact>, String> {
+    let graph = env_modules::resolve_capabilities(capabilities)
+        .map_err(|e| format!("resolving capabilities: {e}"))?;
+
+    let mut artifacts = Vec::new();
+
+    // 1. The generated compose for this capability set — the centerpiece. Use an
+    //    illustrative context (placeholder UC port; collector shown when
+    //    observability is opted in) so it renders the real shape pre-start.
+    let observability = env_modules::Capability::wants_observability(capabilities);
+    let ctx = launch_context(None, observability);
+    let ComposeArtifacts { compose_yaml, .. } = env_modules::generate_compose(&graph, &ctx);
+    if !compose_yaml.is_empty() {
+        artifacts.push(ConfigArtifact {
+            id: "generated-compose".into(),
+            label: "Generated compose".into(),
+            description: "The Docker Compose file env-modules generates for the \
+                          selected capabilities (services + their dependencies)."
+                .into(),
+            language: "yaml".into(),
+            content: compose_yaml,
+        });
+    }
+
+    // 2. Each Docker module's self-contained fragment, in startup order.
+    let fragments = fragments_dir();
+    for module in graph.docker_modules() {
+        #[allow(irrefutable_let_patterns)]
+        let env_modules::ModuleKind::DockerService { fragment } = &module.kind
+        else {
+            continue;
+        };
+        let path = fragments.join(fragment);
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {path:?}: {e}"))?;
+        artifacts.push(ConfigArtifact {
+            id: format!("fragment-{}", module.id),
+            label: format!("{} ({fragment})", module.name),
+            description: format!("Service fragment for the {} module.", module.name),
+            language: "yaml".into(),
+            content,
+        });
+    }
+
+    // 3. The desktop Envoy gateway config (present whenever the gateway runs).
+    if graph.docker_modules().iter().any(|m| m.id == "envoy") {
+        let path = environments_dir().join("config/tauri/envoy.yaml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            artifacts.push(ConfigArtifact {
+                id: "envoy-config".into(),
+                label: "Envoy gateway (envoy.yaml)".into(),
+                description: "The gateway config: routes to the containerised \
+                              services and (when observability is on) exports its \
+                              own traces."
+                    .into(),
+                language: "yaml".into(),
+                content,
+            });
+        }
+    }
+
+    // 4. The shared telemetry collector fragment, when observability is opted in.
+    if observability {
+        let path = fragments.join("jaeger.yaml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            artifacts.push(ConfigArtifact {
+                id: "jaeger".into(),
+                label: "Shared collector (jaeger.yaml)".into(),
+                description: "The app-level Jaeger collector all environments' \
+                              traces are sent to."
+                    .into(),
+                language: "yaml".into(),
+                content,
+            });
+        }
+    }
+
+    Ok(artifacts)
+}
+

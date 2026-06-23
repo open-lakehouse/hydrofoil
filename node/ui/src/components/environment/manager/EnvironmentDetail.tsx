@@ -45,11 +45,15 @@ import {
   environmentStatus,
   statusLabel,
 } from "../environmentStatus";
+import { CapabilitiesCard } from "./CapabilitiesCard";
+import { ConfigViewer } from "./ConfigViewer";
+import { ServicesPanel } from "./ServicesPanel";
 
-type TabId = "overview" | "external_locations" | "credentials";
+type TabId = "overview" | "config" | "external_locations" | "credentials";
 
 const TABS: { id: TabId; label: string; adminOnly: boolean }[] = [
   { id: "overview", label: "Overview", adminOnly: false },
+  { id: "config", label: "Config", adminOnly: false },
   { id: "external_locations", label: "External Locations", adminOnly: true },
   { id: "credentials", label: "Credentials", adminOnly: true },
 ];
@@ -92,11 +96,16 @@ export function EnvironmentDetail({
   // clears the banner without a refetch.
   const keyStatus = useKeyStatus(selected?.id ?? null);
 
-  // If the selected tab requires a running environment but it is no longer
-  // running (e.g. it was just stopped while viewing Credentials), fall back to
-  // Overview so the pane never shows a disabled tab's content.
+  // Docker availability gates the capability checklist (all capabilities need
+  // Docker today) and drives the install-hint banner.
+  const docker = useDockerStatus();
+
+  // If the selected tab is an admin tab requiring a running environment but it is
+  // no longer running (e.g. stopped while viewing Credentials), fall back to
+  // Overview. Non-admin tabs (Config) stay available when idle.
   useEffect(() => {
-    if (!isRunning && tab !== "overview") setTab("overview");
+    const current = TABS.find((t) => t.id === tab);
+    if (current?.adminOnly && !isRunning) setTab("overview");
   }, [isRunning, tab]);
 
   if (!selected) {
@@ -143,6 +152,8 @@ export function EnvironmentDetail({
         </p>
       ) : null}
 
+      {docker === false ? <DockerBanner /> : null}
+
       <div className="flex gap-1 border-b px-2">
         {TABS.map((t) => {
           const disabled = t.adminOnly && !isRunning;
@@ -187,7 +198,10 @@ export function EnvironmentDetail({
             running={running}
             status={status}
             keyStatus={keyStatus}
+            dockerAvailable={docker !== false}
           />
+        ) : tab === "config" ? (
+          <ConfigViewer environmentId={selected.id} />
         ) : tab === "external_locations" ? (
           <StorageTable kind="external_location" />
         ) : (
@@ -279,11 +293,13 @@ function Overview({
   running,
   status,
   keyStatus,
+  dockerAvailable,
 }: {
   selected: Environment;
   running: ActiveEnvironment | null;
   status: EnvironmentStatus;
   keyStatus: KeyStatusState;
+  dockerAvailable: boolean;
 }) {
   const isRunning = status === "running";
   return (
@@ -300,6 +316,12 @@ function Overview({
         environmentId={selected.id}
         editable={!isRunning}
         keyStatus={keyStatus}
+      />
+      {isRunning ? <ServicesPanel environmentId={selected.id} /> : null}
+      <CapabilitiesCard
+        environmentId={selected.id}
+        editable={!isRunning}
+        dockerAvailable={dockerAvailable}
       />
     </div>
   );
@@ -337,6 +359,80 @@ function useKeyStatus(environmentId: string | null): KeyStatusState {
   }, [host, environmentId]);
 
   return { status, setStatus };
+}
+
+// Whether the host's container runtime is available. `null` while the (single)
+// probe is in flight. Drives the capability checklist's enabled state and the
+// install-hint banner.
+function useDockerStatus(): boolean | null {
+  const host = getEnvironmentHost();
+  const [available, setAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    host
+      .dockerStatus()
+      .then((ok) => {
+        if (!cancelled) setAvailable(ok);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
+  return available;
+}
+
+// Non-blocking banner shown when Docker isn't available: capabilities need it.
+// Mirrors the KEK banner; an expandable details section gives OS-aware install
+// hints (Homebrew on macOS) without being verbose.
+function DockerBanner() {
+  const [open, setOpen] = useState(false);
+  const mac = isMac();
+  return (
+    <div className="border-b bg-destructive/5 px-4 py-1.5 text-sm text-destructive">
+      <div className="flex items-start gap-1.5">
+        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span className="flex-1">
+          Docker isn't running. Capabilities (MLflow, lineage, …) need it.
+        </span>
+        <button
+          type="button"
+          className="shrink-0 underline underline-offset-2 hover:no-underline"
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "Hide" : "How to install"}
+        </button>
+      </div>
+      {open ? (
+        <div className="mt-1.5 ml-5 space-y-1 text-xs text-muted-foreground">
+          {mac ? (
+            <>
+              <p>Install Docker Desktop, then start it:</p>
+              <code className="block rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">
+                brew install --cask docker
+              </code>
+            </>
+          ) : (
+            <p>
+              Install Docker Desktop from{" "}
+              <span className="font-mono">docker.com/get-started</span> and
+              start it.
+            </p>
+          )}
+          <p>Then reopen this environment.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Best-effort OS sniff for the install hint (no Tauri import in node/ui — we read
+// the UA, which is sufficient to pick the macOS vs. generic message).
+function isMac(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 }
 
 // The credential-encryption (KEK) status card, with a configure affordance.

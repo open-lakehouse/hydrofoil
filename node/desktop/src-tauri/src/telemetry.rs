@@ -25,7 +25,7 @@ use crate::supervisor::compose_down;
 
 /// The fixed, app-scoped Compose project name for the shared collector. Distinct
 /// from any environment's `ol-<id>` project so it survives env switches.
-const TELEMETRY_PROJECT: &str = "ol-telemetry";
+pub(crate) const TELEMETRY_PROJECT: &str = "ol-telemetry";
 
 /// App-level shared telemetry state, managed separately from per-environment
 /// processes. Holds the global OTLP guard (kept alive for the app's lifetime;
