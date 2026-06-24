@@ -32,8 +32,9 @@ Standard `cargo build` / `cargo test` / `cargo clippy` / `cargo fmt` apply.
 
 The commit-message contract and signing flow are machine-wide — see
 `~/.claude/CLAUDE.md`. Use the `/commit` skill (`.claude/skills/commit/SKILL.md`):
-commit **unsigned** as you go, **sign the branch once before opening a PR**, and
-prefer small, well-scoped conventional commits (PR titles are commitlint-checked).
+commit **unsigned** as you go, push and open the PR without waiting on signing,
+then **sign once at the end** with a single combined sign + `--force-with-lease`
+push. Prefer small, well-scoped conventional commits (PR titles are commitlint-checked).
 
 A **pre-commit hook** (`.pre-commit-config.yaml`) runs on every commit: typos,
 ruff format/check, cargo-machete (unused deps), rustfmt `--check`, `cargo check
