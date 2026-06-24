@@ -53,17 +53,25 @@ cargo-machete, rustfmt `--check`, `cargo check --workspace`, `buf format`) and c
 rewrite files or abort. If it rewrites files, re-stage and retry the commit once.
 If it still fails, surface the output and stop — don't loop.
 
-### Step 4 — Note the unsigned state
-Tell the user the commit(s) are unsigned and will be signed at the pre-PR gate.
-Don't offer a re-sign after each commit.
+### Step 4 — Push and open the PR (don't wait on signing)
+Commit unsigned, then **push and open the PR in the same pass** — don't stop to
+wait for the GPG PIN mid-flow. Tell the user the commits are unsigned and will be
+signed in one bulk step at the end. Don't offer a re-sign after each commit.
 
-## Signing — before pushing / opening a PR
+## Signing — one bulk step at the end (after the PR is open)
 
-Surface the command (don't run it); the user enters the GPG PIN once.
+Signing rewrites the commits (amend), so the already-pushed branch needs a
+`--force-with-lease` re-push. That's safe on a solo feature branch and preferred
+over splitting work across handoffs. Surface ONE combined command for the user to
+run (one GPG PIN); signatures aren't required to merge, so this can happen any
+time before merge:
 
-- One commit (HEAD): `git commit --amend --no-edit -S`
+- One commit (HEAD):
+  ```bash
+  git commit --amend --no-edit -S && git push --force-with-lease
+  ```
 - Range (normal case):
   ```bash
-  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)"
+  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)" && git push --force-with-lease
   ```
 - Verify: `git log --format='%h %G? %s' main..HEAD` — every commit shows `G`.
