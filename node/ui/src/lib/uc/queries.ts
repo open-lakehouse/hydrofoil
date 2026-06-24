@@ -26,6 +26,14 @@ import type {
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { $api, fetchClient } from "@/lib/api";
+import { useUnityCatalog } from "./context";
+
+// `$api` / `fetchClient` (imported above) are the DEFAULT client's members. The
+// list/mutation HOOKS read the injected client from `useUnityCatalog()` instead,
+// so a host's `<UnityCatalogProvider client={…}>` redirects every request. The
+// non-hook helpers below (`*DetailQuery`, `prefetch*`) intentionally bind the
+// default client: query-key derivation is client-independent, so the keys they
+// produce match the injected client's hooks and caches stay aligned.
 
 const PAGE_SIZE = 100;
 
@@ -169,6 +177,7 @@ export function externalLocationDetailQuery(name: string) {
 // ── List hooks (infinite/cursor pagination + list->detail seeding) ──────────
 
 export function useCatalogs() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery("get", "/catalogs", catalogsInit, {
     pageParamName: "page_token",
@@ -192,6 +201,7 @@ export function useCatalogs() {
 }
 
 export function useSchemas(catalogName: string | undefined) {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",
@@ -222,6 +232,7 @@ export function useTables(
   catalogName: string | undefined,
   schemaName: string | undefined,
 ) {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",
@@ -252,6 +263,7 @@ export function useVolumes(
   catalogName: string | undefined,
   schemaName: string | undefined,
 ) {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",
@@ -282,6 +294,7 @@ export function useFunctions(
   catalogName: string | undefined,
   schemaName: string | undefined,
 ) {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",
@@ -312,6 +325,7 @@ export function useModels(
   catalogName: string | undefined,
   schemaName: string | undefined,
 ) {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",
@@ -346,6 +360,7 @@ export function useModels(
 // but follow the same infinite-query + detail-seeding pattern.
 
 export function useCredentials() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery("get", "/credentials", credentialsInit, {
     pageParamName: "page_token",
@@ -369,6 +384,7 @@ export function useCredentials() {
 }
 
 export function useExternalLocations() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const query = $api.useInfiniteQuery(
     "get",

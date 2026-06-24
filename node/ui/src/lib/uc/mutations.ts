@@ -12,7 +12,7 @@
 
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { $api } from "@/lib/api";
+import { useUnityCatalog } from "./context";
 import {
   catalogDetailQuery,
   credentialDetailQuery,
@@ -172,6 +172,7 @@ export function removeCatalogDescendants(
 
 /** Create a catalog, then refresh the catalog list. */
 export function useCreateCatalog() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/catalogs", {
     onSuccess: () => invalidateCatalogs(queryClient),
@@ -180,6 +181,7 @@ export function useCreateCatalog() {
 
 /** Create a schema, then refresh its parent catalog's schema list. */
 export function useCreateSchema() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/schemas", {
     onSuccess: (data) => {
@@ -190,6 +192,7 @@ export function useCreateSchema() {
 
 /** Create a volume, then refresh its parent schema's volume list. */
 export function useCreateVolume() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/volumes", {
     onSuccess: (data) => {
@@ -202,6 +205,7 @@ export function useCreateVolume() {
 
 /** Create a registered model, then refresh its parent schema's model list. */
 export function useCreateRegisteredModel() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/models", {
     onSuccess: (data) => {
@@ -266,6 +270,7 @@ function restore(queryClient: QueryClient, snapshots: InfiniteListSnapshot[]) {
 
 /** Update a catalog's comment / name. */
 export function useUpdateCatalog() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/catalogs/{name}", {
     onSuccess: (data) => {
@@ -279,6 +284,7 @@ export function useUpdateCatalog() {
 
 /** Update a schema's comment / name. */
 export function useUpdateSchema() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/schemas/{full_name}", {
     onSuccess: (data) => {
@@ -289,6 +295,7 @@ export function useUpdateSchema() {
 
 /** Update a volume's comment / name. */
 export function useUpdateVolume() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/volumes/{name}", {
     onSuccess: (data) => {
@@ -307,6 +314,7 @@ export function useUpdateVolume() {
 
 /** Update a registered model's comment / name. */
 export function useUpdateRegisteredModel() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/models/{full_name}", {
     onSuccess: (data) => {
@@ -327,6 +335,7 @@ export function useUpdateRegisteredModel() {
 
 /** Delete a catalog (and purge its cached descendants). */
 export function useDeleteCatalog() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("delete", "/catalogs/{name}", {
     onMutate: ({ params }) => {
@@ -352,6 +361,7 @@ export function useDeleteCatalog() {
 
 /** Delete a schema. */
 export function useDeleteSchema() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("delete", "/schemas/{full_name}", {
     onMutate: ({ params }) => {
@@ -407,6 +417,7 @@ function leafDeleteHandlers(
 
 /** Delete a table. */
 export function useDeleteTable() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const h = leafDeleteHandlers(queryClient, "/tables", "tables");
   return $api.useMutation("delete", "/tables/{full_name}", {
@@ -418,6 +429,7 @@ export function useDeleteTable() {
 
 /** Delete a volume. */
 export function useDeleteVolume() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const h = leafDeleteHandlers(queryClient, "/volumes", "volumes");
   return $api.useMutation("delete", "/volumes/{name}", {
@@ -429,6 +441,7 @@ export function useDeleteVolume() {
 
 /** Delete a function. */
 export function useDeleteFunction() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const h = leafDeleteHandlers(queryClient, "/functions", "functions");
   return $api.useMutation("delete", "/functions/{name}", {
@@ -440,6 +453,7 @@ export function useDeleteFunction() {
 
 /** Delete a registered model. */
 export function useDeleteRegisteredModel() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   const h = leafDeleteHandlers(queryClient, "/models", "registered_models");
   return $api.useMutation("delete", "/models/{full_name}", {
@@ -453,6 +467,7 @@ export function useDeleteRegisteredModel() {
 
 /** Create a storage credential, then refresh the credential list. */
 export function useCreateCredential() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/credentials", {
     onSuccess: () => invalidateCredentials(queryClient),
@@ -461,6 +476,7 @@ export function useCreateCredential() {
 
 /** Update a credential's comment / IAM role / name. */
 export function useUpdateCredential() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/credentials/{name}", {
     onSuccess: (data) => {
@@ -477,6 +493,7 @@ export function useUpdateCredential() {
 
 /** Delete a credential. */
 export function useDeleteCredential() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("delete", "/credentials/{name}", {
     onMutate: ({ params }) => {
@@ -503,6 +520,7 @@ export function useDeleteCredential() {
 
 /** Create an external location, then refresh the external-location list. */
 export function useCreateExternalLocation() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("post", "/external-locations", {
     onSuccess: () => invalidateExternalLocations(queryClient),
@@ -511,6 +529,7 @@ export function useCreateExternalLocation() {
 
 /** Update an external location's url / credential / comment / name. */
 export function useUpdateExternalLocation() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("patch", "/external-locations/{name}", {
     onSuccess: (data) => {
@@ -527,6 +546,7 @@ export function useUpdateExternalLocation() {
 
 /** Delete an external location. */
 export function useDeleteExternalLocation() {
+  const { $api } = useUnityCatalog();
   const queryClient = useQueryClient();
   return $api.useMutation("delete", "/external-locations/{name}", {
     onMutate: ({ params }) => {
