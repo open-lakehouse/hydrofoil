@@ -1,8 +1,5 @@
 import { useState } from "react";
 import { toast } from "sonner";
-
-import type { EditRequest } from "@/components/catalog/dialog-types";
-import { useCatalogSelection } from "@/components/catalog/selection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,13 +10,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { parseUcError } from "@/lib/uc/errors";
+import type { EditRequest } from "./dialog-types";
+import { useCatalogSelection } from "./selection";
+import { parseUcError } from "./uc/errors";
 import {
   useUpdateCatalog,
   useUpdateRegisteredModel,
   useUpdateSchema,
   useUpdateVolume,
-} from "@/lib/uc/mutations";
+} from "./uc/mutations";
 
 const TITLES: Record<EditRequest["kind"], string> = {
   catalog: "Edit catalog",

@@ -15,8 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCatalogs, useSchemas, useVolumes } from "@/features/unity-catalog";
 import { ucVolume, type Volume } from "@/lib/editor/volumes";
-import { useCatalogs, useSchemas, useVolumes } from "@/lib/uc/queries";
 
 // A small catalog → schema → volume picker. On confirm, hands back the chosen
 // volume as a `Volume`. Reuses the existing UC list hooks (useCatalogs /

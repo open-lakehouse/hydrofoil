@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 
-import { useActiveEnvironment } from "@/components/environment/ActiveEnvironmentContext";
+import { useEnvironmentScopeId } from "./env-seam";
 import type { ObjectKind } from "./types";
 
 export const nodeId = {
@@ -57,7 +57,7 @@ function persist(envId: string, ids: Set<string>) {
 }
 
 export function ExpansionProvider({ children }: { children: ReactNode }) {
-  const envId = useActiveEnvironment().id;
+  const envId = useEnvironmentScopeId();
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     loadInitial(envId),
   );

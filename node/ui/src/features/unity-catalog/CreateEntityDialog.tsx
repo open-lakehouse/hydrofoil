@@ -2,11 +2,8 @@ import type { VolumeType } from "@open-lakehouse/uc-client";
 import type { RJSFSchema, UiSchema } from "@rjsf/utils";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-
-import type { CreateRequest } from "@/components/catalog/dialog-types";
 import { SchemaForm } from "@/components/forms/SchemaForm";
 import { cloneSchema, formSchemas } from "@/components/forms/schemas";
-import { StorageLocationPicker } from "@/components/storage/StorageLocationPicker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,13 +14,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { parseUcError } from "@/lib/uc/errors";
+import type { CreateRequest } from "./dialog-types";
+import { StorageLocationPicker } from "./storage/StorageLocationPicker";
+import { parseUcError } from "./uc/errors";
 import {
   useCreateCatalog,
   useCreateRegisteredModel,
   useCreateSchema,
   useCreateVolume,
-} from "@/lib/uc/mutations";
+} from "./uc/mutations";
 
 export type { CreateRequest };
 

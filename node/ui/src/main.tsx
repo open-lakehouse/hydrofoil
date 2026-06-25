@@ -6,9 +6,9 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UnityCatalogProvider } from "@/features/unity-catalog";
 import { defaultUnityCatalogClient } from "@/lib/api";
 import { createQueryClient } from "@/lib/query-client";
-import { UnityCatalogProvider } from "@/lib/uc/context";
 import { routeTree } from "./routeTree";
 import "./app/globals.css";
 

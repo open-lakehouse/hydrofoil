@@ -20,12 +20,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { parseUcError } from "@/lib/uc/errors";
+import { parseUcError } from "../uc/errors";
 import {
   useCreateExternalLocation,
   useUpdateExternalLocation,
-} from "@/lib/uc/mutations";
-import { externalLocationDetailQuery, useCredentials } from "@/lib/uc/queries";
+} from "../uc/mutations";
+import { externalLocationDetailQuery, useCredentials } from "../uc/queries";
 
 import { CredentialDialog } from "./CredentialDialog";
 

@@ -1,9 +1,6 @@
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-
-import type { DeleteRequest } from "@/components/catalog/dialog-types";
-import { useCatalogSelection } from "@/components/catalog/selection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,7 +9,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { parseUcError } from "@/lib/uc/errors";
+import type { DeleteRequest } from "./dialog-types";
+import { useCatalogSelection } from "./selection";
+import { parseUcError } from "./uc/errors";
 import {
   useDeleteCatalog,
   useDeleteCredential,
@@ -22,7 +21,7 @@ import {
   useDeleteSchema,
   useDeleteTable,
   useDeleteVolume,
-} from "@/lib/uc/mutations";
+} from "./uc/mutations";
 
 // Catalogs / schemas / models accept a `force` flag to delete when non-empty.
 const FORCEABLE = new Set<DeleteRequest["kind"]>([

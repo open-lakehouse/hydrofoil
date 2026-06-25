@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { externalLocationDetailQuery } from "@/lib/uc/queries";
+import { externalLocationDetailQuery } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";

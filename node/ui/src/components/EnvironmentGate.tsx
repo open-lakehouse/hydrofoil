@@ -7,11 +7,11 @@ import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnviro
 import { EnvironmentSwitcher } from "@/components/environment/EnvironmentSwitcher";
 import { EnvironmentManager } from "@/components/environment/manager/EnvironmentManager";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { parseUcError } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
-import { parseUcError } from "@/lib/uc/errors";
 
 // The persistent top header — always visible, over both the picker and the app.
 // In the app view (on managed hosts) the active-environment switcher sits to the

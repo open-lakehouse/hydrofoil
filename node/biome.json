@@ -82,6 +82,26 @@
       }
     },
     {
+      "includes": ["ui/src/**", "!ui/src/features/unity-catalog/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@/features/unity-catalog/**"],
+                    "message": "Import from the unity-catalog barrel '@/features/unity-catalog', not its internals."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["ui/src/features/data-grid/**"],
       "linter": {
         "rules": {

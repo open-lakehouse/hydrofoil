@@ -13,15 +13,8 @@ import {
   Table2,
 } from "lucide-react";
 import type { ReactNode } from "react";
-
-import {
-  useFunctions,
-  useModels,
-  useTables,
-  useVolumes,
-} from "@/lib/uc/queries";
-
 import type { ObjectKind } from "./types";
+import { useFunctions, useModels, useTables, useVolumes } from "./uc/queries";
 
 export interface GroupDef {
   kind: ObjectKind;

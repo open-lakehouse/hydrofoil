@@ -13,12 +13,8 @@ import {
   useState,
 } from "react";
 
-import { CreateEntityDialog } from "@/components/CreateEntityDialog";
-import { DeleteEntityDialog } from "@/components/DeleteEntityDialog";
-import { EditEntityDialog } from "@/components/EditEntityDialog";
-import { CredentialDialog } from "@/components/storage/CredentialDialog";
-import { ExternalLocationDialog } from "@/components/storage/ExternalLocationDialog";
-
+import { CreateEntityDialog } from "./CreateEntityDialog";
+import { DeleteEntityDialog } from "./DeleteEntityDialog";
 import type {
   AnyCreateRequest,
   AnyEditRequest,
@@ -26,6 +22,9 @@ import type {
   DeleteRequest,
   EditRequest,
 } from "./dialog-types";
+import { EditEntityDialog } from "./EditEntityDialog";
+import { CredentialDialog } from "./storage/CredentialDialog";
+import { ExternalLocationDialog } from "./storage/ExternalLocationDialog";
 
 export type {
   AnyCreateRequest,

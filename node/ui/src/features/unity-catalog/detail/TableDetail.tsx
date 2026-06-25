@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Columns3 } from "lucide-react";
 
-import { tableDetailQuery } from "@/lib/uc/queries";
+import { tableDetailQuery } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";

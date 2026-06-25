@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useExternalLocations } from "@/lib/uc/queries";
+import { useExternalLocations } from "../uc/queries";
 
 // Radix Select can't use an empty-string value, so the modes need sentinels.
 const MANAGED = "__managed__";

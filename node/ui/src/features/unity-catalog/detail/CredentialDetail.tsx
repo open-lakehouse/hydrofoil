@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { credentialDetailQuery } from "@/lib/uc/queries";
+import { credentialDetailQuery } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";

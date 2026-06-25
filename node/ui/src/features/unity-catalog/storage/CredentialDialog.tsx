@@ -22,9 +22,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { parseUcError } from "@/lib/uc/errors";
-import { useCreateCredential, useUpdateCredential } from "@/lib/uc/mutations";
-import { credentialDetailQuery } from "@/lib/uc/queries";
+import { parseUcError } from "../uc/errors";
+import { useCreateCredential, useUpdateCredential } from "../uc/mutations";
+import { credentialDetailQuery } from "../uc/queries";
 
 import { CopyField } from "./CopyField";
 

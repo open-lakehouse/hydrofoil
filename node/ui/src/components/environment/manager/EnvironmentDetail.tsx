@@ -16,8 +16,6 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Meta, MetaGrid } from "@/components/catalog/detail/Meta";
-import { StorageTable } from "@/components/storage/StorageTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +29,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Meta, MetaGrid, StorageTable } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   type Environment,

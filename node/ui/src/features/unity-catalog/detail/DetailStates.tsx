@@ -1,4 +1,4 @@
-import { parseUcError } from "@/lib/uc/errors";
+import { parseUcError } from "../uc/errors";
 
 export function DetailStates({
   isLoading,
