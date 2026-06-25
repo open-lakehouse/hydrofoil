@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { EnvironmentGate } from "@/components/EnvironmentGate";
 import { ErrorFallback } from "@/components/ErrorBoundary";
-import { prefetchCatalogs } from "@/lib/uc/queries";
+import { prefetchCatalogs } from "@/features/unity-catalog";
 
 export interface RouterContext {
   queryClient: QueryClient;

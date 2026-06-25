@@ -6,6 +6,8 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UnityCatalogProvider } from "@/features/unity-catalog";
+import { defaultUnityCatalogClient } from "@/lib/api";
 import { createQueryClient } from "@/lib/query-client";
 import { routeTree } from "./routeTree";
 import "./app/globals.css";
@@ -30,18 +32,20 @@ if (!rootElement) throw new Error("Root element #root not found");
 createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider delayDuration={300}>
-          {/* Whole-app safety net: a render fault degrades to a recoverable
-              screen instead of a blank page. The router supplies a finer-grained
-              per-route fallback (see routeTree.tsx); this catches anything above
-              the router. Toaster sits outside so toasts survive a faulted tree. */}
-          <ErrorBoundary>
-            <RouterProvider router={router} />
-          </ErrorBoundary>
-          <Toaster position="bottom-right" />
-        </TooltipProvider>
-      </ThemeProvider>
+      <UnityCatalogProvider client={defaultUnityCatalogClient}>
+        <ThemeProvider>
+          <TooltipProvider delayDuration={300}>
+            {/* Whole-app safety net: a render fault degrades to a recoverable
+                screen instead of a blank page. The router supplies a finer-grained
+                per-route fallback (see routeTree.tsx); this catches anything above
+                the router. Toaster sits outside so toasts survive a faulted tree. */}
+            <ErrorBoundary>
+              <RouterProvider router={router} />
+            </ErrorBoundary>
+            <Toaster position="bottom-right" />
+          </TooltipProvider>
+        </ThemeProvider>
+      </UnityCatalogProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

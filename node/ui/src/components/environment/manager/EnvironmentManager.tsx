@@ -13,7 +13,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useState } from "react";
-import { CatalogDialogsProvider } from "@/components/catalog/dialogs";
+import { CatalogDialogsProvider } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   type Environment,

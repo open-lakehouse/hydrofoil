@@ -15,7 +15,7 @@
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { parseUcError } from "@/lib/uc/errors";
+import { parseUcError } from "@/features/unity-catalog";
 
 interface Props {
   children: ReactNode;

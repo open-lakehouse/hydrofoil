@@ -12,9 +12,8 @@ import {
   Plus,
 } from "lucide-react";
 import { useMemo } from "react";
-
-import { ListStates, TreeRow } from "@/components/catalog/TreeRow";
 import { Button } from "@/components/ui/button";
+import { ListStates, TreeRow } from "@/features/unity-catalog";
 import { type EditorLanguage, languageOf } from "@/lib/editor/language";
 import { useDirectory } from "@/lib/files/queries";
 import type { FileEntry } from "@/lib/files/store";

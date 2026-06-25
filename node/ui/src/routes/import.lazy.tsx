@@ -8,11 +8,11 @@
 //
 // Developed in isolation as a dedicated page; a later phase can surface it from
 // the catalog view.
-import { createLazyRoute } from "@tanstack/react-router";
+
 import { useQueryClient } from "@tanstack/react-query";
+import { createLazyRoute } from "@tanstack/react-router";
 import { Loader2, TableProperties, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
-import { DataGrid } from "@/components/data-grid/data-grid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,19 +23,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowResultStore } from "@/lib/query/arrowResultStore";
+import { ArrowResultStore, DataGrid } from "@/features/data-grid";
+import {
+  invalidateTables,
+  useCatalogs,
+  useSchemas,
+} from "@/features/unity-catalog";
 import { ingestTable, previewFile } from "@/lib/ingest/client";
 import { ingestSupported, pickFile } from "@/lib/ingest/registry";
 import {
   COLUMN_TYPES,
   type ColumnType,
-  type EditableColumn,
   columnsFromSchemaIpc,
+  type EditableColumn,
   schemaIpcFromColumns,
   validateColumns,
 } from "@/lib/ingest/schema";
-import { invalidateTables } from "@/lib/uc/mutations";
-import { useCatalogs, useSchemas } from "@/lib/uc/queries";
 
 export const Route = createLazyRoute("/import")({
   component: ImportPage,
