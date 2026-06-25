@@ -1,7 +1,7 @@
 import type { DataType } from "apache-arrow";
 import { memo } from "react";
-import { formatCell } from "@/lib/query/cellFormatters";
 import { cn } from "@/lib/utils";
+import { formatCell } from "./lib/cellFormatters";
 
 interface DataGridCellProps {
   value: unknown;

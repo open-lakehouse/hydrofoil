@@ -6,8 +6,8 @@
 // in-flight stream.
 import { Loader2, Play, X } from "lucide-react";
 import { useSyncExternalStore } from "react";
-import { DataGrid } from "@/components/data-grid/data-grid";
 import { Button } from "@/components/ui/button";
+import { DataGrid } from "@/features/data-grid";
 import type { TabId } from "@/lib/editor/sessionReducer";
 import { useEditorSession } from "./EditorSessionContext";
 

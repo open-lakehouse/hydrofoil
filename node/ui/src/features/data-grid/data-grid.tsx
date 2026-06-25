@@ -1,10 +1,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
-import type { ArrowResultStore } from "@/lib/query/arrowResultStore";
-import { useArrowTable } from "@/lib/query/useArrowTable";
 import { cn } from "@/lib/utils";
 import { DataGridCell } from "./data-grid-cell";
 import { DataGridHeader } from "./data-grid-header";
+import type { ArrowResultStore } from "./lib/arrowResultStore";
+import { useArrowTable } from "./lib/useArrowTable";
 
 interface DataGridProps {
   store: ArrowResultStore;

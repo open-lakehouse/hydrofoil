@@ -4,7 +4,7 @@ import {
   tableFromIPC,
   type Vector,
 } from "apache-arrow";
-import { arrowTypeLabel } from "@/lib/query/arrowTypeLabel";
+import { arrowTypeLabel } from "./arrowTypeLabel";
 
 /** A read-only summary of what an {@link ArrowResultStore} currently holds.
  *  Cheap to produce (no row scan) — for memory accounting and a "what's in the

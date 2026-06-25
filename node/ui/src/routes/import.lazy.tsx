@@ -12,7 +12,7 @@ import { createLazyRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, TableProperties, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
-import { DataGrid } from "@/components/data-grid/data-grid";
+import { ArrowResultStore, DataGrid } from "@/features/data-grid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowResultStore } from "@/lib/query/arrowResultStore";
 import { ingestTable, previewFile } from "@/lib/ingest/client";
 import { ingestSupported, pickFile } from "@/lib/ingest/registry";
 import {

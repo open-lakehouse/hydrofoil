@@ -9,7 +9,7 @@
 // store from these exercises the same decode path the live app uses.
 
 import { type Table, tableFromArrays, tableToIPC } from "apache-arrow";
-import { ArrowResultStore } from "@/lib/query/arrowResultStore";
+import { ArrowResultStore } from "@/features/data-grid";
 
 /** Serialize an Arrow table to a self-contained IPC stream (schema + batch). */
 export function tableToIpc(table: Table): Uint8Array {
