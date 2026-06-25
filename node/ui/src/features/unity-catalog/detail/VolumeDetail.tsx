@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { volumeDetailQuery } from "../uc/queries";
+import { useVolumeDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function VolumeDetail({ fullName }: { fullName: string }) {
-  const {
-    data: volume,
-    isLoading,
-    error,
-  } = useQuery(volumeDetailQuery(fullName));
+  const { data: volume, isLoading, error } = useVolumeDetail(fullName);
   if (!volume) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

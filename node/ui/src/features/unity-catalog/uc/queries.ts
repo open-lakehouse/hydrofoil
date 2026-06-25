@@ -23,7 +23,11 @@ import type {
   RegisteredModelInfo,
   VolumeInfo,
 } from "@open-lakehouse/uc-client";
-import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useEffect } from "react";
 import { $api, fetchClient } from "@/lib/api";
 import { useUnityCatalog } from "./context";
@@ -124,7 +128,19 @@ function modelsInit(catalogName: string, schemaName: string) {
   } as const;
 }
 
-// ── Detail queries (shared queryOptions: used by reads, prefetch, seeding) ──
+// ── Detail queries & hooks ───────────────────────────────────────────────────
+//
+// Two surfaces over the same per-resource GET:
+//
+//   • `*DetailQuery(id)` returns the TanStack `queryOptions` (built from the
+//     DEFAULT client). Its `queryKey` is the canonical detail key — mutations
+//     read it for `setQueryData`/`removeQueries`, and the list hooks seed it.
+//     The key is derived purely from (path, init), so it is the SAME key the
+//     injected-client hooks below produce; caches stay aligned.
+//   • `useXDetail(id, opts?)` is the React read hook. It fetches through the
+//     INJECTED client (`useUnityCatalog()`), so a host's `<UnityCatalogProvider>`
+//     redirects detail fetches the same way it already redirects lists/mutations.
+//     Detail panes and the storage dialogs call these.
 
 export function catalogDetailQuery(name: string) {
   return $api.queryOptions("get", "/catalogs/{name}", {
@@ -171,6 +187,94 @@ export function credentialDetailQuery(name: string) {
 export function externalLocationDetailQuery(name: string) {
   return $api.queryOptions("get", "/external-locations/{name}", {
     params: { path: { name } },
+  });
+}
+
+/** Extra per-call options the detail hooks accept (e.g. gating in edit mode). */
+interface DetailHookOptions {
+  enabled?: boolean;
+}
+
+export function useCatalogDetail(name: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/catalogs/{name}", {
+      params: { path: { name } },
+    }),
+    ...opts,
+  });
+}
+
+export function useSchemaDetail(fullName: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/schemas/{full_name}", {
+      params: { path: { full_name: fullName } },
+    }),
+    ...opts,
+  });
+}
+
+export function useTableDetail(fullName: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/tables/{full_name}", {
+      params: { path: { full_name: fullName } },
+    }),
+    ...opts,
+  });
+}
+
+export function useVolumeDetail(fullName: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/volumes/{name}", {
+      params: { path: { name: fullName } },
+    }),
+    ...opts,
+  });
+}
+
+export function useFunctionDetail(fullName: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/functions/{name}", {
+      params: { path: { name: fullName } },
+    }),
+    ...opts,
+  });
+}
+
+export function useModelDetail(fullName: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/models/{full_name}", {
+      params: { path: { full_name: fullName } },
+    }),
+    ...opts,
+  });
+}
+
+export function useCredentialDetail(name: string, opts?: DetailHookOptions) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/credentials/{name}", {
+      params: { path: { name } },
+    }),
+    ...opts,
+  });
+}
+
+export function useExternalLocationDetail(
+  name: string,
+  opts?: DetailHookOptions,
+) {
+  const { $api } = useUnityCatalog();
+  return useQuery({
+    ...$api.queryOptions("get", "/external-locations/{name}", {
+      params: { path: { name } },
+    }),
+    ...opts,
   });
 }
 

@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { modelDetailQuery } from "../uc/queries";
+import { useModelDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function ModelDetail({ fullName }: { fullName: string }) {
-  const {
-    data: model,
-    isLoading,
-    error,
-  } = useQuery(modelDetailQuery(fullName));
+  const { data: model, isLoading, error } = useModelDetail(fullName);
   if (!model) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

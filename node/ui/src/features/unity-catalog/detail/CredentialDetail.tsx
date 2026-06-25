@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { credentialDetailQuery } from "../uc/queries";
+import { useCredentialDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function CredentialDetail({ name }: { name: string }) {
-  const {
-    data: credential,
-    isLoading,
-    error,
-  } = useQuery(credentialDetailQuery(name));
+  const { data: credential, isLoading, error } = useCredentialDetail(name);
   if (!credential) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

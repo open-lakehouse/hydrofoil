@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { schemaDetailQuery } from "../uc/queries";
+import { useSchemaDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function SchemaDetail({ fullName }: { fullName: string }) {
-  const {
-    data: schema,
-    isLoading,
-    error,
-  } = useQuery(schemaDetailQuery(fullName));
+  const { data: schema, isLoading, error } = useSchemaDetail(fullName);
   if (!schema) return <DetailStates isLoading={isLoading} error={error} />;
 
   // The server only returns a schema's storage fields when it was created with

@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { functionDetailQuery } from "../uc/queries";
+import { useFunctionDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function FunctionDetail({ fullName }: { fullName: string }) {
-  const {
-    data: fn,
-    isLoading,
-    error,
-  } = useQuery(functionDetailQuery(fullName));
+  const { data: fn, isLoading, error } = useFunctionDetail(fullName);
   if (!fn) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

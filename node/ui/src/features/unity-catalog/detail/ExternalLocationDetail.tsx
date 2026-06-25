@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { externalLocationDetailQuery } from "../uc/queries";
+import { useExternalLocationDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function ExternalLocationDetail({ name }: { name: string }) {
-  const {
-    data: location,
-    isLoading,
-    error,
-  } = useQuery(externalLocationDetailQuery(name));
+  const { data: location, isLoading, error } = useExternalLocationDetail(name);
   if (!location) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

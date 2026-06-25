@@ -1,16 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { catalogDetailQuery } from "../uc/queries";
+import { useCatalogDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function CatalogDetail({ name }: { name: string }) {
-  const {
-    data: catalog,
-    isLoading,
-    error,
-  } = useQuery(catalogDetailQuery(name));
+  const { data: catalog, isLoading, error } = useCatalogDetail(name);
   if (!catalog) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

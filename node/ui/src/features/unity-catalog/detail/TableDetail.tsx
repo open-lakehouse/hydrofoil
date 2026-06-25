@@ -1,17 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
 import { Columns3 } from "lucide-react";
 
-import { tableDetailQuery } from "../uc/queries";
+import { useTableDetail } from "../uc/queries";
 
 import { DetailStates } from "./DetailStates";
 import { Meta, MetaGrid } from "./Meta";
 
 export function TableDetail({ fullName }: { fullName: string }) {
-  const {
-    data: table,
-    isLoading,
-    error,
-  } = useQuery(tableDetailQuery(fullName));
+  const { data: table, isLoading, error } = useTableDetail(fullName);
   if (!table) return <DetailStates isLoading={isLoading} error={error} />;
 
   return (

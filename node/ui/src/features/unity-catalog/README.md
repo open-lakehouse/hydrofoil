@@ -32,9 +32,16 @@ module-internal and must not be imported from outside.
 (provided by `UnityCatalogProvider`) rather than a module singleton, so the host
 decides base URL / transport / auth. This is the seam a future proto-generated
 WASM client swaps into with no hook changes (see
-`docs/portable-uc-components.md`). The non-hook helpers (`*DetailQuery`,
-`prefetch*`) bind the default client deliberately — query-key derivation is
-client-independent, so caches stay aligned.
+`docs/portable-uc-components.md`).
+
+Every fetch — list reads (`useCatalogs`, …), mutations, AND detail reads
+(`useCatalogDetail`, … and the storage dialogs) — routes through the injected
+client. The `*DetailQuery(id)` functions and `prefetch*` helpers deliberately
+bind the *default* client because they only derive query keys / warm caches;
+key derivation is client-independent, so the keys they produce match the
+injected-client hooks and caches stay aligned. `mutations.ts` reads
+`*DetailQuery(id).queryKey` for `setQueryData` / `removeQueries` — a key, not a
+fetch — which is why those stay on the default client.
 
 ## External dependencies
 

@@ -7,7 +7,6 @@
 // the role, mirroring the Databricks Catalog Explorer flow.
 import type { CredentialInfo } from "@open-lakehouse/uc-client";
 import type { RJSFSchema, UiSchema } from "@rjsf/utils";
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -24,7 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { parseUcError } from "../uc/errors";
 import { useCreateCredential, useUpdateCredential } from "../uc/mutations";
-import { credentialDetailQuery } from "../uc/queries";
+import { useCredentialDetail } from "../uc/queries";
 
 import { CopyField } from "./CopyField";
 
@@ -97,8 +96,7 @@ export function CredentialDialog({
 }) {
   const createCredential = useCreateCredential();
   const updateCredential = useUpdateCredential();
-  const existing = useQuery({
-    ...credentialDetailQuery(name ?? ""),
+  const existing = useCredentialDetail(name ?? "", {
     enabled: mode === "edit" && !!name,
   });
 

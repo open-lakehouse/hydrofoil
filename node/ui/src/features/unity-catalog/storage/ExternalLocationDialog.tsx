@@ -4,7 +4,6 @@
 // Catalog Explorer flow where you pick the storage credential that authorizes
 // the location.
 import type { RJSFSchema, UiSchema } from "@rjsf/utils";
-import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -25,7 +24,7 @@ import {
   useCreateExternalLocation,
   useUpdateExternalLocation,
 } from "../uc/mutations";
-import { externalLocationDetailQuery, useCredentials } from "../uc/queries";
+import { useCredentials, useExternalLocationDetail } from "../uc/queries";
 
 import { CredentialDialog } from "./CredentialDialog";
 
@@ -64,8 +63,7 @@ export function ExternalLocationDialog({
   const createLocation = useCreateExternalLocation();
   const updateLocation = useUpdateExternalLocation();
   const credentials = useCredentials();
-  const existing = useQuery({
-    ...externalLocationDetailQuery(name ?? ""),
+  const existing = useExternalLocationDetail(name ?? "", {
     enabled: mode === "edit" && !!name,
   });
 
