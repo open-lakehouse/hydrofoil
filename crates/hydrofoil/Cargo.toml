@@ -26,6 +26,9 @@ http-body = "1"
 datafusion-tracing = { workspace = true }
 delta_kernel = { workspace = true }
 deltalake-core = { workspace = true, features = ["datafusion", "cloud"] }
+iceberg = { workspace = true }
+iceberg-datafusion = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 prost = { workspace = true }

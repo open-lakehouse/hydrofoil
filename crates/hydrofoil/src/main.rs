@@ -96,6 +96,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Wire standalone Iceberg REST catalogs (e.g. Lakekeeper). Each configured
+    // catalog is registered into every session as `<name>.<namespace>.<table>`.
+    if !cfg.iceberg.rest_catalogs.is_empty() {
+        let names: Vec<_> = cfg
+            .iceberg
+            .rest_catalogs
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        tracing::info!(catalogs = ?names, "Iceberg REST catalogs enabled");
+        service = service.with_iceberg_rest_catalogs(cfg.iceberg.rest_catalogs.clone());
+    } else {
+        tracing::info!("Iceberg integration disabled (set iceberg.rest_catalogs to enable)");
+    }
+
     // Finalize the configured components into the engine + session store and
     // start the background session sweeper. Shared (as an `Arc`) between the
     // Flight SQL gRPC server and the HTTP query surface so both speak to the

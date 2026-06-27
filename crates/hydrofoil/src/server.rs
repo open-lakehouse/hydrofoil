@@ -102,6 +102,9 @@ pub struct FlightSqlServiceImpl {
     /// [`Engine::unity_factory_for`]).
     unity_endpoint: Option<String>,
     unity_region: Option<String>,
+    /// Standalone Iceberg REST catalogs (e.g. Lakekeeper), threaded to the
+    /// [`Engine`] and registered into every session.
+    iceberg_rest_catalogs: Vec<crate::config::IcebergRestCatalog>,
     lineage: Option<OpenLineageClient>,
     /// Static OpenLineage config (job namespace, producer, engine identity),
     /// built once at startup from the hydrofoil config and threaded through the
@@ -124,6 +127,7 @@ impl FlightSqlServiceImpl {
             unity_factory: None,
             unity_endpoint: None,
             unity_region: None,
+            iceberg_rest_catalogs: Vec::new(),
             lineage: None,
             lineage_config: OpenLineageConfig::default(),
             identity: Some(crate::identity::default_identity_provider()),
@@ -163,6 +167,16 @@ impl FlightSqlServiceImpl {
         self
     }
 
+    /// Attach standalone Iceberg REST catalogs (e.g. Lakekeeper) to register
+    /// into every session, addressable as `<name>.<namespace>.<table>`.
+    pub fn with_iceberg_rest_catalogs(
+        mut self,
+        catalogs: Vec<crate::config::IcebergRestCatalog>,
+    ) -> Self {
+        self.iceberg_rest_catalogs = catalogs;
+        self
+    }
+
     /// Set the identity provider (the principal/identity PIP) used to enrich
     /// principals with attributes + group membership at session creation,
     /// overriding the [`default_identity_provider`](crate::identity::default_identity_provider).
@@ -189,6 +203,9 @@ impl FlightSqlServiceImpl {
             self.lineage_config.clone(),
         );
         engine = engine.with_unity_config(self.unity_endpoint.clone(), self.unity_region.clone());
+        if !self.iceberg_rest_catalogs.is_empty() {
+            engine = engine.with_iceberg_rest_catalogs(self.iceberg_rest_catalogs.clone());
+        }
         if let Some(identity) = self.identity.clone() {
             engine = engine.with_identity_provider(identity);
         }

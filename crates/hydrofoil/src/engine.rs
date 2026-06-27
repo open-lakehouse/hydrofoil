@@ -79,6 +79,9 @@ pub struct Engine {
     /// per-user path and only the shared `unity_factory` (if any) is used.
     unity_endpoint: Option<String>,
     unity_region: Option<String>,
+    /// Standalone Iceberg REST catalogs registered into every session (e.g.
+    /// Lakekeeper). Empty leaves Iceberg disabled. Independent of Unity Catalog.
+    iceberg_rest_catalogs: Vec<crate::config::IcebergRestCatalog>,
     lineage: Option<OpenLineageClient>,
     /// Static OpenLineage config (job namespace, producer, engine identity),
     /// built once at startup and used when instrumenting each session's planner.
@@ -112,6 +115,7 @@ impl Engine {
             unity_factory,
             unity_endpoint: None,
             unity_region: None,
+            iceberg_rest_catalogs: Vec::new(),
             lineage,
             lineage_config,
             identity: Arc::new(NoopIdentityProvider),
@@ -134,6 +138,18 @@ impl Engine {
         let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
         engine.unity_endpoint = endpoint.filter(|e| !e.is_empty());
         engine.unity_region = region.filter(|r| !r.is_empty());
+        self
+    }
+
+    /// Register standalone Iceberg REST catalogs (e.g. Lakekeeper) to attach to
+    /// every session. Each is addressable as `<name>.<namespace>.<table>`.
+    /// Called once at wiring time, before the `Engine` `Arc` is shared.
+    pub fn with_iceberg_rest_catalogs(
+        mut self: Arc<Self>,
+        catalogs: Vec<crate::config::IcebergRestCatalog>,
+    ) -> Arc<Self> {
+        let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
+        engine.iceberg_rest_catalogs = catalogs;
         self
     }
 
@@ -236,6 +252,12 @@ impl Engine {
             Some(principal.clone()),
             unity_factory.clone(),
         )?;
+
+        // Register standalone Iceberg REST catalogs (Lakekeeper, etc.) on this
+        // session's context. Failures are logged and skipped inside the helper.
+        if !self.iceberg_rest_catalogs.is_empty() {
+            crate::catalog::register_rest_catalogs(&ctx, &self.iceberg_rest_catalogs).await;
+        }
 
         let unity = unity_factory.map(|factory| build_unity_resolver(&ctx, factory));
 

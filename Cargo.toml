@@ -57,14 +57,19 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-# delta-rs / unitycatalog-rs forks, pinned to pushed git revs so the workspace
-# (and the Docker build, whose context is just this repo) resolves them without
-# sibling checkouts. To iterate against in-progress fork changes locally, swap
-# these for the `path = "../delta-rs/..."` / `../unitycatalog-rs/...` overrides
-# (and bump the delta-rs rev here once the changes are pushed).
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1", features = ["rest-client", "axum"] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
-datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
+# delta-rs / mangrove (UC) / iceberg-rust forks, pinned to pushed git revs so the
+# workspace (and the Docker build, whose context is just this repo) resolves them
+# without sibling checkouts. To iterate against in-progress fork changes locally,
+# swap these for the `path = "../delta-rs/..."` / `../mangrove/...` /
+# `../iceberg-rust/...` overrides (and bump the rev here once the changes are pushed).
+unitycatalog-common = { git = "https://github.com/open-lakehouse/mangrove", rev = "6359ceaa73f86f824a8c3b7fe5dbdda1cbfe448e", features = ["rest-client", "axum"] }
+unitycatalog-client = { git = "https://github.com/open-lakehouse/mangrove", rev = "6359ceaa73f86f824a8c3b7fe5dbdda1cbfe448e" }
+unitycatalog-object-store = { git = "https://github.com/open-lakehouse/mangrove", rev = "6359ceaa73f86f824a8c3b7fe5dbdda1cbfe448e" }
+datafusion-unitycatalog = { git = "https://github.com/open-lakehouse/mangrove", rev = "6359ceaa73f86f824a8c3b7fe5dbdda1cbfe448e" }
 deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion", "cloud"] }
 deltalake = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion"] }
+# iceberg-rust fork pinned to upstream main (arrow 58 / datafusion 53.1), aligning
+# its DataFusion major with delta-rs so both providers share one SessionContext.
+iceberg = { git = "https://github.com/roeap/iceberg-rust", rev = "fc308a23079d2ad7d04d9900838909b58b26abb1" }
+iceberg-datafusion = { git = "https://github.com/roeap/iceberg-rust", rev = "fc308a23079d2ad7d04d9900838909b58b26abb1" }
+iceberg-catalog-rest = { git = "https://github.com/roeap/iceberg-rust", rev = "fc308a23079d2ad7d04d9900838909b58b26abb1" }
