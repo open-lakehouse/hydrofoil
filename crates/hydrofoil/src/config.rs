@@ -99,6 +99,42 @@ pub struct UnityConfig {
     pub region: Option<String>,
 }
 
+/// A standalone Iceberg REST catalog (IRC) to register into every session, e.g.
+/// a [Lakekeeper](https://github.com/lakekeeper/lakekeeper) deployment. Each
+/// entry becomes a DataFusion catalog addressable as `<name>.<namespace>.<table>`.
+///
+/// Unlike Delta, Iceberg performs its own object-store I/O via `FileIO`; storage
+/// credentials are vended by the REST catalog's `loadTable` response, so no
+/// hydrofoil-side object-store registration is needed.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct IcebergRestCatalog {
+    /// DataFusion catalog name to register this catalog under (the first part of
+    /// a three-part `catalog.namespace.table` reference).
+    pub name: String,
+    /// Iceberg REST Catalog base URI, e.g. `http://lakekeeper:8181/catalog`.
+    pub uri: String,
+    /// Optional warehouse identifier passed to the REST catalog.
+    pub warehouse: Option<String>,
+    /// Optional bearer token (maps to the IRC `token` property). A secret —
+    /// supply via `ICEBERG__<NAME>__TOKEN` env override rather than the file.
+    pub token: Option<String>,
+    /// Optional OAuth2 client credential `client_id:client_secret` (IRC
+    /// `credential` property), used when `token` is absent.
+    pub credential: Option<String>,
+    /// Optional OAuth2 server URI for the client-credentials flow.
+    pub oauth2_server_uri: Option<String>,
+}
+
+/// Iceberg integration. Each configured REST catalog is registered into every
+/// session; an empty list leaves Iceberg disabled.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct IcebergConfig {
+    /// Standalone Iceberg REST catalogs to register, e.g. Lakekeeper.
+    pub rest_catalogs: Vec<IcebergRestCatalog>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -125,6 +161,7 @@ pub struct Config {
     pub lineage: LineageConfig,
     pub policy: PolicyConfig,
     pub unity: UnityConfig,
+    pub iceberg: IcebergConfig,
 }
 
 impl Default for Config {
@@ -140,6 +177,7 @@ impl Default for Config {
             lineage: LineageConfig::default(),
             policy: PolicyConfig::default(),
             unity: UnityConfig::default(),
+            iceberg: IcebergConfig::default(),
         }
     }
 }
@@ -305,6 +343,39 @@ mod tests {
         );
         assert_eq!(cfg.unity.endpoint.as_deref(), Some("http://uc:8081/"));
         assert_eq!(cfg.unity.region.as_deref(), Some("eu-central-1"));
+    }
+
+    #[test]
+    fn test_iceberg_rest_catalogs_parse_from_file() {
+        let cfg = from_toml(
+            r#"
+            [[iceberg.rest_catalogs]]
+            name = "lakekeeper"
+            uri = "http://lakekeeper:8181/catalog"
+            warehouse = "demo"
+            token = "irc-token"
+
+            [[iceberg.rest_catalogs]]
+            name = "nessie"
+            uri = "http://nessie:19120/iceberg"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.iceberg.rest_catalogs.len(), 2);
+        let first = &cfg.iceberg.rest_catalogs[0];
+        assert_eq!(first.name, "lakekeeper");
+        assert_eq!(first.uri, "http://lakekeeper:8181/catalog");
+        assert_eq!(first.warehouse.as_deref(), Some("demo"));
+        assert_eq!(first.token.as_deref(), Some("irc-token"));
+        let second = &cfg.iceberg.rest_catalogs[1];
+        assert_eq!(second.name, "nessie");
+        assert!(second.warehouse.is_none());
+    }
+
+    #[test]
+    fn test_iceberg_disabled_by_default() {
+        let cfg = from_toml("").unwrap();
+        assert!(cfg.iceberg.rest_catalogs.is_empty());
     }
 
     #[test]
