@@ -21,10 +21,10 @@ cedar-policy = { version = "4.8.2", features = ["protobufs"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
 dashmap = "6.0.1"
-datafusion = "53.1"
-datafusion-common = "53.1"
-datafusion-expr = "53.1"
-datafusion-tracing = "53"
+datafusion = "54"
+datafusion-common = "54"
+datafusion-expr = "54"
+datafusion-tracing = "54"
 # Track the same kernel source as the delta-rs fork (roeap/delta-rs) so the
 # whole graph resolves to a single buoyant_kernel version — otherwise hydrofoil
 # (which uses these types directly) and delta-rs disagree on the Engine/Field
@@ -41,7 +41,7 @@ ordered-float = { version = "5" }
 prost = { version = "0.14.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
-sqlparser = { version = "0.61", default-features = false, features = [
+sqlparser = { version = "0.62", default-features = false, features = [
     "std",
     "visitor",
 ] }
@@ -57,14 +57,19 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-# delta-rs / unitycatalog-rs forks, pinned to pushed git revs so the workspace
+# delta-rs / Unity Catalog forks, pinned to pushed git revs so the workspace
 # (and the Docker build, whose context is just this repo) resolves them without
 # sibling checkouts. To iterate against in-progress fork changes locally, swap
-# these for the `path = "../delta-rs/..."` / `../unitycatalog-rs/...` overrides
-# (and bump the delta-rs rev here once the changes are pushed).
-unitycatalog-common = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1", features = ["rest-client", "axum"] }
-unitycatalog-client = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
-unitycatalog-object-store = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
-datafusion-unitycatalog = { git = "https://github.com/unitycatalog-incubator/unitycatalog-rs", rev = "a4814ef98bcb7c95e5eb9de0166d0c086fffead1" }
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion", "cloud"] }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "10d23f5ca992e497a331e78a03eb82d1bdbd149d", features = ["datafusion"] }
+# these for the `path = "../delta-rs/..."` / `../mangrove/crates/..."` overrides
+# (and bump the rev here once the changes are pushed).
+#
+# The UC crates now live in open-lakehouse/mangrove, published as `olai-uc-*`.
+# The in-tree dep keys stay `unitycatalog-*` / `datafusion-unitycatalog` via the
+# `package =` alias so dependents' `{ workspace = true }` references are unchanged.
+# Pin the git rev for now; switch to the published `olai-uc-*` versions once released.
+unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d", features = ["rest-client", "axum"] }
+unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
+unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
+datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
+deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion", "cloud"] }
+deltalake = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion"] }
