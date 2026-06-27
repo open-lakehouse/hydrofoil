@@ -15,7 +15,8 @@ use datafusion::{
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
-        AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF,
+        AggregateUDF, Extension, HigherOrderUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+        WindowUDF, registry::ExtensionTypeRegistryRef,
     },
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
@@ -459,6 +460,14 @@ impl Session for LakehouseSession {
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         self.inner.window_functions()
+    }
+
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+        self.inner.higher_order_functions()
+    }
+
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        self.inner.extension_type_registry()
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {

@@ -56,10 +56,6 @@ impl LakehouseSchemaProvider {
 
 #[async_trait::async_trait]
 impl SchemaProvider for LakehouseSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables
             .iter()
@@ -92,7 +88,10 @@ impl SchemaProvider for LakehouseSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        if table.as_any().downcast_ref::<DeltaScanNext>().is_some() {
+        if (table.as_ref() as &dyn Any)
+            .downcast_ref::<DeltaScanNext>()
+            .is_some()
+        {
             // TODO(migration): in deltalake-core 0.32 the inner `Snapshot` of a
             // `DeltaScanNext` is no longer publicly accessible (`snapshot()` is
             // now `pub(crate)`), so we can no longer cache the snapshot when a
