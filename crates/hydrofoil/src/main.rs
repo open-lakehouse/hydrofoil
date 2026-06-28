@@ -166,8 +166,8 @@ async fn shutdown_signal() {
 /// events.
 fn build_lineage_client(
     cfg: &config::LineageConfig,
-) -> Result<datafusion_open_lineage::OpenLineageClient, Box<dyn std::error::Error>> {
-    use datafusion_open_lineage::{CloudClientTransport, OpenLineageClient};
+) -> Result<datafusion_openlineage::OpenLineageClient, Box<dyn std::error::Error>> {
+    use datafusion_openlineage::{CloudClientTransport, OpenLineageClient};
 
     let Some(url) = cfg.url.as_deref().filter(|u| !u.is_empty()) else {
         return Ok(OpenLineageClient::noop());
@@ -191,8 +191,8 @@ fn build_lineage_client(
 /// bridge — the value is built once and threaded through the request path.
 fn build_lineage_config(
     cfg: &config::LineageConfig,
-) -> datafusion_open_lineage::config::OpenLineageConfig {
-    let mut ol = datafusion_open_lineage::config::OpenLineageConfig::default();
+) -> datafusion_openlineage::config::OpenLineageConfig {
+    let mut ol = datafusion_openlineage::config::OpenLineageConfig::default();
     if let Some(ns) = cfg.namespace.as_deref().filter(|n| !n.is_empty()) {
         ol.job_namespace = ns.to_string();
     }

@@ -32,9 +32,9 @@ use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_cedar::{IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity};
-use datafusion_open_lineage::OpenLineageClient;
-use datafusion_open_lineage::config::OpenLineageConfig;
-use datafusion_open_lineage::context::LineageContext;
+use datafusion_openlineage::OpenLineageClient;
+use datafusion_openlineage::config::OpenLineageConfig;
+use datafusion_openlineage::context::LineageContext;
 use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 use uuid::Uuid;
@@ -592,15 +592,15 @@ mod tests {
     /// emission in tests.
     #[derive(Debug, Default, Clone)]
     struct Recorder {
-        events: Arc<std::sync::Mutex<Vec<datafusion_open_lineage::event::RunEvent>>>,
+        events: Arc<std::sync::Mutex<Vec<datafusion_openlineage::event::RunEvent>>>,
     }
 
     #[async_trait::async_trait]
-    impl datafusion_open_lineage::transport::Transport for Recorder {
+    impl datafusion_openlineage::transport::Transport for Recorder {
         async fn emit(
             &self,
-            event: &datafusion_open_lineage::event::RunEvent,
-        ) -> std::result::Result<(), datafusion_open_lineage::transport::TransportError> {
+            event: &datafusion_openlineage::event::RunEvent,
+        ) -> std::result::Result<(), datafusion_openlineage::transport::TransportError> {
             self.events.lock().unwrap().push(event.clone());
             Ok(())
         }
@@ -757,9 +757,9 @@ mod tests {
         use datafusion::arrow::record_batch::RecordBatch;
         use datafusion::catalog::Session as _;
         use datafusion::datasource::MemTable;
-        use datafusion_open_lineage::OpenLineageClient;
-        use datafusion_open_lineage::event::{RunEvent, RunEventType};
-        use datafusion_open_lineage::transport::{Transport, TransportError};
+        use datafusion_openlineage::OpenLineageClient;
+        use datafusion_openlineage::event::{RunEvent, RunEventType};
+        use datafusion_openlineage::transport::{Transport, TransportError};
 
         #[derive(Debug, Default, Clone)]
         struct Recorder {

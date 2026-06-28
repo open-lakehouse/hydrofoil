@@ -18,7 +18,7 @@ use arrow::ipc::writer::StreamWriter;
 use axum::http::HeaderMap;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::SQLOptions;
-use datafusion_open_lineage::context::LineageContext;
+use datafusion_openlineage::context::LineageContext;
 use uuid::Uuid;
 
 use crate::server::FlightSqlServiceImpl;

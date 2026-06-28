@@ -1,9 +1,14 @@
 # OpenLineage on DataFusion — technical design
 
 > A concise record of the design decisions and patterns behind the
-> `datafusion-open-lineage` crate. Source material for a blog post on how we
+> `datafusion-openlineage` crate. Source material for a blog post on how we
 > extend DataFusion to build a full-featured, governed object-store query
 > service.
+>
+> The crate (and the OpenLineage ingest/read service) now lives in the sibling
+> `headwaters` repo (`open-lakehouse/headwaters`), published to crates.io as
+> `datafusion-openlineage`; hydrofoil consumes it from there. Paths like
+> `crates/open-lineage/…` below refer to that repo's layout.
 
 ## Why
 

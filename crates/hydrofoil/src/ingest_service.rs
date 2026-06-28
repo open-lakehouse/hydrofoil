@@ -31,7 +31,7 @@ use connectrpc::{
     StreamMessage,
 };
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use datafusion_open_lineage::context::LineageContext;
+use datafusion_openlineage::context::LineageContext;
 use futures::StreamExt;
 use uuid::Uuid;
 

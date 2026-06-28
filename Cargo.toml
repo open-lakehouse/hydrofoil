@@ -24,6 +24,10 @@ dashmap = "6.0.1"
 datafusion = "54"
 datafusion-common = "54"
 datafusion-expr = "54"
+# The OpenLineage / DataFusion integration moved to the headwaters sibling repo
+# (open-lakehouse/headwaters), published to crates.io as `datafusion-openlineage`.
+# Consumers import it as `datafusion_openlineage`.
+datafusion-openlineage = { version = "0.0.3" }
 datafusion-tracing = "54"
 # Track the same kernel source as the delta-rs fork (roeap/delta-rs) so the
 # whole graph resolves to a single buoyant_kernel version — otherwise hydrofoil
