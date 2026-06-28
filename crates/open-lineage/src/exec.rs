@@ -15,7 +15,6 @@
 //! without special-casing, and the terminal event fires under the *same*
 //! `runId` the START used.
 
-use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -334,13 +333,11 @@ impl ExecutionPlan for OpenLineageExec {
         "OpenLineageExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        // Return *this* wrapper, per the `ExecutionPlan::as_any` contract.
-        // Returning the inner plan's `as_any` let visitors downcast the wrapper
-        // to the inner type and rewrite its children directly, silently
-        // dropping this lineage node from the plan.
-        self
-    }
+    // DataFusion 54 made `Any` a supertrait of `ExecutionPlan`, so there is no
+    // longer an explicit `as_any` to override: downcasting a `&dyn ExecutionPlan`
+    // now resolves to *this* wrapper's concrete type. That is exactly what we
+    // want — if a downcast reached the inner plan instead, visitors could rewrite
+    // its children directly and silently drop this lineage node from the plan.
 
     fn properties(&self) -> &Arc<PlanProperties> {
         self.inner.properties()

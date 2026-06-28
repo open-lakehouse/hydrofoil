@@ -952,9 +952,6 @@ impl datafusion::physical_plan::ExecutionPlan for ExecErrorExec {
     fn name(&self) -> &str {
         "ExecErrorExec"
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         &self.properties
     }
@@ -1017,9 +1014,6 @@ impl datafusion::physical_plan::DisplayAs for OkExec {
 impl datafusion::physical_plan::ExecutionPlan for OkExec {
     fn name(&self) -> &str {
         "OkExec"
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
     fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         &self.properties
