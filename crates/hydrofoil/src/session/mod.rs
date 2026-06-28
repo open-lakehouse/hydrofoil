@@ -22,7 +22,7 @@ use datafusion::{
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
 use datafusion_cedar::{EvalContext, PrincipalIdentity};
-use datafusion_open_lineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
+use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -46,7 +46,7 @@ use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension, Unity
 use unitycatalog_common::models::delta::v1::DeltaCommit;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
-use datafusion_open_lineage::context::LineageContext;
+use datafusion_openlineage::context::LineageContext;
 
 use crate::{
     catalog::{DeltaTableFactory, LakehouseSchemaProvider, LakehouseTableProviderBuilder},
@@ -883,9 +883,9 @@ mod integration_tests {
 
     use cedar_oci::{Decision, EntityUid};
     use datafusion_cedar::PrincipalIdentity;
-    use datafusion_open_lineage::OpenLineageClient;
-    use datafusion_open_lineage::event::{RunEvent, RunEventType};
-    use datafusion_open_lineage::transport::{Transport, TransportError};
+    use datafusion_openlineage::OpenLineageClient;
+    use datafusion_openlineage::event::{RunEvent, RunEventType};
+    use datafusion_openlineage::transport::{Transport, TransportError};
 
     use super::*;
     use crate::policy::{Policy, StaticPolicy};
@@ -1030,7 +1030,7 @@ mod integration_tests {
     /// per-request session into the event.
     #[tokio::test]
     async fn lineage_start_and_complete_share_run_id() {
-        use datafusion_open_lineage::context::LineageContext;
+        use datafusion_openlineage::context::LineageContext;
         let transport = RecordingTransport::default();
         let client = OpenLineageClient::new(Arc::new(transport.clone()));
         let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), Some(client)).await;

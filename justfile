@@ -18,17 +18,6 @@ hydro:
     HYDROFOIL__LINEAGE__URL="${HYDROFOIL__LINEAGE__URL:-https://lineage.openlakehousedemos.dev}" \
     cargo run --bin hydrofoil -- "${HYDROFOIL_CONFIG:-environments/config/live/hydrofoil.toml}"
 
-# run the lineage-service on the host against the DEPLOYED UC (the
-# unitycatalog-quickstart ECS stack). Requires UNITY_CATALOG_URL +
-# UNITY_CATALOG_TOKEN (and AWS_REGION) in the env — see
-# environments/config/deployed/README.md. Override the config path with
-# `LINEAGE_CONFIG=…`, or individual fields with `LINEAGE__*` env vars.
-lineage-deployed:
-    @: "${UNITY_CATALOG_URL:?not set — see environments/config/deployed/README.md}" \
-       "${UNITY_CATALOG_TOKEN:?not set — see environments/config/deployed/README.md}"
-    RUST_LOG="${RUST_LOG:-lineage_service=debug}" \
-    cargo run -p lineage-service -- "${LINEAGE_CONFIG:-environments/config/deployed/lineage-service.toml}"
-
 # open the marimo notebook editor on the demo notebooks
 scratch:
     uvx --directory notebooks/ marimo edit --sandbox stage1_marketplace.py
@@ -124,9 +113,9 @@ push-demo-policy:
 trust-me:
     ./scripts/generate-notation-certs.sh
 
-# build a service image from the shared Dockerfile, e.g. `just build-docker hydrofoil`
-# or `just build-docker lineage-service`. Set CRATES_PROXY to route crates-io
-# through a sparse mirror on networks without direct crates.io access, e.g.
+# build a service image from the shared Dockerfile, e.g. `just build-docker hydrofoil`.
+# Set CRATES_PROXY to route crates-io through a sparse mirror on networks without
+# direct crates.io access, e.g.
 # `CRATES_PROXY=sparse+https://crates-proxy.dev.databricks.com/ just build-docker hydrofoil`.
 build-docker bin:
     docker build -f docker/Dockerfile \

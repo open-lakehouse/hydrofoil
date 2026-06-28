@@ -9,8 +9,6 @@ configs:
     file: ./config/live/marimo.toml
   envoy_config:
     file: ./config/live/envoy.yaml
-  lineage_service_config:
-    file: ./config/live/lineage-service.toml
   hydrofoil_config:
     file: ./config/live/hydrofoil.toml
 
@@ -25,10 +23,5 @@ include:
     project_directory: .
   - path: ./services/notebooks.yaml
     project_directory: .
-  - path: ./services/lineage-service.yaml
-    project_directory: .
   - path: ./services/hydrofoil.yaml
-    project_directory: .
-  # Marquez web UI pointed at lineage-service's Marquez-compatible read API.
-  - path: ./services/marquez-web.yaml
     project_directory: .

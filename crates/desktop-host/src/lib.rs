@@ -207,8 +207,8 @@ async fn build_query_engine(cfg: &HostConfig) -> anyhow::Result<Arc<FlightSqlSer
 /// the sink base URL + the `/api/v1/lineage` path, unauthenticated (local).
 fn build_lineage_client(
     cfg: &HostConfig,
-) -> anyhow::Result<Option<datafusion_open_lineage::OpenLineageClient>> {
-    use datafusion_open_lineage::{CloudClientTransport, OpenLineageClient};
+) -> anyhow::Result<Option<datafusion_openlineage::OpenLineageClient>> {
+    use datafusion_openlineage::{CloudClientTransport, OpenLineageClient};
 
     let Some(base) = cfg.lineage_endpoint.as_deref().filter(|u| !u.is_empty()) else {
         return Ok(None);
@@ -222,8 +222,8 @@ fn build_lineage_client(
 
 /// The static OpenLineage config (job namespace, producer, engine identity) — the
 /// crate defaults are right for local desktop.
-fn lineage_config() -> datafusion_open_lineage::config::OpenLineageConfig {
-    datafusion_open_lineage::config::OpenLineageConfig::default()
+fn lineage_config() -> datafusion_openlineage::config::OpenLineageConfig {
+    datafusion_openlineage::config::OpenLineageConfig::default()
 }
 
 /// Build a Unity Catalog object-store factory from the config. Shared by the

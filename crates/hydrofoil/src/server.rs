@@ -23,8 +23,8 @@ use cedar_oci::Decision;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
-use datafusion_open_lineage::OpenLineageClient;
-use datafusion_open_lineage::config::OpenLineageConfig;
+use datafusion_openlineage::OpenLineageClient;
+use datafusion_openlineage::config::OpenLineageConfig;
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
@@ -267,7 +267,7 @@ impl FlightSqlServiceImpl {
         sql: Option<&str>,
         principal: &datafusion_cedar::PrincipalIdentity,
         agent: Option<&crate::agent::AgentContext>,
-    ) -> datafusion_open_lineage::context::LineageContext {
+    ) -> datafusion_openlineage::context::LineageContext {
         let mut ctx = crate::lineage::context_from_metadata(req.metadata(), &self.lineage_config);
         ctx.run_id = Some(run_id);
         ctx.job_name = sql.map(|s| crate::lineage::job_name_from_metadata(req.metadata(), s));
@@ -289,18 +289,18 @@ impl FlightSqlServiceImpl {
     /// error facets are populated. No-op when lineage is not wired.
     fn emit_planning_failure(
         &self,
-        lineage: &datafusion_open_lineage::context::LineageContext,
+        lineage: &datafusion_openlineage::context::LineageContext,
         error: &str,
     ) {
         let Some(client) = self.lineage.as_ref() else {
             return;
         };
         let run_id = lineage.run_id.unwrap_or_else(Uuid::now_v7);
-        let query = datafusion_open_lineage::QueryLineage {
+        let query = datafusion_openlineage::QueryLineage {
             sql: lineage.sql.clone(),
             ..Default::default()
         };
-        client.emit(datafusion_open_lineage::builder::fail_event(
+        client.emit(datafusion_openlineage::builder::fail_event(
             run_id,
             &query,
             lineage,
@@ -453,7 +453,7 @@ impl FlightSqlServiceImpl {
         ctx: &Arc<crate::session::LakehouseCtx>,
         target: ManagedIngestTarget,
         stream: PeekableFlightDataStream,
-        lineage: datafusion_open_lineage::context::LineageContext,
+        lineage: datafusion_openlineage::context::LineageContext,
     ) -> Result<i64, DataFusionError> {
         // The batch source for the Flight ingest path is the wire stream, coerced
         // to the table schema. Resolve the schema first (registering the UC
@@ -490,7 +490,7 @@ impl FlightSqlServiceImpl {
         ctx: &Arc<crate::session::LakehouseCtx>,
         target: &ManagedIngestTarget,
         batches: Vec<arrow::record_batch::RecordBatch>,
-        lineage: &datafusion_open_lineage::context::LineageContext,
+        lineage: &datafusion_openlineage::context::LineageContext,
     ) -> Result<i64, DataFusionError> {
         use datafusion::common::exec_datafusion_err;
         use datafusion::sql::TableReference;
@@ -553,37 +553,50 @@ impl FlightSqlServiceImpl {
     /// configured client + per-request context.
     fn emit_managed_ingest(
         &self,
-        lineage: &datafusion_open_lineage::context::LineageContext,
+        lineage: &datafusion_openlineage::context::LineageContext,
         qualified: &str,
         schema: &arrow::datatypes::SchemaRef,
     ) {
-        use datafusion_open_lineage::extract::{OutputTable, QueryLineage, schema_fields};
-        use datafusion_open_lineage::naming::DatasetName;
+        use datafusion_openlineage::extract::{OutputTable, QueryLineage};
+        use datafusion_openlineage::facets::SchemaField;
+        use datafusion_openlineage::naming::DatasetName;
 
         let Some(client) = self.lineage.as_ref() else {
             return;
         };
         let run_id = lineage.run_id.unwrap_or_else(Uuid::now_v7);
         let name = DatasetName::from_table_ref(&self.lineage_config.job_namespace, qualified);
+        // The ingested table's columns -> the output dataset's schema facet.
+        // (`extract::schema_fields` is crate-private upstream, so build the
+        // SchemaField list directly from the Arrow schema here.)
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|f| SchemaField {
+                name: f.name().to_string(),
+                type_: f.data_type().to_string(),
+                description: None,
+            })
+            .collect();
         let query = QueryLineage {
             sql: lineage.sql.clone(),
             inputs: Vec::new(),
             outputs: vec![OutputTable {
                 name,
-                // The ingested table's columns -> the output dataset's schema facet.
-                fields: schema_fields(schema.fields()),
+                fields,
                 column_lineage: None,
+                lifecycle: None,
             }],
         };
         // START + COMPLETE so the run has a defined lifecycle (the read path's
         // OpenLineageExec emits both; we mirror that for a consistent graph).
-        client.emit(datafusion_open_lineage::builder::start_event(
+        client.emit(datafusion_openlineage::builder::start_event(
             run_id,
             &query,
             lineage,
             &self.lineage_config,
         ));
-        client.emit(datafusion_open_lineage::builder::complete_event(
+        client.emit(datafusion_openlineage::builder::complete_event(
             run_id,
             &query,
             lineage,
@@ -1414,10 +1427,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use datafusion_open_lineage::OpenLineageClient;
-    use datafusion_open_lineage::context::LineageContext;
-    use datafusion_open_lineage::event::{RunEvent, RunEventType};
-    use datafusion_open_lineage::transport::{Transport, TransportError};
+    use datafusion_openlineage::OpenLineageClient;
+    use datafusion_openlineage::context::LineageContext;
+    use datafusion_openlineage::event::{RunEvent, RunEventType};
+    use datafusion_openlineage::transport::{Transport, TransportError};
     use uuid::Uuid;
 
     use super::*;

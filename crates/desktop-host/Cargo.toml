@@ -9,7 +9,7 @@ rust-version.workspace = true
 portal = { path = "../portal" }
 hydrofoil = { path = "../hydrofoil" }
 # OpenLineage client, to wire the lineage capability's endpoint into the engine.
-datafusion-open-lineage = { path = "../open-lineage" }
+datafusion-openlineage = { workspace = true }
 
 connectrpc = { version = "0.7", features = ["server", "client"] }
 

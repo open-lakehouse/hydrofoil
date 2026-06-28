@@ -24,7 +24,6 @@ coverage:
 ignore:
   - "**/generated/**" # buffa + connect-rust output (hydrofoil, portal)
   - "**/src/gen/**" # prost/tonic output (cedar-oci, common: spark/delta connect)
-  - "crates/lineage-service/src/proto/lineage.v1.rs" # generated; sibling mod.rs is hand-written
   - "**/examples/**" # runnable examples, not unit-tested
   - "**/tests/**" # integration test harnesses
   - "**/benches/**"

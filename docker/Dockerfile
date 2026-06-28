@@ -1,18 +1,17 @@
 # syntax=docker/dockerfile:1
 #
-# Shared, parameterized build for the workspace's service binaries. Select the
-# binary with `--build-arg BIN=<hydrofoil|lineage-service>`.
+# Parameterized build for the workspace's service binaries. Select the binary
+# with `--build-arg BIN=hydrofoil` (currently the only service binary).
 #
 # All workspace deps (including the delta-rs / unitycatalog-rs forks) resolve
-# from git, so the build context is just this repo — no sibling checkouts are
-# needed. cargo-chef caches the dependency graph as a separate layer so source
-# edits don't trigger a full dependency rebuild.
+# from git or crates.io, so the build context is just this repo — no sibling
+# checkouts are needed. cargo-chef caches the dependency graph as a separate
+# layer so source edits don't trigger a full dependency rebuild.
 ARG RUST_TAG=1.96-bookworm
 
 FROM rust:${RUST_TAG} AS chef
 # protoc is needed at build time by transitive build scripts (e.g. cedar-policy's
-# prost-build for hydrofoil). Harmless/unused for services whose proto types are
-# pre-generated (lineage-service).
+# prost-build for hydrofoil).
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 ARG NO_CHEF=false

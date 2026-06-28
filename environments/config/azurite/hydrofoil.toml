@@ -13,7 +13,7 @@ port = 50051
 session_ttl_secs = 1800
 
 # Lineage disabled for this focused stack (no Marquez here). Add a [lineage]
-# section pointing at a running lineage-service to re-enable.
+# section pointing at a running headwaters ingest endpoint to re-enable.
 
 # Cedar policy disabled (allow-all) — this stack exercises the vend + IO path,
 # not authorization. Push a policy and set oci_ref to enable.

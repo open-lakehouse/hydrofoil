@@ -27,7 +27,7 @@
 //! evaluation via the [`PrincipalExt`] `SessionConfig` extension. The
 //! [`PrincipalProvider`] read-back trait is the provider-facing seam for
 //! components that only see a `SessionState` (mirroring
-//! [`datafusion_open_lineage::context::LineageContextProvider`]); it is retained
+//! [`datafusion_openlineage::context::LineageContextProvider`]); it is retained
 //! for that use even though the policy gate currently reads the principal from a
 //! struct field.
 
@@ -174,7 +174,7 @@ pub fn with_principal(config: SessionConfig, principal: PrincipalIdentity) -> Se
 
 /// Resolves the principal a query runs as, from a [`SessionState`].
 ///
-/// Mirrors [`datafusion_open_lineage::context::LineageContextProvider`]: the
+/// Mirrors [`datafusion_openlineage::context::LineageContextProvider`]: the
 /// provider only sees a `SessionState`, so per-request data reaches it through
 /// a typed `SessionConfig` extension. Retained as the provider-facing seam; the
 /// policy gate currently reads the principal from a `LakehouseSession` field.

@@ -41,9 +41,9 @@
 
 use datafusion::execution::context::SessionState;
 use datafusion_cedar::PrincipalIdentity;
-use datafusion_open_lineage::config::OpenLineageConfig;
-use datafusion_open_lineage::context::{LineageContext, LineageContextProvider};
-use datafusion_open_lineage::facets::{
+use datafusion_openlineage::config::OpenLineageConfig;
+use datafusion_openlineage::context::{LineageContext, LineageContextProvider};
+use datafusion_openlineage::facets::{
     BaseFacet, DocumentationJobFacet, Owner, OwnershipJobFacet, ParentJob, ParentRun,
     ParentRunFacet, RootParent, TagsJobFacet, TagsJobFacetFields,
 };

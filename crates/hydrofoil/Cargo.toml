@@ -5,7 +5,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-datafusion-open-lineage = { path = "../open-lineage" }
+datafusion-openlineage = { workspace = true }
 datafusion-cedar = { path = "../datafusion-cedar" }
 deltalake-datafusion = { path = "../datafusion" }
 datafusion-unitycatalog = { workspace = true }

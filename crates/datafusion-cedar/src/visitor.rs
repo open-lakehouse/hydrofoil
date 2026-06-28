@@ -1,7 +1,7 @@
 //! Walk a [`LogicalPlan`] and turn the tables/actions it references into Cedar
 //! authorization [`Request`]s.
 //!
-//! This mirrors `datafusion-open-lineage`'s `extract()`: a [`TreeNodeVisitor`]
+//! This mirrors `datafusion-openlineage`'s `extract()`: a [`TreeNodeVisitor`]
 //! over the optimized plan that classifies each relevant node into a
 //! [`PlanAction`], which is then lowered to a Cedar request whose resource and
 //! context carry the table identity and the columns being accessed.

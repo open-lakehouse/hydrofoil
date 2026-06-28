@@ -1,7 +1,7 @@
 //! Cedar policy enforcement for Apache DataFusion.
 //!
 //! This crate is the DataFusion-aware, reusable half of hydrofoil's policy
-//! stack — the policy analog of [`datafusion-open-lineage`]. It owns the
+//! stack — the policy analog of `datafusion-openlineage`. It owns the
 //! [`Policy`] trait, the Cedar-backed implementation ([`CedarPolicy`]), and the
 //! [`LogicalPlan`](datafusion::logical_expr::LogicalPlan) walk that turns a
 //! query into a set of Cedar authorization requests. Policy *sourcing* (pulling
