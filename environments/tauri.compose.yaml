@@ -13,9 +13,9 @@ name: open-lakehouse-tauri
 # artifacts via a wasbs:// URL. Everything is fronted by an Envoy gateway that
 # exposes Databricks-parallel API paths (/api/2.0/mlflow*, /v1/traces, /api/v1).
 #
-# Deliberately excluded vs the live stack: the Unity Catalog server, marimo,
-# the hydrofoil container, and the Rust lineage-service (we run the Java Marquez
-# backend here instead).
+# Deliberately excluded vs the live stack: the Unity Catalog server, marimo, and
+# the hydrofoil container. Lineage here is the Java Marquez backend (below), not
+# an OpenLineage ingest service.
 #
 # Bring up:   just env-up tauri
 # Tear down:  just env-down tauri

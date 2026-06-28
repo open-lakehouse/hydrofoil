@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bin: [hydrofoil, lineage-service, portal]
+        bin: [hydrofoil, portal]
         platform:
           - arch: amd64
             os: linux/amd64
@@ -155,7 +155,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bin: [hydrofoil, lineage-service, portal]
+        bin: [hydrofoil, portal]
 
     steps:
       - name: Download digests

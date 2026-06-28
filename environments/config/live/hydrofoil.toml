@@ -16,12 +16,15 @@ port = 50051
 session_ttl_secs = 1800
 
 # --- OpenLineage ---
-# Emit lineage events to the in-compose Marquez ingest API. Omit / leave `url`
-# empty to disable lineage. `endpoint` defaults to "/api/v1/lineage".
-[lineage]
-url = "http://lineage-service:8091"
-namespace = "hydrofoil-live"
-# api_key via the OPENLINEAGE_API_KEY env var (a secret), not this file.
+# Lineage is disabled in this stack: the OpenLineage ingest + Marquez read
+# service moved to the headwaters repo (open-lakehouse/headwaters) and is no
+# longer part of this compose stack. To re-enable, point `url` at a running
+# headwaters ingest endpoint (`endpoint` defaults to "/api/v1/lineage"); the
+# api_key comes from the OPENLINEAGE_API_KEY env var (a secret), not this file.
+#
+# [lineage]
+# url = "http://headwaters:8091"
+# namespace = "hydrofoil-live"
 
 # --- Cedar policy enforcement ---
 # Enable by setting `oci_ref` to a Cedar policy image (e.g.
