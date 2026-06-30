@@ -967,10 +967,9 @@ async fn start_environment(
     // a failure tears UC back down rather than leaving it orphaned.
     let mut lineage_endpoint = None;
     if !capabilities.is_empty() {
-        let uc_port = uc_port_from_endpoint(&endpoint);
         let supervisor = app.state::<Supervisor>();
-        match modules::start_modules(&id, &capabilities, uc_port, &supervisor) {
-            Ok(graph) => lineage_endpoint = modules::lineage_endpoint(&graph),
+        match modules::start_modules(&id, &capabilities, &supervisor) {
+            Ok(plan) => lineage_endpoint = modules::lineage_endpoint(&plan),
             Err(e) => {
                 supervisor.shut_down_all();
                 return Err(e);
@@ -984,15 +983,6 @@ async fn start_environment(
 
     active_environment_descriptor(&app.state::<AppState>())
         .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
-}
-
-/// Extract the port from a UC endpoint like
-/// `http://127.0.0.1:PORT/api/2.1/unity-catalog/`. `None` if it can't be parsed
-/// (modules then run without a UC URL injected — they fall back to their defaults).
-fn uc_port_from_endpoint(endpoint: &str) -> Option<u16> {
-    let after_scheme = endpoint.split("://").nth(1)?;
-    let authority = after_scheme.split('/').next()?;
-    authority.rsplit(':').next()?.parse().ok()
 }
 
 /// Stop an environment: kill its UC sidecar and clear the active services so the

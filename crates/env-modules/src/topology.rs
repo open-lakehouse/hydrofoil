@@ -13,9 +13,12 @@
 //! **headwaters** (the `lineage` role provider), run **API-only** — hydrofoil ships its
 //! own lineage UI, so the `HEADWATERS_SERVE_UI` knob is forced off.
 
-use olai_stack_topology::{
-    Catalog, EnvManifest, PlanCtx, Role, Selection, Vantage, baseline_catalog,
-};
+use olai_stack_topology::{Catalog, EnvManifest, PlanCtx, Role, Selection, baseline_catalog};
+
+// Re-export the topology types the desktop orchestrator needs, so it depends on the
+// shared model through this crate's bridge rather than taking a second direct
+// dependency on `olai-stack-topology` (the desktop crate is a separate workspace).
+pub use olai_stack_topology::{EnvManifest as Manifest, Plan, Role as ServiceRole, Vantage};
 
 use crate::capability::Capability;
 

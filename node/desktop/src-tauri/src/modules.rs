@@ -1,14 +1,16 @@
 //! Desktop-side orchestration of an environment's service modules.
 //!
-//! The pure resolution + artifact generation lives in the `env-modules` crate;
-//! this module owns the side effects: resolving paths into a `LaunchContext`,
-//! the Docker daemon preflight, writing the generated compose file, running
-//! `docker compose up`/`down`. Everything started here
-//! is tracked in the [`Supervisor`] so it is torn down with the environment.
+//! The pure topology model — the catalog, the plan, and the rendered compose
+//! artifacts — lives in `olai-stack-topology` (consumed via `env_modules::topology`).
+//! This module owns the side effects: persisting the environment manifest, writing the
+//! rendered project tree, the Docker daemon preflight, running `docker compose
+//! up`/`down`, and resolving the in-process engine's service URLs from the plan.
+//! Everything started here is tracked in the [`Supervisor`] so it is torn down with the
+//! environment.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use env_modules::{ComposeArtifacts, LaunchContext, ResolvedGraph};
+use env_modules::topology::{self, Manifest, Plan, ServiceRole};
 
 use crate::supervisor::{ManagedProcess, Supervisor, compose_down};
 
@@ -30,8 +32,9 @@ pub fn compose_project(env_id: &str) -> String {
     format!("ol-{env_id}")
 }
 
-/// The directory holding an environment's generated module artifacts
-/// (`.open-lakehouse/envs/<id>/modules/`).
+/// The directory holding an environment's rendered topology project
+/// (`.open-lakehouse/envs/<id>/modules/`): the top-level `compose.yaml`, `.env`, the
+/// Envoy bootstrap, and each module's fragment + config files.
 fn env_modules_dir(env_id: &str) -> PathBuf {
     crate::app_data_dir()
         .join("envs")
@@ -39,59 +42,69 @@ fn env_modules_dir(env_id: &str) -> PathBuf {
         .join("modules")
 }
 
-/// The writable data root for an environment's stateful Docker services
-/// (`.open-lakehouse/envs/<id>/modules/data/`), injected into compose as
-/// `OL_ENV_DATA_DIR`. Per-environment so Postgres/Azurite state is isolated and
-/// co-located with the env's UC/home/notebook state — persists across restarts
-/// and is removed when the environment is deleted.
+/// The persisted environment manifest path (`.open-lakehouse/envs/<id>/env.toml`):
+/// the re-plannable record of the environment's selection + context.
+fn env_manifest_path(env_id: &str) -> PathBuf {
+    crate::app_data_dir()
+        .join("envs")
+        .join(env_id)
+        .join("env.toml")
+}
+
+/// The data root for an environment's stateful services, injected into the rendered
+/// compose as `DATA_ROOT`. Per-environment so service state is isolated and co-located
+/// with the env's UC/home/notebook state — persists across restarts, removed with the
+/// environment. The topology templates mount `${DATA_ROOT}/<module>` by convention.
 fn env_data_dir(env_id: &str) -> PathBuf {
     env_modules_dir(env_id).join("data")
 }
 
-/// Absolute path to the `environments/` directory (sibling of `node/`), the
-/// project directory the included fragments resolve relative paths against.
-fn environments_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../environments")
+/// The Envoy gateway's host-published port. Envoy publishes on `ENVOY_PORT`
+/// (default 9080); this is also the plan's `gateway_host_port`, so every in-process →
+/// gatewayed-service URL the plan resolves agrees with where Envoy actually binds.
+fn gateway_host_port() -> u16 {
+    std::env::var("ENVOY_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(9080)
 }
 
-/// Absolute path to the self-contained desktop fragments directory.
-fn fragments_dir() -> PathBuf {
-    environments_dir().join("services/desktop")
+/// Build the environment manifest from the selected capabilities and host facts.
+/// The manifest is the single source of truth for the plan; persisting it makes the
+/// environment reproducible and editable.
+fn manifest(env_id: &str, capabilities: &[env_modules::Capability]) -> Manifest {
+    topology::manifest(
+        capabilities,
+        compose_project(env_id),
+        env_data_dir(env_id).to_string_lossy().into_owned(),
+        gateway_host_port(),
+    )
 }
 
-/// Build the `LaunchContext` from the resolved UC port and host facts.
-/// `observability` opts the env's services in to emitting to the shared host
-/// Jaeger (reached from containers via host.docker.internal on its OTLP/HTTP port).
-fn launch_context(env_id: &str, uc_port: Option<u16>, observability: bool) -> LaunchContext {
-    LaunchContext {
-        uc_port,
-        fragments_dir: fragments_dir().to_string_lossy().into_owned(),
-        environments_dir: environments_dir().to_string_lossy().into_owned(),
-        env_data_dir: env_data_dir(env_id).to_string_lossy().into_owned(),
-        otel_collector_http: observability.then(|| {
-            let port = std::env::var("JAEGER_OTLP_HTTP_PORT").unwrap_or_else(|_| "4318".into());
-            format!("http://host.docker.internal:{port}")
-        }),
-    }
-}
-
-/// Start an environment's service modules after UC is up. `uc_port` is the
-/// sidecar's bound port (for outward UC injection); `observability` opts the
-/// services in to emitting traces to the shared collector. Tracks every started
-/// process in the supervisor. Returns an error (after best-effort cleanup) if a
-/// required Docker daemon is absent or `docker compose up` fails — so a failed
-/// module start surfaces to the user rather than leaving a half-running env.
+/// Start an environment's service modules after UC is up. Resolves the topology plan
+/// from the (persisted) manifest, renders + writes the compose project, and brings it
+/// up. Returns the resolved [`Plan`] so the caller can resolve in-process service URLs
+/// (e.g. the lineage sink) via [`lineage_endpoint`]. Tracks every started process in
+/// the supervisor. Returns an error (after best-effort cleanup) if a required Docker
+/// daemon is absent or `docker compose up` fails — so a failed module start surfaces to
+/// the user rather than leaving a half-running env.
+///
+/// `observability` is intentionally not threaded here: the topology templates carry
+/// their own OTLP configuration, and the shared collector is an app-level concern wired
+/// outside the compose project.
 pub fn start_modules(
     env_id: &str,
     capabilities: &[env_modules::Capability],
-    uc_port: Option<u16>,
     supervisor: &Supervisor,
-) -> Result<ResolvedGraph, String> {
-    let graph = env_modules::resolve_capabilities(capabilities)
-        .map_err(|e| format!("resolving capabilities: {e}"))?;
-    let observability = env_modules::Capability::wants_observability(capabilities);
+) -> Result<Plan, String> {
+    let manifest = manifest(env_id, capabilities);
+    let plan = manifest
+        .plan(&topology::catalog())
+        .map_err(|e| format!("planning environment topology: {e}"))?;
 
-    if graph.needs_docker() {
+    // No containerized modules (e.g. observability-only) → nothing to bring up.
+    let needs_docker = !plan.graph.nodes.is_empty();
+    if needs_docker {
         if !docker_available() {
             return Err(
                 "Docker is required for the selected services but the Docker daemon \
@@ -99,79 +112,77 @@ pub fn start_modules(
                     .into(),
             );
         }
-        start_compose(env_id, &graph, uc_port, observability, supervisor)?;
+        start_compose(env_id, &manifest, &plan, supervisor)?;
     }
 
-    Ok(graph)
+    Ok(plan)
 }
 
-/// The lineage sink endpoint to inject into the in-process engine, derived from
-/// the resolved graph: `Some(base_url)` when the graph carries a lineage effect
-/// (the Marquez sink is reached through the Envoy gateway on the host). `None`
-/// when lineage isn't part of the environment.
-pub fn lineage_endpoint(graph: &ResolvedGraph) -> Option<String> {
-    graph
-        .effect(env_modules::EffectKind::LineageEndpoint)
-        .map(|_| gateway_base())
+/// The lineage sink endpoint to configure the in-process engine with, resolved from the
+/// plan: `Some(url)` when the environment runs a `lineage`-role service (headwaters),
+/// reached from the host through the Envoy gateway; `None` when lineage isn't part of
+/// the environment. The in-process engine sits on the host, so it addresses the
+/// gatewayed service at the host vantage.
+pub fn lineage_endpoint(plan: &Plan) -> Option<String> {
+    let lineage = plan.service_by_role(&ServiceRole::lineage()).ok()?;
+    lineage
+        .address(topology::IN_PROCESS_VANTAGE, topology::LINEAGE_ENDPOINT_ID)
+        .ok()
+        .map(|url| url.to_string())
 }
 
-/// The host base URL of the Envoy gateway the Docker services are published on.
-fn gateway_base() -> String {
-    // Envoy publishes on ENVOY_PORT (default 9080); the desktop fragments use the
-    // same default. Marquez's OpenLineage API lives under /api/v1 on the gateway.
-    let port = std::env::var("ENVOY_PORT").unwrap_or_else(|_| "9080".to_string());
-    format!("http://localhost:{port}")
-}
-
-/// Generate + write the compose file and bring the project up, tracking it for
-/// teardown. Reconciles any stale project from a prior crash first.
+/// Render + write the compose project, persist the manifest, and bring the project up,
+/// tracking it for teardown. Reconciles any stale project from a prior crash first.
 fn start_compose(
     env_id: &str,
-    graph: &ResolvedGraph,
-    uc_port: Option<u16>,
-    observability: bool,
+    manifest: &Manifest,
+    plan: &Plan,
     supervisor: &Supervisor,
 ) -> Result<(), String> {
     let project = compose_project(env_id);
     // Reconcile a stale project from a prior force-quit before bringing ours up.
     compose_down(&project);
 
-    let ctx = launch_context(env_id, uc_port, observability);
-    let ComposeArtifacts { compose_yaml, env } = env_modules::generate_compose(graph, &ctx);
-
     let dir = env_modules_dir(env_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {dir:?}: {e}"))?;
-    // Create the per-env data root up front so the bind mounts resolve to a
-    // host dir we own (Docker would otherwise create it root-owned on first up).
+    // Create the per-env data root up front so the bind mounts resolve to a host dir we
+    // own (Docker would otherwise create it root-owned on first up).
     let data_dir = env_data_dir(env_id);
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
-    let compose_path = dir.join("compose.yaml");
-    std::fs::write(&compose_path, &compose_yaml)
-        .map_err(|e| format!("writing {compose_path:?}: {e}"))?;
 
-    // Track BEFORE `up` so a partial/failed bring-up is still cleaned up on the
-    // next stop / app exit (compose down is idempotent).
+    // Persist the manifest so the environment is reproducible and editable across
+    // restarts (re-plan from it rather than recompute from capabilities).
+    manifest
+        .write_to(&env_manifest_path(env_id))
+        .map_err(|e| format!("writing environment manifest: {e}"))?;
+
+    // Render the full project tree (top-level compose, .env, Envoy bootstrap, per-module
+    // fragments + config files) and write it under the env's modules dir.
+    plan.materialize()
+        .write_to(&dir)
+        .map_err(|e| format!("writing rendered compose project to {dir:?}: {e}"))?;
+
+    // Track BEFORE `up` so a partial/failed bring-up is still cleaned up on the next
+    // stop / app exit (compose down is idempotent).
     supervisor.track(ManagedProcess::Compose {
         project: project.clone(),
     });
 
-    let mut cmd = std::process::Command::new("docker");
-    cmd.args([
-        "compose",
-        "-p",
-        &project,
-        "-f",
-        &compose_path.to_string_lossy(),
-        "up",
-        "-d",
-        "--wait",
-    ])
-    .env("COMPOSE_PROJECT_NAME", &project);
-    for (k, v) in &env {
-        cmd.env(k, v);
-    }
-
-    let output = cmd
+    let compose_path = dir.join("compose.yaml");
+    // The rendered project is self-contained: `.env` sits next to compose.yaml and is
+    // auto-loaded, so no env injection is needed here.
+    let output = std::process::Command::new("docker")
+        .args([
+            "compose",
+            "-p",
+            &project,
+            "-f",
+            &compose_path.to_string_lossy(),
+            "up",
+            "-d",
+            "--wait",
+        ])
+        .env("COMPOSE_PROJECT_NAME", &project)
         .output()
         .map_err(|e| format!("running docker compose up: {e}"))?;
     if !output.status.success() {
@@ -289,92 +300,86 @@ pub struct ConfigArtifact {
 }
 
 /// Build the curated list of config artifacts for an environment's selected
-/// capabilities — for the read-only viewer. The generated compose is produced
-/// **on demand** (illustrative `LaunchContext`, no side effects), so it's
-/// viewable before the environment has ever started; the static fragments + the
-/// gateway/collector configs are read from the repo `environments/` tree. All
-/// file reads are confined to that tree (no arbitrary paths cross from the UI).
+/// capabilities — for the read-only viewer. The artifacts are the **fully rendered**
+/// topology project (top-level compose, `.env`, the `LAYOUT.md` gateway summary, the
+/// Envoy bootstrap, and each module's fragment + config files), produced on demand from
+/// the plan with no side effects — so it shows the real, exact shape the environment
+/// will run, viewable before it has ever started.
 pub fn config_artifacts(
     capabilities: &[env_modules::Capability],
 ) -> Result<Vec<ConfigArtifact>, String> {
-    let graph = env_modules::resolve_capabilities(capabilities)
-        .map_err(|e| format!("resolving capabilities: {e}"))?;
+    // Illustrative facts: the viewer renders pre-start, so use a placeholder env id for
+    // the project name / data-root path shown in the rendered artifacts.
+    let manifest = topology::manifest(
+        capabilities,
+        "<env>",
+        env_data_dir("<env>").to_string_lossy().into_owned(),
+        gateway_host_port(),
+    );
+    let plan = manifest
+        .plan(&topology::catalog())
+        .map_err(|e| format!("planning environment topology: {e}"))?;
 
-    let mut artifacts = Vec::new();
-
-    // 1. The generated compose for this capability set — the centerpiece. Use an
-    //    illustrative context (placeholder UC port; collector shown when
-    //    observability is opted in) so it renders the real shape pre-start.
-    let observability = env_modules::Capability::wants_observability(capabilities);
-    // Illustrative context: no real env yet (the viewer renders pre-start), so use
-    // a placeholder id for the per-env data root path shown in the compose.
-    let ctx = launch_context("<env>", None, observability);
-    let ComposeArtifacts { compose_yaml, .. } = env_modules::generate_compose(&graph, &ctx);
-    if !compose_yaml.is_empty() {
-        artifacts.push(ConfigArtifact {
-            id: "generated-compose".into(),
-            label: "Generated compose".into(),
-            description: "The Docker Compose file env-modules generates for the \
-                          selected capabilities (services + their dependencies)."
-                .into(),
-            language: "yaml".into(),
-            content: compose_yaml,
-        });
-    }
-
-    // 2. Each Docker module's self-contained fragment, in startup order.
-    let fragments = fragments_dir();
-    for module in graph.docker_modules() {
-        #[allow(irrefutable_let_patterns)]
-        let env_modules::ModuleKind::DockerService { fragment } = &module.kind
-        else {
-            continue;
-        };
-        let path = fragments.join(fragment);
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("reading {path:?}: {e}"))?;
-        artifacts.push(ConfigArtifact {
-            id: format!("fragment-{}", module.id),
-            label: format!("{} ({fragment})", module.name),
-            description: format!("Service fragment for the {} module.", module.name),
-            language: "yaml".into(),
-            content,
-        });
-    }
-
-    // 3. The desktop Envoy gateway config (present whenever the gateway runs).
-    if graph.docker_modules().iter().any(|m| m.id == "envoy") {
-        let path = environments_dir().join("config/tauri/envoy.yaml");
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            artifacts.push(ConfigArtifact {
-                id: "envoy-config".into(),
-                label: "Envoy gateway (envoy.yaml)".into(),
-                description: "The gateway config: routes to the containerised \
-                              services and (when observability is on) exports its \
-                              own traces."
-                    .into(),
-                language: "yaml".into(),
-                content,
-            });
-        }
-    }
-
-    // 4. The shared telemetry collector fragment, when observability is opted in.
-    if observability {
-        let path = fragments.join("jaeger.yaml");
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            artifacts.push(ConfigArtifact {
-                id: "jaeger".into(),
-                label: "Shared collector (jaeger.yaml)".into(),
-                description: "The app-level Jaeger collector all environments' \
-                              traces are sent to."
-                    .into(),
-                language: "yaml".into(),
-                content,
-            });
-        }
-    }
+    let artifacts = plan
+        .materialize()
+        .files
+        .into_iter()
+        .map(|file| {
+            let language = artifact_language(&file.path);
+            ConfigArtifact {
+                id: file.path.clone(),
+                label: artifact_label(&file.path),
+                description: artifact_description(&file.path),
+                language,
+                content: file.contents,
+            }
+        })
+        .collect();
 
     Ok(artifacts)
+}
+
+/// The Monaco editor language id for a rendered artifact path.
+fn artifact_language(path: &str) -> String {
+    match path.rsplit('.').next() {
+        Some("toml") => "toml",
+        Some("md") => "markdown",
+        Some("env") => "ini",
+        // compose.yaml, envoy.yaml, and the `.env` top-level file default to yaml/ini;
+        // the top-level `.env` has no extension after the dot, handled above.
+        _ if path == ".env" => "ini",
+        _ => "yaml",
+    }
+    .to_string()
+}
+
+/// A human-readable picker label for a rendered artifact path.
+fn artifact_label(path: &str) -> String {
+    match path {
+        "compose.yaml" => "Top-level compose".to_string(),
+        ".env" => "Environment (.env)".to_string(),
+        "LAYOUT.md" => "Gateway layout (LAYOUT.md)".to_string(),
+        "modules/envoy/envoy.yaml" => "Envoy gateway (envoy.yaml)".to_string(),
+        // `modules/<id>/<file>` — label by module + file.
+        _ => path
+            .strip_prefix("modules/")
+            .map(|rest| rest.replace('/', " / "))
+            .unwrap_or_else(|| path.to_string()),
+    }
+}
+
+/// A one-line description for a rendered artifact path.
+fn artifact_description(path: &str) -> String {
+    match path {
+        "compose.yaml" => {
+            "The top-level Docker Compose file: includes each module's fragment.".to_string()
+        }
+        ".env" => "Plan-injected environment values the compose file substitutes.".to_string(),
+        "LAYOUT.md" => "Human-readable summary of the gateway routes → services.".to_string(),
+        "modules/envoy/envoy.yaml" => {
+            "The gateway bootstrap: routes to the containerised services.".to_string()
+        }
+        _ => format!("Rendered artifact at {path}."),
+    }
 }
 
