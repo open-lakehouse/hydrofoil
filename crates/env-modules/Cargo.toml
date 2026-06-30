@@ -6,6 +6,7 @@ license.workspace = true
 description = "Pure dependency resolution for desktop environment service modules"
 
 [dependencies]
+olai-stack-topology = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

@@ -15,7 +15,8 @@
 # In-memory backend: fast, zero-setup, non-persistent. (Default, set explicitly
 # for clarity.)
 backend:
-  engine: in-memory
+  engine: sqlite
+  path: ":memory:"
 
 # Dev-only envelope-encryption KEK. When a config file is loaded, `encryption`
 # defaults to none and the server refuses to start without an active KEK, so we

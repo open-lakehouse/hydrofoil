@@ -61,8 +61,11 @@ function ShellHeader({
 export function EnvironmentGate() {
   const host = getEnvironmentHost();
   const queryClient = useQueryClient();
-  // The active environment at startup (the host may have activated one via an
-  // escape hatch, e.g. OPEN_LAKEHOUSE_UC_URL). Drives the initial view.
+  // The active environment at startup. The desktop host returns null (nothing is
+  // auto-activated), so the app lands on the environment manager; a started
+  // environment is adopted via the start/open handlers below. (The browser
+  // seam-fake host reports a default environment, so browser dev boots into the
+  // app.) Drives the initial view.
   const initial = useQuery({
     queryKey: ["environment-active"],
     queryFn: () => host.active(),

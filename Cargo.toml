@@ -27,7 +27,7 @@ datafusion-expr = "54"
 # The OpenLineage / DataFusion integration moved to the headwaters sibling repo
 # (open-lakehouse/headwaters), published to crates.io as `datafusion-openlineage`.
 # Consumers import it as `datafusion_openlineage`.
-datafusion-openlineage = { version = "0.0.3" }
+datafusion-openlineage = { version = "0.0.6" }
 datafusion-tracing = "54"
 # Track the same kernel source as the delta-rs fork (roeap/delta-rs) so the
 # whole graph resolves to a single buoyant_kernel version — otherwise hydrofoil
@@ -40,7 +40,12 @@ delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-d
 futures = "0.3.32"
 itertools = "0.14"
 object_store = { version = "0.13.2", features = ["azure", "aws", "gcp"] }
-olai-http = { version = "0.0.1" }
+olai-http = { version = "0.0.5" }
+# Role-/placement-/gateway-aware topology + addressing + compose-rendering model,
+# shared with trestle. Drives env-modules' compose generation and cross-service
+# addressing. `std-io` enables `Plan::materialize().write_to` + the `EnvManifest`
+# file helpers; `catalog` is left off (we use the embedded `baseline_catalog()`).
+olai-stack-topology = { version = "0.0.2", features = ["std-io"] }
 ordered-float = { version = "5" }
 prost = { version = "0.14.1" }
 serde = { version = "1", features = ["derive"] }
@@ -71,9 +76,9 @@ uuid = { version = "1", features = ["v4"] }
 # The in-tree dep keys stay `unitycatalog-*` / `datafusion-unitycatalog` via the
 # `package =` alias so dependents' `{ workspace = true }` references are unchanged.
 # Pin the git rev for now; switch to the published `olai-uc-*` versions once released.
-unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d", features = ["rest-client", "axum"] }
-unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
-unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
-datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "712809bf34f1dbc183a7d59d6cfcd9426f5ded5d" }
+unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a", features = ["rest-client", "axum"] }
+unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
+unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
+datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
 deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion", "cloud"] }
 deltalake = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion"] }
