@@ -16,6 +16,7 @@ pub mod effect;
 pub mod generate;
 pub mod model;
 pub mod resolve;
+pub mod topology;
 
 pub use capability::{Capability, Provider};
 pub use effect::{Effect, EffectConsumer, EffectKind};
