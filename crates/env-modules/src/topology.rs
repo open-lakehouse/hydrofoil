@@ -165,10 +165,10 @@ mod tests {
         let url = lineage
             .address(IN_PROCESS_VANTAGE, LINEAGE_ENDPOINT_ID)
             .expect("lineage address");
-        // Host vantage → gatewayed service → localhost on the gateway host port.
-        assert_eq!(url.scheme(), "http");
-        assert_eq!(url.host_str(), Some("localhost"));
-        assert_eq!(url.port(), Some(9080));
+        // Host vantage → gatewayed service → localhost on the gateway host port, at the
+        // headwaters OpenLineage API path. This exact URL is what the in-process engine
+        // POSTs lineage events to, so assert it whole.
+        assert_eq!(url.as_str(), "http://localhost:9080/api/v1/lineage");
     }
 
     #[test]

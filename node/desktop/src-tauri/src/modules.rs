@@ -339,15 +339,15 @@ pub fn config_artifacts(
     Ok(artifacts)
 }
 
-/// The Monaco editor language id for a rendered artifact path.
+/// The Monaco editor language id for a rendered artifact path. The dotted suffix
+/// drives it: `.toml`, `.md`, and `.env` (the top-level `.env` splits to a trailing
+/// `env`) map to their editors; everything else (compose.yaml, envoy.yaml, module
+/// fragments) is YAML.
 fn artifact_language(path: &str) -> String {
     match path.rsplit('.').next() {
         Some("toml") => "toml",
         Some("md") => "markdown",
         Some("env") => "ini",
-        // compose.yaml, envoy.yaml, and the `.env` top-level file default to yaml/ini;
-        // the top-level `.env` has no extension after the dot, handled above.
-        _ if path == ".env" => "ini",
         _ => "yaml",
     }
     .to_string()
