@@ -3,10 +3,9 @@
 //! The desktop app runs the portal (Tags + Files) and hydrofoil (QueryService +
 //! IngestService) executors **in-process** instead of over HTTP, so a local run
 //! needs no Docker Compose stack for those services. Only Unity Catalog must be a
-//! real server,
-//! reached over HTTP — run as a Tauri sidecar when bundled, or pointed at a dev
-//! UC via `OPEN_LAKEHOUSE_UC_URL`. Heavier services (Lineage, MLflow) stay in
-//! Compose.
+//! real server, reached over HTTP — spawned per environment as a Tauri sidecar on
+//! a dynamic port (see `spawn_uc_sidecar`). Heavier services (Lineage, MLflow) stay
+//! in Compose.
 //!
 //! The UI reaches the executors through Tauri commands (see `tauri-transport.ts`
 //! / the Files host seam on the JS side):
@@ -44,9 +43,8 @@ use telemetry::Telemetry;
 /// selected (the outer shell spawns services lazily on selection).
 #[derive(Clone, Default)]
 pub(crate) struct ActiveEnv {
-    /// The active environment's id. `None` until one is selected; set to the
-    /// escape-hatch synthetic id when `OPEN_LAKEHOUSE_UC_URL` activated one.
-    /// Lets the shell highlight the running environment in the overview.
+    /// The active environment's id. `None` until one is started. Lets the shell
+    /// highlight the running environment in the overview.
     pub(crate) id: Option<String>,
     pub(crate) hosted: Option<Arc<Hosted>>,
     /// Resolved Unity Catalog REST base (the spawned sidecar's dynamic endpoint),
@@ -59,8 +57,7 @@ pub(crate) struct ActiveEnv {
     /// notebook templates can wire OpenLineage. `None` when lineage isn't part of
     /// the environment.
     pub(crate) lineage_endpoint: Option<String>,
-    /// Whether this environment serves a local `/home` volume (true for real
-    /// environments, false for the `__external__` escape hatch). Surfaced to the
+    /// Whether this environment serves a local `/home` volume. Surfaced to the
     /// UI as an environment capability.
     has_home: bool,
 }
@@ -776,24 +773,22 @@ fn parse_uc_addr(line: &str) -> Option<String> {
 
 /// Bring an environment online: build (and store) the in-process executors for
 /// the given UC endpoint. `unity_endpoint` is `None` when UC is disabled (files
-/// run in-memory). Shared by `start_environment` and the `OPEN_LAKEHOUSE_UC_URL`
-/// escape hatch.
+/// run in-memory). Called by `start_environment`.
 async fn activate_endpoint(
     app: &tauri::AppHandle,
     id: Option<String>,
     unity_endpoint: Option<String>,
     lineage_endpoint: Option<String>,
 ) -> Result<(), String> {
-    // A real environment gets a local home volume under its data dir; the
-    // synthetic `__external__` escape-hatch id has no managed dir, so no home.
+    // An environment gets a local home volume under its data dir.
     let home_root = match id.as_deref() {
-        Some(env_id) if env_id != "__external__" => {
+        Some(env_id) => {
             let home = env_home_dir(env_id);
             std::fs::create_dir_all(&home).map_err(|e| format!("creating {home:?}: {e}"))?;
             seed_home_dir(&home);
             Some(home)
         }
-        _ => None,
+        None => None,
     };
 
     let has_home = home_root.is_some();
@@ -822,8 +817,7 @@ async fn activate_endpoint(
 /// Build the `ActiveEnvironment` descriptor the UI consumes (see
 /// node/ui/src/lib/client/environments.ts): id, display name, and capabilities.
 /// The UI derives built-in volumes from `hasHome`. Returns `null` when nothing is
-/// active. `name` falls back to the id for the synthetic `__external__` env,
-/// which has no registry entry.
+/// active. `name` falls back to the id if the env has no registry entry.
 fn active_environment_descriptor(state: &AppState) -> Option<serde_json::Value> {
     let active = state.active.read().unwrap();
     let id = active.id.clone()?;
@@ -846,8 +840,9 @@ fn list_environments() -> Result<Vec<Environment>, String> {
 }
 
 /// The currently-active environment descriptor (services bound), or `null` when
-/// none is active. The shell uses this to skip the picker on startup (escape
-/// hatch), scope its state, and highlight the running environment in the overview.
+/// none is active. The shell uses this to scope its state and highlight the
+/// running environment in the overview; `null` at startup lands it on the
+/// environment manager (no environment is auto-activated).
 #[tauri::command]
 fn active_environment(state: State<'_, AppState>) -> Option<serde_json::Value> {
     active_environment_descriptor(&state)
@@ -1172,37 +1167,6 @@ pub fn run() {
         // loopback URL (so marimo's WebSocket connects natively) — see
         // `notebook::open_notebook`.
         .manage(Notebooks::default())
-        .setup(|app| {
-            // Escape hatch for dev scripts: `OPEN_LAKEHOUSE_UC_URL` (incl. empty
-            // for "no UC → in-memory files") auto-activates a single environment
-            // up front, so `dev-desktop.sh` boots straight into the app without
-            // the environment picker. When unset, the app boots into the outer
-            // shell and an environment is activated lazily via start_environment.
-            match std::env::var("OPEN_LAKEHOUSE_UC_URL") {
-                Ok(url) => {
-                    let endpoint = if url.is_empty() {
-                        eprintln!("[uc] OPEN_LAKEHOUSE_UC_URL is empty → files in-memory, no UC");
-                        None
-                    } else {
-                        eprintln!("[uc] using OPEN_LAKEHOUSE_UC_URL={url}");
-                        Some(url)
-                    };
-                    let handle = app.handle().clone();
-                    // Synthetic id: non-null so the shell skips the picker, but it
-                    // matches no managed environment (there are none in this mode).
-                    tauri::async_runtime::block_on(activate_endpoint(
-                        &handle,
-                        Some("__external__".to_string()),
-                        endpoint,
-                        None,
-                    ))?;
-                }
-                Err(_) => {
-                    eprintln!("[shell] no OPEN_LAKEHOUSE_UC_URL → environment picker");
-                }
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             list_environments,
             active_environment,
