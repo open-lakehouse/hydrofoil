@@ -13,7 +13,7 @@ workspace `Cargo.toml` — read it there). Notable crates:
 - `datafusion`, `datafusion-cedar` — DataFusion integration; Cedar-policy bridge
 - `cedar-oci` — Cedar policy / OCI artifact handling
 - `portal`, `hydrofoil` — Connect-RPC services (proto-generated)
-- `desktop-host`, `env-modules` — desktop host + environment modules
+- `desktop-host` — in-process service executors for the desktop shell
 
 Lineage capture (the OpenLineage ingest/read service and the DataFusion
 integration) moved to the sibling `headwaters` repo; hydrofoil consumes its

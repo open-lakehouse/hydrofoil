@@ -33,6 +33,7 @@ mod modules;
 mod notebook;
 mod supervisor;
 mod telemetry;
+mod topology;
 
 use notebook::Notebooks;
 use supervisor::{ManagedProcess, Supervisor};
@@ -246,12 +247,10 @@ async fn query_ingest(
             .into_iter()
             .map(|f| Ok::<Bytes, ConnectError>(Bytes::from(f))),
     ));
-    let fut = active.router(&service)?.call_client_streaming(
-        &path,
-        ctx,
-        requests,
-        CodecFormat::Proto,
-    );
+    let fut =
+        active
+            .router(&service)?
+            .call_client_streaming(&path, ctx, requests, CodecFormat::Proto);
     let resp = fut.await.map_err(|e| e.to_string())?;
     Ok(resp.body.to_vec())
 }
@@ -457,7 +456,10 @@ async fn proxy_request(
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let resp_body = resp.text().await.map_err(|e| format!("uc proxy body: {e}"))?;
+    let resp_body = resp
+        .text()
+        .await
+        .map_err(|e| format!("uc proxy body: {e}"))?;
     Ok(ProxyResponse {
         status,
         body: resp_body,
@@ -510,24 +512,32 @@ fn seed_home_dir(home: &std::path::Path) {
         "queries/example.sql",
         "SELECT * FROM main.default.users\nORDER BY events DESC\nLIMIT 10;\n",
     );
-    write("README.md", "# Home\n\nLocal scratch space for SQL and notes.\n");
+    write(
+        "README.md",
+        "# Home\n\nLocal scratch space for SQL and notes.\n",
+    );
 }
 
 /// One environment: a named bundle of service configuration. Carries an id +
-/// display name (the UC config is derived from the id's directory) and the set of
-/// optional capabilities to run alongside UC (lineage, observability, model
-/// tracking, object storage). Capabilities — not raw services — are the
-/// user-facing unit; the `env-modules` resolver maps them to providers, modules,
-/// and cross-service effects (see ADR 0017).
+/// display name (the UC config is derived from the id's directory), the baseline
+/// catalog modules to run alongside UC (headwaters/mlflow/azurite — see
+/// [`topology::available_modules`]), and an observability opt-in. Modules map
+/// directly to the shared topology catalog; observability is *not* a module — it's
+/// an app-level opt-in that emits to the shared telemetry collector.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Environment {
     id: String,
     name: String,
-    /// Selected capability ids (see `env_modules::Capability`). Empty = UC-only
-    /// (no Docker). `#[serde(default)]` keeps pre-capabilities `environments.json`
+    /// Selected catalog module ids (see [`topology::available_modules`]). Empty =
+    /// UC-only (no Docker). `#[serde(default)]` keeps module-less `environments.json`
     /// files parsing.
     #[serde(default)]
-    capabilities: Vec<String>,
+    modules: Vec<String>,
+    /// Whether this environment opts in to emitting telemetry to the shared,
+    /// app-level collector. Not a module: it brings up the shared collector, not a
+    /// per-env service.
+    #[serde(default)]
+    observability: bool,
 }
 
 /// Read the environments registry (`environments.json`). Returns an empty list
@@ -535,8 +545,7 @@ struct Environment {
 fn read_environments() -> Result<Vec<Environment>, String> {
     let path = app_data_dir().join("environments.json");
     match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|e| format!("parsing {path:?}: {e}")),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("parsing {path:?}: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("reading {path:?}: {e}")),
     }
@@ -561,7 +570,11 @@ fn allocate_env_id(name: &str, existing: &[Environment]) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let slug = slug.trim_matches('-').to_string();
-    let base = if slug.is_empty() { "env".to_string() } else { slug };
+    let base = if slug.is_empty() {
+        "env".to_string()
+    } else {
+        slug
+    };
     let taken = |candidate: &str| existing.iter().any(|e| e.id == candidate);
     if !taken(&base) {
         return base;
@@ -640,8 +653,8 @@ async fn spawn_uc_sidecar(
     env_id: &str,
     config_path: &std::path::Path,
 ) -> Result<String, String> {
-    use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
+    use tauri_plugin_shell::ShellExt;
 
     // Resolve the per-environment KEK from the OS keychain (get-or-create) and
     // hand it to the child via env only — the config references it as
@@ -874,7 +887,8 @@ fn create_environment(name: String) -> Result<Environment, String> {
     let env = Environment {
         id,
         name,
-        capabilities: Vec::new(),
+        modules: Vec::new(),
+        observability: false,
     };
     envs.push(env.clone());
     write_environments(&envs)?;
@@ -886,22 +900,15 @@ fn create_environment(name: String) -> Result<Environment, String> {
 /// active-environment descriptor. Re-starting an environment respawns it cleanly.
 /// Starting does not open the app — the UI decides whether to navigate into it.
 #[tauri::command]
-async fn start_environment(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<serde_json::Value, String> {
+async fn start_environment(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
     let envs = read_environments()?;
     let env = envs
         .iter()
         .find(|e| e.id == id)
         .ok_or_else(|| format!("unknown environment: {id}"))?;
-    // Parse persisted capability ids, ignoring any unknown (forward-compat with
-    // ids a newer build may have written).
-    let capabilities: Vec<env_modules::Capability> = env
-        .capabilities
-        .iter()
-        .filter_map(|id| env_modules::Capability::from_id(id))
-        .collect();
+    // The persisted module selection (catalog module ids) and observability opt-in.
+    let modules = env.modules.clone();
+    let observability = env.observability;
 
     // Already active → no-op (the UI re-opens an already-running environment
     // without calling start, but keep the command idempotent so a redundant
@@ -947,7 +954,7 @@ async fn start_environment(
     // collector exists when the services' OTLP exporters point at it, and so the
     // in-process engine emits too. A failure tears UC back down (the user asked
     // for observability and we couldn't provide it).
-    if env_modules::Capability::wants_observability(&capabilities) {
+    if observability {
         if let Err(e) = telemetry::ensure(&app.state::<Telemetry>()) {
             app.state::<Supervisor>().shut_down_all();
             return Err(e);
@@ -961,9 +968,9 @@ async fn start_environment(
     // healthy. Tracked in the supervisor so they tear down with the environment;
     // a failure tears UC back down rather than leaving it orphaned.
     let mut lineage_endpoint = None;
-    if !capabilities.is_empty() {
+    if !modules.is_empty() {
         let supervisor = app.state::<Supervisor>();
-        match modules::start_modules(&id, &capabilities, &supervisor) {
+        match modules::start_modules(&id, &modules, &supervisor) {
             Ok(plan) => lineage_endpoint = modules::lineage_endpoint(&plan),
             Err(e) => {
                 supervisor.shut_down_all();
@@ -974,7 +981,13 @@ async fn start_environment(
 
     // Now build the in-process engine, wired with any effect-derived endpoints
     // (lineage). The engine consumes the effects; it is built exactly once.
-    activate_endpoint(&app, Some(id.clone()), Some(endpoint.clone()), lineage_endpoint).await?;
+    activate_endpoint(
+        &app,
+        Some(id.clone()),
+        Some(endpoint.clone()),
+        lineage_endpoint,
+    )
+    .await?;
 
     active_environment_descriptor(&app.state::<AppState>())
         .ok_or_else(|| "activation succeeded but produced no descriptor".to_string())
@@ -1073,15 +1086,14 @@ fn docker_status() -> bool {
     modules::docker_available()
 }
 
-/// Set an environment's selected capabilities, persisting the registry. Takes
-/// effect on the next start (a running environment is not hot-reconfigured).
-/// Unknown ids are rejected so the UI can't persist a capability the backend
-/// won't resolve.
+/// Set an environment's selected modules, persisting the registry. Takes effect on
+/// the next start (a running environment is not hot-reconfigured). Unknown module
+/// ids are rejected so the UI can't persist a module the backend won't resolve.
 #[tauri::command]
-fn set_environment_capabilities(id: String, capabilities: Vec<String>) -> Result<(), String> {
-    for cap in &capabilities {
-        if env_modules::Capability::from_id(cap).is_none() {
-            return Err(format!("unknown capability: {cap}"));
+fn set_environment_modules(id: String, modules: Vec<String>) -> Result<(), String> {
+    for module in &modules {
+        if !topology::is_known_module(module) {
+            return Err(format!("unknown module: {module}"));
         }
     }
     let mut envs = read_environments()?;
@@ -1089,27 +1101,51 @@ fn set_environment_capabilities(id: String, capabilities: Vec<String>) -> Result
         .iter_mut()
         .find(|e| e.id == id)
         .ok_or_else(|| format!("unknown environment: {id}"))?;
-    env.capabilities = capabilities;
+    env.modules = modules;
     write_environments(&envs)
 }
 
-/// The available capabilities (id + label) for the UI to render as a checklist.
+/// Set an environment's observability opt-in, persisting the registry. Takes effect
+/// on the next start (a running environment is not hot-reconfigured).
 #[tauri::command]
-fn available_capabilities() -> Vec<serde_json::Value> {
-    env_modules::Capability::all()
+fn set_environment_observability(id: String, enabled: bool) -> Result<(), String> {
+    let mut envs = read_environments()?;
+    let env = envs
+        .iter_mut()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("unknown environment: {id}"))?;
+    env.observability = enabled;
+    write_environments(&envs)
+}
+
+/// The available modules (id + label) for the UI to render as a checklist.
+#[tauri::command]
+fn available_modules() -> Vec<serde_json::Value> {
+    topology::available_modules()
         .iter()
-        .map(|c| serde_json::json!({ "id": c.id(), "label": c.label() }))
+        .map(|m| serde_json::json!({ "id": m.id, "label": m.label }))
         .collect()
 }
 
-/// An environment's currently-selected capability ids (for pre-checking the
-/// checklist). Empty for a fresh or UC-only environment.
+/// An environment's currently-selected module ids (for pre-checking the checklist).
+/// Empty for a fresh or UC-only environment.
 #[tauri::command]
-fn environment_capabilities(id: String) -> Result<Vec<String>, String> {
+fn environment_modules(id: String) -> Result<Vec<String>, String> {
     let envs = read_environments()?;
     envs.into_iter()
         .find(|e| e.id == id)
-        .map(|e| e.capabilities)
+        .map(|e| e.modules)
+        .ok_or_else(|| format!("unknown environment: {id}"))
+}
+
+/// Whether an environment opts in to the shared telemetry collector (for the
+/// Observability toggle).
+#[tauri::command]
+fn environment_observability(id: String) -> Result<bool, String> {
+    let envs = read_environments()?;
+    envs.into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.observability)
         .ok_or_else(|| format!("unknown environment: {id}"))
 }
 
@@ -1129,7 +1165,7 @@ fn telemetry_status() -> bool {
 }
 
 /// The read-only config artifacts (generated compose + the static fragments and
-/// gateway/collector configs) for an environment's selected capabilities, for the
+/// gateway/collector configs) for an environment's selected modules, for the
 /// teaching/inspection viewer. The compose is generated on demand, so this works
 /// before the environment has ever been started.
 #[tauri::command]
@@ -1139,12 +1175,7 @@ fn environment_config_artifacts(id: String) -> Result<Vec<modules::ConfigArtifac
         .iter()
         .find(|e| e.id == id)
         .ok_or_else(|| format!("unknown environment: {id}"))?;
-    let capabilities: Vec<env_modules::Capability> = env
-        .capabilities
-        .iter()
-        .filter_map(|c| env_modules::Capability::from_id(c))
-        .collect();
-    modules::config_artifacts(&capabilities)
+    modules::config_artifacts(&env.modules)
 }
 
 pub fn run() {
@@ -1177,9 +1208,11 @@ pub fn run() {
             configure_environment_key,
             set_environment_key_biometric,
             docker_status,
-            set_environment_capabilities,
-            available_capabilities,
-            environment_capabilities,
+            set_environment_modules,
+            set_environment_observability,
+            available_modules,
+            environment_modules,
+            environment_observability,
             environment_config_artifacts,
             environment_service_status,
             telemetry_status,

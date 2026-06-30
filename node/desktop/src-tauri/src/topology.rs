@@ -1,71 +1,85 @@
-//! Bridge from hydrofoil's capability vocabulary to the shared
-//! [`olai-stack-topology`](olai_stack_topology) model.
+//! Hydrofoil's policy over the shared [`olai-stack-topology`](olai_stack_topology)
+//! model.
 //!
-//! Hydrofoil's UI speaks [`Capability`](crate::capability::Capability); the topology
-//! crate speaks [`Selection`] + [`PlanCtx`] against a [`Catalog`]. This module maps
-//! the former to the latter, packaged as an [`EnvManifest`] — the persisted record of
-//! *what* an environment is. The desktop crate owns the side effects (planning is pure;
-//! writing the manifest and the rendered compose, running Docker, are not).
+//! The topology crate speaks [`Selection`] + [`PlanCtx`] against a [`Catalog`];
+//! this module wires hydrofoil's fixed choices on top: which baseline modules are
+//! user-selectable, the headwaters API-only knob, and the Azurite object-store
+//! preference. The result is packaged as an [`EnvManifest`] — the persisted record
+//! of *what* an environment is. The desktop crate owns the side effects (planning
+//! is pure; writing the manifest and the rendered compose, running Docker, are not).
 //!
-//! The catalog is the crate's embedded [`baseline_catalog`]: it is the source of truth
-//! for the service definitions (Envoy, Postgres, Azurite, MLflow, headwaters lineage,
-//! …), so hydrofoil no longer carries its own compose fragments. Lineage is served by
-//! **headwaters** (the `lineage` role provider), run **API-only** — hydrofoil ships its
-//! own lineage UI, so the `HEADWATERS_SERVE_UI` knob is forced off.
+//! Environments select baseline catalog **module ids** directly (`headwaters`,
+//! `mlflow`, `azurite`); the catalog is the crate's embedded [`baseline_catalog`],
+//! the source of truth for the service definitions (Envoy, Postgres, Azurite,
+//! MLflow, headwaters lineage, …), so hydrofoil carries no compose fragments of its
+//! own. Lineage is served by **headwaters** (the `lineage` role provider), run
+//! **API-only** — hydrofoil ships its own lineage UI, so the `HEADWATERS_SERVE_UI`
+//! knob is forced off. Observability is *not* a module: it's an app-level opt-in
+//! (a boolean on the environment) that brings up the shared telemetry collector.
 
-use olai_stack_topology::{Catalog, EnvManifest, PlanCtx, Role, Selection, baseline_catalog};
+use olai_stack_topology::{baseline_catalog, Catalog, EnvManifest, PlanCtx, Role, Selection};
 
-// Re-export the topology types the desktop orchestrator needs, so it depends on the
-// shared model through this crate's bridge rather than taking a second direct
-// dependency on `olai-stack-topology` (the desktop crate is a separate workspace).
+// Re-export the topology types the rest of the desktop crate needs.
 pub use olai_stack_topology::{EnvManifest as Manifest, Plan, Role as ServiceRole, Vantage};
-
-use crate::capability::Capability;
 
 /// The headwaters knob (private in the crate) that toggles its bundled lineage UI.
 /// Hydrofoil forces it off and renders lineage in its own UI.
 const HEADWATERS_SERVE_UI: &str = "HEADWATERS_SERVE_UI";
 
 /// The headwaters OpenLineage REST endpoint id (the `api` endpoint, present in both
-/// knob states), used to resolve the lineage sink URL from a [`Plan`](olai_stack_topology::Plan).
+/// knob states), used to resolve the lineage sink URL from a [`Plan`].
 pub const LINEAGE_ENDPOINT_ID: &str = "api";
+
+/// The vantage hydrofoil's in-process engine occupies when reaching the compose
+/// stack: it runs on the Tauri host, so it talks to gatewayed services at
+/// `localhost:<gateway_host_port>`.
+pub const IN_PROCESS_VANTAGE: Vantage = Vantage::Host;
+
+/// A user-selectable module: a baseline catalog module id plus its UI label.
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct ModuleDescriptor {
+    /// The baseline catalog module id (stored on the environment, sent to the plan).
+    pub id: &'static str,
+    /// Human-readable label for the UI.
+    pub label: &'static str,
+}
+
+/// The modules a user can select for an environment, in a stable UI order. These
+/// are the user-facing service choices; observability is intentionally absent (it's
+/// an app-level opt-in, not a per-env module).
+pub fn available_modules() -> &'static [ModuleDescriptor] {
+    &[
+        ModuleDescriptor {
+            id: "headwaters",
+            label: "Lineage",
+        },
+        ModuleDescriptor {
+            id: "mlflow",
+            label: "Model tracking",
+        },
+        ModuleDescriptor {
+            id: "azurite",
+            label: "Object storage",
+        },
+    ]
+}
+
+/// Whether `id` is a module a user is allowed to select (rejects ids the backend
+/// won't resolve before they're persisted).
+pub fn is_known_module(id: &str) -> bool {
+    available_modules().iter().any(|m| m.id == id)
+}
 
 /// The shared service catalog hydrofoil plans against: the crate's embedded baseline.
 pub fn catalog() -> Catalog {
     baseline_catalog()
 }
 
-/// Map a hydrofoil [`Capability`] to the baseline module id(s) that provide it. Returns
-/// an empty slice for shared-infra capabilities (observability runs no per-env module).
-fn capability_modules(cap: Capability) -> &'static [&'static str] {
-    match cap {
-        Capability::Lineage => &["headwaters"],
-        Capability::ModelTracking => &["mlflow"],
-        Capability::ObjectStorage => &["azurite"],
-        // Observability opts the env in to emitting to the shared collector; no per-env
-        // module. (The shared Jaeger is its own app-level project, like today.)
-        Capability::Observability => &[],
-    }
-}
-
-/// Build the [`Selection`] for a set of selected capabilities: the union of their
-/// provider modules, plus hydrofoil's fixed knob choices (headwaters API-only).
-fn selection(capabilities: &[Capability]) -> Selection {
-    let mut modules: Vec<String> = Vec::new();
-    let mut lineage = false;
-    for cap in capabilities {
-        for id in capability_modules(*cap) {
-            if !modules.iter().any(|m| m == id) {
-                modules.push((*id).to_string());
-            }
-        }
-        if *cap == Capability::Lineage {
-            lineage = true;
-        }
-    }
-
-    let mut selection = Selection::modules(modules);
-    if lineage {
+/// Build the [`Selection`] for a set of selected module ids: the modules plus
+/// hydrofoil's fixed knob choices (headwaters API-only).
+fn selection(modules: &[String]) -> Selection {
+    let mut selection = Selection::modules(modules.to_vec());
+    if modules.iter().any(|m| m == "headwaters") {
         // Run headwaters API-only: hydrofoil renders lineage in its own UI.
         selection
             .knob_overrides
@@ -100,28 +114,23 @@ pub fn plan_ctx(
 /// persisted, re-plannable record of what the environment runs; the desktop crate saves
 /// it per environment and re-plans from it on every start/edit.
 pub fn manifest(
-    capabilities: &[Capability],
+    modules: &[String],
     env_name: impl Into<String>,
     data_root: impl Into<String>,
     gateway_host_port: u16,
 ) -> EnvManifest {
     EnvManifest::new(
-        selection(capabilities),
+        selection(modules),
         plan_ctx(env_name, data_root, gateway_host_port),
     )
 }
-
-/// The vantage hydrofoil's in-process engine occupies when reaching the compose stack:
-/// it runs on the Tauri host, so it talks to gatewayed services at
-/// `localhost:<gateway_host_port>`.
-pub const IN_PROCESS_VANTAGE: Vantage = Vantage::Host;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use olai_stack_topology::render_all;
 
-    fn ids(plan: &olai_stack_topology::Plan) -> Vec<String> {
+    fn ids(plan: &Plan) -> Vec<String> {
         plan.graph
             .nodes
             .iter()
@@ -129,9 +138,13 @@ mod tests {
             .collect()
     }
 
+    fn modules(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
-    fn lineage_selects_headwaters_api_only_and_drops_marquez() {
-        let sel = selection(&[Capability::Lineage]);
+    fn headwaters_selection_is_api_only_and_drops_marquez() {
+        let sel = selection(&modules(&["headwaters"]));
         assert!(sel.modules.iter().any(|m| m.as_str() == "headwaters"));
         assert!(!sel.modules.iter().any(|m| m.as_str() == "marquez"));
         // Knob forces the bundled UI off.
@@ -142,8 +155,8 @@ mod tests {
     }
 
     #[test]
-    fn lineage_plan_covers_headwaters_and_deps() {
-        let m = manifest(&[Capability::Lineage], "lh-test", "/tmp/data", 9080);
+    fn headwaters_plan_covers_its_deps() {
+        let m = manifest(&modules(&["headwaters"]), "lh-test", "/tmp/data", 9080);
         let plan = m.plan(&catalog()).expect("plan");
         let got = ids(&plan);
         // headwaters + its hard dep envoy + the auto-provisioned relational store.
@@ -157,7 +170,7 @@ mod tests {
 
     #[test]
     fn lineage_url_resolves_through_gateway_from_host() {
-        let m = manifest(&[Capability::Lineage], "lh-test", "/tmp/data", 9080);
+        let m = manifest(&modules(&["headwaters"]), "lh-test", "/tmp/data", 9080);
         let plan = m.plan(&catalog()).expect("plan");
         let lineage = plan
             .service_by_role(&Role::lineage())
@@ -172,8 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn model_tracking_selects_mlflow() {
-        let sel = selection(&[Capability::ModelTracking]);
+    fn mlflow_module_selects_mlflow() {
+        let sel = selection(&modules(&["mlflow"]));
         assert!(sel.modules.iter().any(|m| m.as_str() == "mlflow"));
     }
 
@@ -187,19 +200,15 @@ mod tests {
     }
 
     #[test]
-    fn observability_adds_no_module() {
-        let sel = selection(&[Capability::Observability]);
-        assert!(sel.modules.is_empty());
+    fn empty_selection_plans_to_empty_graph() {
+        let m = manifest(&[], "lh", "/tmp", 9080);
+        let plan = m.plan(&catalog()).expect("plan");
+        assert!(plan.graph.nodes.is_empty());
     }
 
     #[test]
     fn manifest_round_trips_and_replan_is_port_stable() {
-        let m = manifest(
-            &[Capability::Lineage, Capability::ModelTracking],
-            "lh",
-            "/d",
-            9080,
-        );
+        let m = manifest(&modules(&["headwaters", "mlflow"]), "lh", "/d", 9080);
         let toml = m.to_toml().expect("to_toml");
         let back = EnvManifest::from_toml(&toml).expect("from_toml");
         assert_eq!(m, back);
