@@ -1,7 +1,8 @@
 //! Desktop-side orchestration of an environment's service modules.
 //!
 //! The pure topology model — the catalog, the plan, and the rendered compose
-//! artifacts — lives in `olai-stack-topology` (consumed via `env_modules::topology`).
+//! artifacts — lives in `olai-stack-topology` (consumed via [`crate::topology`],
+//! which layers hydrofoil's module/knob policy on top).
 //! This module owns the side effects: persisting the environment manifest, writing the
 //! rendered project tree, the Docker daemon preflight, running `docker compose
 //! up`/`down`, and resolving the in-process engine's service URLs from the plan.
@@ -10,9 +11,9 @@
 
 use std::path::PathBuf;
 
-use env_modules::topology::{self, Manifest, Plan, ServiceRole};
+use crate::topology::{self, Manifest, Plan, ServiceRole};
 
-use crate::supervisor::{ManagedProcess, Supervisor, compose_down};
+use crate::supervisor::{compose_down, ManagedProcess, Supervisor};
 
 /// Whether the Docker daemon is reachable (`docker info` succeeds). Drives both
 /// the start-time preflight and the UI availability banner.
@@ -69,12 +70,12 @@ fn gateway_host_port() -> u16 {
         .unwrap_or(9080)
 }
 
-/// Build the environment manifest from the selected capabilities and host facts.
+/// Build the environment manifest from the selected modules and host facts.
 /// The manifest is the single source of truth for the plan; persisting it makes the
 /// environment reproducible and editable.
-fn manifest(env_id: &str, capabilities: &[env_modules::Capability]) -> Manifest {
+fn manifest(env_id: &str, modules: &[String]) -> Manifest {
     topology::manifest(
-        capabilities,
+        modules,
         compose_project(env_id),
         env_data_dir(env_id).to_string_lossy().into_owned(),
         gateway_host_port(),
@@ -94,10 +95,10 @@ fn manifest(env_id: &str, capabilities: &[env_modules::Capability]) -> Manifest 
 /// outside the compose project.
 pub fn start_modules(
     env_id: &str,
-    capabilities: &[env_modules::Capability],
+    modules: &[String],
     supervisor: &Supervisor,
 ) -> Result<Plan, String> {
-    let manifest = manifest(env_id, capabilities);
+    let manifest = manifest(env_id, modules);
     let plan = manifest
         .plan(&topology::catalog())
         .map_err(|e| format!("planning environment topology: {e}"))?;
@@ -151,7 +152,7 @@ fn start_compose(
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("creating {data_dir:?}: {e}"))?;
 
     // Persist the manifest so the environment is reproducible and editable across
-    // restarts (re-plan from it rather than recompute from capabilities).
+    // restarts (re-plan from it rather than recompute from the module selection).
     manifest
         .write_to(&env_manifest_path(env_id))
         .map_err(|e| format!("writing environment manifest: {e}"))?;
@@ -300,18 +301,16 @@ pub struct ConfigArtifact {
 }
 
 /// Build the curated list of config artifacts for an environment's selected
-/// capabilities — for the read-only viewer. The artifacts are the **fully rendered**
+/// modules — for the read-only viewer. The artifacts are the **fully rendered**
 /// topology project (top-level compose, `.env`, the `LAYOUT.md` gateway summary, the
 /// Envoy bootstrap, and each module's fragment + config files), produced on demand from
 /// the plan with no side effects — so it shows the real, exact shape the environment
 /// will run, viewable before it has ever started.
-pub fn config_artifacts(
-    capabilities: &[env_modules::Capability],
-) -> Result<Vec<ConfigArtifact>, String> {
+pub fn config_artifacts(modules: &[String]) -> Result<Vec<ConfigArtifact>, String> {
     // Illustrative facts: the viewer renders pre-start, so use a placeholder env id for
     // the project name / data-root path shown in the rendered artifacts.
     let manifest = topology::manifest(
-        capabilities,
+        modules,
         "<env>",
         env_data_dir("<env>").to_string_lossy().into_owned(),
         gateway_host_port(),
@@ -382,4 +381,3 @@ fn artifact_description(path: &str) -> String {
         _ => format!("Rendered artifact at {path}."),
     }
 }
-

@@ -11,10 +11,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveEnvironment,
-  Capability,
   ConfigArtifact,
   Environment,
   EnvironmentHost,
+  EnvModule,
   KeyProvider,
   KeyStatus,
   ServiceStatus,
@@ -70,11 +70,15 @@ export const tauriEnvironmentHost: EnvironmentHost = {
   setKeyBiometric: (id: string, enabled: boolean) =>
     invoke<KeyStatus>("set_environment_key_biometric", { id, enabled }),
   dockerStatus: () => invoke<boolean>("docker_status"),
-  availableCapabilities: () => invoke<Capability[]>("available_capabilities"),
-  environmentCapabilities: (id: string) =>
-    invoke<string[]>("environment_capabilities", { id }),
-  setEnvironmentCapabilities: (id: string, capabilities: string[]) =>
-    invoke<void>("set_environment_capabilities", { id, capabilities }),
+  availableModules: () => invoke<EnvModule[]>("available_modules"),
+  environmentModules: (id: string) =>
+    invoke<string[]>("environment_modules", { id }),
+  setEnvironmentModules: (id: string, modules: string[]) =>
+    invoke<void>("set_environment_modules", { id, modules }),
+  environmentObservability: (id: string) =>
+    invoke<boolean>("environment_observability", { id }),
+  setEnvironmentObservability: (id: string, enabled: boolean) =>
+    invoke<void>("set_environment_observability", { id, enabled }),
   configArtifacts: (id: string) =>
     invoke<ConfigArtifact[]>("environment_config_artifacts", { id }),
   serviceStatus: (id: string) =>

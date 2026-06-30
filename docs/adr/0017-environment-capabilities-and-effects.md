@@ -1,11 +1,20 @@
 # 0017 — Environment capabilities, providers, and effects
 
-> Status: **Accepted** (2026-06). Model in `crates/env-modules`, wired into the desktop
-> lifecycle (`node/desktop/src-tauri/src/modules.rs`, `lib.rs`) and the in-process engine
-> (`crates/desktop-host`). Builds on [`0015`](0015-client-environment-scope.md) (client-side
-> environment scope) and [`0016`](0016-local-environment-key-management.md) (per-env KEK);
-> relates to [`0011`](0011-uc-credential-vending-server-token.md) (UC credential vending) and
-> [`0012`](0012-client-forwarded-lineage-metadata.md) (lineage metadata).
+> Status: **Superseded** (2026-06) by direct module selection. After adopting the shared
+> `olai-stack-topology` catalog, the capability→provider→module indirection collapsed to a
+> near-1:1 capability→module map whose deferred provider-swap/effects layer was never wired,
+> so the `crates/env-modules` crate was removed. Environments now select baseline catalog
+> **module ids** directly (`headwaters`/`mlflow`/`azurite`), with the small remaining
+> hydrofoil policy (Azurite preference, headwaters API-only knob, the lineage-endpoint
+> constants) inlined into `node/desktop/src-tauri/src/topology.rs`. Observability — a
+> capability with no module — is now an explicit `observability` boolean on the environment.
+> The capability vocabulary below is retained for historical context.
+>
+> Originally Accepted (2026-06). Built on [`0015`](0015-client-environment-scope.md)
+> (client-side environment scope) and [`0016`](0016-local-environment-key-management.md)
+> (per-env KEK); relates to [`0011`](0011-uc-credential-vending-server-token.md) (UC
+> credential vending) and [`0012`](0012-client-forwarded-lineage-metadata.md) (lineage
+> metadata).
 
 ## Context
 

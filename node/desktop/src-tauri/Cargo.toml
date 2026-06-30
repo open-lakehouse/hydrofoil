@@ -34,9 +34,12 @@ serde_json = "1"
 # (empty) standalone workspace above.
 desktop-host = { path = "../../../crates/desktop-host" }
 portal = { path = "../../../crates/portal" }
-# Pure dependency resolution + compose/uvx artifact generation for the optional
-# service modules an environment can run (path dep, same cross-workspace pattern).
-env-modules = { path = "../../../crates/env-modules" }
+# Role-/placement-/gateway-aware topology + addressing + compose-rendering model,
+# shared with trestle. The desktop crate layers its module/knob policy on top in
+# `src/topology.rs`. `std-io` enables `Plan::materialize().write_to` + the
+# `EnvManifest` file helpers. (Separate workspace, so the version is pinned here
+# rather than `{ workspace = true }`; keep it in lockstep with the repo-root pin.)
+olai-stack-topology = { version = "0.0.2", features = ["std-io"] }
 connectrpc = { version = "0.7", features = ["server", "client"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 bytes = "1"

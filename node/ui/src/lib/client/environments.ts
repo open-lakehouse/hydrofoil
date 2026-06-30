@@ -37,10 +37,11 @@ export type KeyStatus =
  *  are transient UI states held while the async host call is in flight. */
 export type EnvironmentStatus = "idle" | "starting" | "running" | "stopping";
 
-/** A capability the user can enable on an environment (lineage, observability,
- *  model tracking, object storage). The host owns the technology mapping; the UI
- *  just renders the checklist and persists the selection. */
-export type Capability = { id: string; label: string };
+/** A service module the user can enable on an environment (headwaters/lineage,
+ *  mlflow/model tracking, azurite/object storage). The id is a baseline topology
+ *  catalog module id; the UI renders the checklist and persists the selection.
+ *  (Observability is not a module — see the host's observability getter/setter.) */
+export type EnvModule = { id: string; label: string };
 
 /** A read-only config artifact surfaced for inspection/learning (the generated
  *  compose, a service fragment, the Envoy/collector config). `language` is the
@@ -125,17 +126,21 @@ export interface EnvironmentHost {
    *  hosts where `biometricSupported` is false. */
   setKeyBiometric(id: string, enabled: boolean): Promise<KeyStatus>;
   /** Whether the host's container runtime (Docker) is available. Drives the
-   *  graceful-degrade banner: capabilities needing Docker are disabled when false.
+   *  graceful-degrade banner: modules needing Docker are disabled when false.
    *  Always true for hosts with no container dependency. */
   dockerStatus(): Promise<boolean>;
-  /** The capabilities a user can enable, for the checklist. */
-  availableCapabilities(): Promise<Capability[]>;
-  /** An environment's currently-enabled capability ids (for pre-checking). */
-  environmentCapabilities(id: string): Promise<string[]>;
-  /** Persist an environment's enabled capabilities. Takes effect on next start. */
-  setEnvironmentCapabilities(id: string, capabilities: string[]): Promise<void>;
+  /** The service modules a user can enable, for the checklist. */
+  availableModules(): Promise<EnvModule[]>;
+  /** An environment's currently-enabled module ids (for pre-checking). */
+  environmentModules(id: string): Promise<string[]>;
+  /** Persist an environment's enabled modules. Takes effect on next start. */
+  setEnvironmentModules(id: string, modules: string[]): Promise<void>;
+  /** Whether an environment opts in to the shared telemetry collector. */
+  environmentObservability(id: string): Promise<boolean>;
+  /** Persist an environment's observability opt-in. Takes effect on next start. */
+  setEnvironmentObservability(id: string, enabled: boolean): Promise<void>;
   /** Read-only config artifacts (generated compose + static configs) for the
-   *  environment's selected capabilities — for the inspection/learning viewer.
+   *  environment's selected modules — for the inspection/learning viewer.
    *  Generated on demand, so available before the environment has started. */
   configArtifacts(id: string): Promise<ConfigArtifact[]>;
   /** Live per-service status (state + health) for a running environment. Polled
@@ -173,13 +178,15 @@ const defaultHost: EnvironmentHost = {
   // No local keychain in the web build, so no biometric gating.
   biometricSupported: false,
   setKeyBiometric: async () => "remote",
-  // The web build has no local container runtime and no per-env capabilities to
-  // manage — Docker is "available" (nothing to gate), the capability set is empty,
-  // and there are no local config artifacts to inspect.
+  // The web build has no local container runtime and no per-env modules to
+  // manage — Docker is "available" (nothing to gate), the module set is empty,
+  // observability is off, and there are no local config artifacts to inspect.
   dockerStatus: async () => true,
-  availableCapabilities: async () => [],
-  environmentCapabilities: async () => [],
-  setEnvironmentCapabilities: async () => {},
+  availableModules: async () => [],
+  environmentModules: async () => [],
+  setEnvironmentModules: async () => {},
+  environmentObservability: async () => false,
+  setEnvironmentObservability: async () => {},
   configArtifacts: async () => [],
   serviceStatus: async () => [],
   telemetryStatus: async () => false,
