@@ -34,7 +34,7 @@ ui-storybook-build:
 # Absolute path to the sibling unitycatalog-rs repo + the built uc binary,
 # derived from this justfile's location (node/ → repo root → its sibling) so
 # tasks work from any cwd. Override the binary with OPEN_LAKEHOUSE_UC_BIN.
-uc_repo := justfile_directory() / ".." / ".." / "unitycatalog-rs"
+uc_repo := justfile_directory() / ".." / ".." / "mangrove"
 uc_binaries := justfile_directory() / "desktop" / "src-tauri" / "binaries"
 uc_wheels := justfile_directory() / "desktop" / "wheels"
 
@@ -45,14 +45,14 @@ uc_wheels := justfile_directory() / "desktop" / "wheels"
 # itself, so no absolute-path scope wrangling.
 [script('bash', '-eu')]
 uc-setup:
-    cargo build -p unitycatalog-cli --release --bin uc \
-        --manifest-path "{{uc_repo}}/Cargo.toml"
-    src="${OPEN_LAKEHOUSE_UC_BIN:-{{uc_repo}}/target/release/uc}"
+    cargo build -p olai-uc-cli --release --bin uc \
+        --manifest-path "{{ uc_repo }}/Cargo.toml"
+    src="${OPEN_LAKEHOUSE_UC_BIN:-{{ uc_repo }}/target/release/uc}"
     uc_bin="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
     triple="$(rustc -vV | sed -n 's/^host: //p')"
-    mkdir -p "{{uc_binaries}}"
-    ln -sf "$uc_bin" "{{uc_binaries}}/uc-server-$triple"
-    echo "linked {{uc_binaries}}/uc-server-$triple -> $uc_bin"
+    mkdir -p "{{ uc_binaries }}"
+    ln -sf "$uc_bin" "{{ uc_binaries }}/uc-server-$triple"
+    echo "linked {{ uc_binaries }}/uc-server-$triple -> $uc_bin"
 
 # Build a NATIVE-host wheel of the sibling unitycatalog-rs Python client (with the
 # `obstore` extra) into node/desktop/wheels, where the desktop marimo launch
@@ -64,11 +64,11 @@ uc-setup:
 # dev checkout; rerun after updating the sibling client. Requires `maturin` + `uv`.
 [script('bash', '-eu')]
 build-uc-wheel:
-    mkdir -p "{{uc_wheels}}"
-    uv run --project "{{uc_repo}}" maturin build --release \
-        --manifest-path "{{uc_repo}}/python/client/Cargo.toml" \
-        --out "{{uc_wheels}}"
-    echo "built unitycatalog-client wheel into {{uc_wheels}}"
+    mkdir -p "{{ uc_wheels }}"
+    uv run --project "{{ uc_repo }}" maturin build --release \
+        --manifest-path "{{ uc_repo }}/python/client/Cargo.toml" \
+        --out "{{ uc_wheels }}"
+    echo "built unitycatalog-client wheel into {{ uc_wheels }}"
 
 # Run the Tauri desktop app in dev with the embedded Unity Catalog server (SQLite
 # persisted under node/desktop/.uc-data/). Requires `just uc-setup` first. The

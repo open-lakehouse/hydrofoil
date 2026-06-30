@@ -31,7 +31,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UC_REPO="${UC_REPO:-$REPO_ROOT/../unitycatalog-rs}"
+UC_REPO="${UC_REPO:-$REPO_ROOT/../mangrove}"
 UC_PORT="${UC_PORT:-8080}"
 
 UC_BASE="http://localhost:${UC_PORT}"
@@ -70,7 +70,7 @@ else
   (
     cd "$UC_REPO"
     exec env RUST_LOG="${RUST_LOG:-info}" \
-      cargo run --quiet -p unitycatalog-cli -- server --rest --port "$UC_PORT" \
+      cargo run --quiet -p olai-uc-cli -- server --rest --port "$UC_PORT" \
         --config "$UC_CONFIG"
   ) &
   UC_PID=$!
