@@ -6,9 +6,6 @@
 // Only rendered in the app view on managed hosts; the web build has a single
 // implicit environment, so there is nothing to switch.
 
-import { useQuery } from "@tanstack/react-query";
-import { Boxes, ChevronDown, HardDrive, Settings2 } from "lucide-react";
-import { useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,7 +13,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@open-lakehouse/ui-kit";
+import { useQuery } from "@tanstack/react-query";
+import { Boxes, ChevronDown, HardDrive, Settings2 } from "lucide-react";
+import { useState } from "react";
 import {
   type ActiveEnvironment,
   getEnvironmentHost,

@@ -1,16 +1,15 @@
-import { useState } from "react";
-import { toast } from "sonner";
-
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  Input,
+  Label,
+} from "@open-lakehouse/ui-kit";
+import { useState } from "react";
+import { toast } from "sonner";
 import { connectFileStore } from "@/lib/files/store";
 import {
   ENGINE_LABELS,

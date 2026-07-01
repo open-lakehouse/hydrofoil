@@ -7,6 +7,7 @@
 // unchanged and unaware: they call the same generic seams the desktop host
 // satisfies with Tauri, which Storybook satisfies with fixtures.
 
+import { setDefaultUnityCatalogFetch } from "@open-lakehouse/unity-catalog";
 import { registerEnvironmentHost } from "@/lib/client/environments";
 import { registerFetch, registerTransport } from "@/lib/client/registry";
 import { registerFilePicker } from "@/lib/ingest/registry";
@@ -22,8 +23,14 @@ export function installStorybookHost(): void {
   if (installed) return;
   installed = true;
 
-  // UC REST -> fixtures.
+  // UC REST -> fixtures. Two seams need it: the app's fetch registry (clientFetch,
+  // used by the ConnectRPC clients and any non-UC HTTP), AND the Unity Catalog
+  // package's own default client, which routes through its own fetch slot rather
+  // than the app registry. The app wires the latter to clientFetch in main.tsx;
+  // Storybook doesn't run main.tsx, so it must point the UC default at the fixture
+  // fetch directly, or UC-backed stories would hit the real network.
   registerFetch(fixtureFetch);
+  setDefaultUnityCatalogFetch(fixtureFetch);
   // ConnectRPC (Query / Ingest / Tags / Files) -> in-memory router transport.
   registerTransport(fixtureTransport);
   // Environment management + capabilities + service status -> fake managed host.

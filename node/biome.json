@@ -16,7 +16,7 @@
       "!**/dist",
       "!**/node_modules",
       "!**/uc-client/src/uc-api.d.ts",
-      "!**/ui/src/lib/forms/schemas",
+      "!**/unity-catalog/src/forms/schemas",
       "!**/ui/src/lib/fixtures/schemas",
       "!**/ui/src/gen"
     ]
@@ -62,7 +62,7 @@
       }
     },
     {
-      "includes": ["ui/src/**", "!ui/src/features/data-grid/**"],
+      "includes": ["data-grid/src/**"],
       "linter": {
         "rules": {
           "style": {
@@ -71,57 +71,8 @@
               "options": {
                 "patterns": [
                   {
-                    "group": ["@/features/data-grid/**"],
-                    "message": "Import from the data-grid barrel '@/features/data-grid', not its internals."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "includes": ["ui/src/**", "!ui/src/features/unity-catalog/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": ["@/features/unity-catalog/**"],
-                    "message": "Import from the unity-catalog barrel '@/features/unity-catalog', not its internals."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "includes": ["ui/src/features/data-grid/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": [
-                      "@/lib/uc/**",
-                      "@/features/unity-catalog",
-                      "@/features/unity-catalog/**",
-                      "@/components/catalog/**",
-                      "@/components/storage/**",
-                      "@/components/editor/**",
-                      "@/components/environment/**",
-                      "@/routes/**"
-                    ],
-                    "message": "data-grid is a leaf: it must not import Unity Catalog or app-feature code."
+                    "group": ["@open-lakehouse/unity-catalog"],
+                    "message": "data-grid is a leaf: it must not import Unity Catalog. The Unity Catalog package may build on data-grid, never the reverse."
                   }
                 ]
               }

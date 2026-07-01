@@ -9,6 +9,7 @@
 // ever been started.
 
 import Editor from "@monaco-editor/react";
+import { cn } from "@open-lakehouse/ui-kit";
 import { FileCode, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -16,7 +17,6 @@ import {
   getEnvironmentHost,
 } from "@/lib/client/environments";
 import { ensureMonacoSetup } from "@/lib/editor/monaco-setup";
-import { cn } from "@/lib/utils";
 
 // Bootstrap Monaco's loader/workers before the first <Editor> mounts (same hook
 // the SQL editor uses).

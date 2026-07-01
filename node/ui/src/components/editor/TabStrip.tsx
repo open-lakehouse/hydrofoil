@@ -2,10 +2,11 @@
 // and a close button. Click selects; drag reorders. State comes from the session
 // reducer (OpenTab[]), so the strip re-renders on status changes without
 // touching Monaco.
+
+import { cn } from "@open-lakehouse/ui-kit";
 import { Loader2, X } from "lucide-react";
 import { useState } from "react";
 import type { OpenTab } from "@/lib/editor/sessionReducer";
-import { cn } from "@/lib/utils";
 import { useEditorSession } from "./EditorSessionContext";
 
 export function TabStrip() {

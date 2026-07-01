@@ -7,17 +7,17 @@
 // Opened from the environment manager sidebar header (mirroring the catalog
 // view's "New" affordance) instead of an inline form.
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  Input,
+  Label,
+} from "@open-lakehouse/ui-kit";
+import { useState } from "react";
 import {
   type Environment,
   getEnvironmentHost,

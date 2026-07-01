@@ -8,8 +8,8 @@
 // one back through `tableFromIPC` and asserting row/column shape. Building a
 // store from these exercises the same decode path the live app uses.
 
+import { ArrowResultStore } from "@open-lakehouse/data-grid";
 import { type Table, tableFromArrays, tableToIPC } from "apache-arrow";
-import { ArrowResultStore } from "@/features/data-grid";
 
 /** Serialize an Arrow table to a self-contained IPC stream (schema + batch). */
 export function tableToIpc(table: Table): Uint8Array {

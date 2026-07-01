@@ -1,12 +1,12 @@
-import { Plus } from "lucide-react";
-import { useState } from "react";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@open-lakehouse/ui-kit";
+import { Plus } from "lucide-react";
+import { useState } from "react";
 import type { Volume } from "@/lib/editor/volumes";
 import { AddVolumeDialog } from "./AddVolumeDialog";
 

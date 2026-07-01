@@ -13,9 +13,9 @@
 // router-aware reset. This component guards the non-routed regions (the root
 // safety net and the environment manager).
 
+import { Button } from "@open-lakehouse/ui-kit";
+import { parseUcError } from "@open-lakehouse/unity-catalog";
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { Button } from "@/components/ui/button";
-import { parseUcError } from "@/features/unity-catalog";
 
 interface Props {
   children: ReactNode;

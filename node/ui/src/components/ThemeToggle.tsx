@@ -1,6 +1,5 @@
+import { Button, useTheme } from "@open-lakehouse/ui-kit";
 import { Monitor, Moon, Sun } from "lucide-react";
-import { useTheme } from "./ThemeProvider";
-import { Button } from "./ui/button";
 
 const ORDER = ["light", "dark", "system"] as const;
 

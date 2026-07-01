@@ -4,10 +4,11 @@
 // switches) and renders the shared, virtualized Arrow DataGrid. The Run button
 // flushes the buffer then executes its text (save-on-run); Cancel aborts the
 // in-flight stream.
+
+import { DataGrid } from "@open-lakehouse/data-grid";
+import { Button } from "@open-lakehouse/ui-kit";
 import { Loader2, Play, X } from "lucide-react";
 import { useSyncExternalStore } from "react";
-import { Button } from "@/components/ui/button";
-import { DataGrid } from "@/features/data-grid";
 import type { TabId } from "@/lib/editor/sessionReducer";
 import { useEditorSession } from "./EditorSessionContext";
 

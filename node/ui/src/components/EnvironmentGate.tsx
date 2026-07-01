@@ -1,3 +1,4 @@
+import { parseUcError } from "@open-lakehouse/unity-catalog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -7,7 +8,6 @@ import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnviro
 import { EnvironmentSwitcher } from "@/components/environment/EnvironmentSwitcher";
 import { EnvironmentManager } from "@/components/environment/manager/EnvironmentManager";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { parseUcError } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   getEnvironmentHost,

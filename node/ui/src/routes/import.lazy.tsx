@@ -9,26 +9,26 @@
 // Developed in isolation as a dedicated page; a later phase can surface it from
 // the catalog view.
 
-import { useQueryClient } from "@tanstack/react-query";
-import { createLazyRoute } from "@tanstack/react-router";
-import { Loader2, TableProperties, Upload } from "lucide-react";
-import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { ArrowResultStore, DataGrid } from "@open-lakehouse/data-grid";
 import {
+  Button,
+  Input,
+  Label,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { ArrowResultStore, DataGrid } from "@/features/data-grid";
+} from "@open-lakehouse/ui-kit";
 import {
   invalidateTables,
   useCatalogs,
   useSchemas,
-} from "@/features/unity-catalog";
+} from "@open-lakehouse/unity-catalog";
+import { useQueryClient } from "@tanstack/react-query";
+import { createLazyRoute } from "@tanstack/react-router";
+import { Loader2, TableProperties, Upload } from "lucide-react";
+import { useMemo, useState } from "react";
 import { ingestTable, previewFile } from "@/lib/ingest/client";
 import { ingestSupported, pickFile } from "@/lib/ingest/registry";
 import {

@@ -3,6 +3,9 @@
   "private": true,
   "workspaces": [
     "ui",
+    "ui-kit",
+    "data-grid",
+    "unity-catalog",
     "uc-client",
     "desktop"
   ],

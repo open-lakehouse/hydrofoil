@@ -16,9 +16,9 @@ import {
   Int64,
   Schema,
   Table,
+  TimestampMicrosecond,
   tableFromIPC,
   tableToIPC,
-  TimestampMicrosecond,
   Utf8,
 } from "apache-arrow";
 

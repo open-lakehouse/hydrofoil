@@ -10,6 +10,7 @@
 // The provider takes the active environment as a value, so a Storybook story (or
 // any harness) can supply a mock `ActiveEnvironment` with no host at all.
 
+import { EnvironmentScopeProvider } from "@open-lakehouse/unity-catalog";
 import { createContext, type ReactNode, useContext } from "react";
 import type { ActiveEnvironment } from "@/lib/client/environments";
 
@@ -22,9 +23,15 @@ export function ActiveEnvironmentProvider({
   environment: ActiveEnvironment;
   children: ReactNode;
 }) {
+  // Feed the Unity Catalog package the active environment id so it namespaces
+  // per-environment UI state (tree expansion) exactly as it did when it read the
+  // app's active-environment context directly. Every env-scoped subtree — the UC
+  // surfaces included — renders under this provider.
   return (
     <ActiveEnvironmentContext.Provider value={environment}>
-      {children}
+      <EnvironmentScopeProvider scopeId={environment.id}>
+        {children}
+      </EnvironmentScopeProvider>
     </ActiveEnvironmentContext.Provider>
   );
 }

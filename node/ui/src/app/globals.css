@@ -2,6 +2,14 @@
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 
+/* The shared UI packages live outside this app's root, so Tailwind's automatic
+   source detection does not scan them. Register their source so the utility
+   classes they use are generated. Paths are relative to this stylesheet
+   (node/ui/src/app/). */
+@source "../../../ui-kit/src";
+@source "../../../data-grid/src";
+@source "../../../unity-catalog/src";
+
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));

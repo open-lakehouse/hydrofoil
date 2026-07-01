@@ -3,6 +3,9 @@
 // Reuses the catalog tree's primitives (TreeRow / ListStates) and an expansion
 // store keyed by path. Directories lazily fetch their contents via `useDirectory`
 // (cursor-paginated) only once expanded; files invoke `onOpenFile` on click.
+
+import { Button } from "@open-lakehouse/ui-kit";
+import { ListStates, TreeRow } from "@open-lakehouse/unity-catalog";
 import {
   FileCode,
   FileText,
@@ -12,8 +15,6 @@ import {
   Plus,
 } from "lucide-react";
 import { useMemo } from "react";
-import { Button } from "@/components/ui/button";
-import { ListStates, TreeRow } from "@/features/unity-catalog";
 import { type EditorLanguage, languageOf } from "@/lib/editor/language";
 import { useDirectory } from "@/lib/files/queries";
 import type { FileEntry } from "@/lib/files/store";

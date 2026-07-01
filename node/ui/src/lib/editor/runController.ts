@@ -6,7 +6,10 @@
 // run) as a plain subscribable object, so each SQL tab owns its own results that
 // survive tab switches. The ResultsPane subscribes to the active tab's controller.
 
-import { ArrowResultStore, type ArrowStoreInfo } from "@/features/data-grid";
+import {
+  ArrowResultStore,
+  type ArrowStoreInfo,
+} from "@open-lakehouse/data-grid";
 import { queryRunner } from "@/lib/query/runner";
 
 /** Metadata correlating a run to its origin and recording its outcome. Read by
