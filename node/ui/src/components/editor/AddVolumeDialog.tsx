@@ -16,7 +16,7 @@ import {
   useCatalogs,
   useSchemas,
   useVolumes,
-} from "@open-lakehouse/unity-catalog";
+} from "@open-lakehouse/unity-catalog-client";
 import { useState } from "react";
 import { ucVolume, type Volume } from "@/lib/editor/volumes";
 

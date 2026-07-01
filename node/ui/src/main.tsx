@@ -7,7 +7,7 @@ import {
   defaultUnityCatalogClient,
   setDefaultUnityCatalogFetch,
   UnityCatalogProvider,
-} from "@open-lakehouse/unity-catalog";
+} from "@open-lakehouse/unity-catalog-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";

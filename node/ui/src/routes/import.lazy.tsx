@@ -24,7 +24,7 @@ import {
   invalidateTables,
   useCatalogs,
   useSchemas,
-} from "@open-lakehouse/unity-catalog";
+} from "@open-lakehouse/unity-catalog-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { createLazyRoute } from "@tanstack/react-router";
 import { Loader2, TableProperties, Upload } from "lucide-react";

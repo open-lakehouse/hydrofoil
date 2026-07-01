@@ -23,6 +23,7 @@
     "@open-lakehouse/data-grid": "file:../../../mangrove/node/data-grid",
     "@open-lakehouse/ui-kit": "file:../../../mangrove/node/ui-kit",
     "@open-lakehouse/unity-catalog": "file:../../../mangrove/node/unity-catalog",
+    "@open-lakehouse/unity-catalog-client": "file:../../../mangrove/node/unity-catalog-client",
     "@tanstack/react-query": "^5.100.14",
     "@tanstack/react-router": "^1.170.10",
     "ajv": "^8.20.0",

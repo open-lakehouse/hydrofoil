@@ -22,7 +22,7 @@ import type {
   SchemaInfo,
   TableInfo,
   VolumeInfo,
-} from "@open-lakehouse/unity-catalog";
+} from "@open-lakehouse/unity-catalog-client";
 
 // A couple of fixed instants (2024-01-15 and 2024-06-20, UTC) reused throughout.
 const CREATED = 1705320000000;
