@@ -1,7 +1,8 @@
 // Generates the JSON Schemas used to VALIDATE the Storybook fixture data, from
-// the same definitions the UI renders against. Sibling to
-// uc-client/scripts/gen-form-schemas.mjs (which generates the rjsf FORM schemas);
-// this one targets the *domain* shapes (TagPolicy, FileMetadata, CatalogInfo, …).
+// the same definitions the UI renders against. Counterpart to the
+// @open-lakehouse/unity-catalog-client package's own gen-form-schemas.mjs (which
+// generates the rjsf FORM schemas); this one targets the *domain* shapes
+// (TagPolicy, FileMetadata, CatalogInfo, …).
 //
 // Two sources, one output dir (src/lib/fixtures/schemas/):
 //
@@ -10,9 +11,9 @@
 //      the form schemas are generated. The portal TS client is proto-generated,
 //      so the proto is the faithful source.
 //
-//   2. UNITY CATALOG entities — extracted from the committed OpenAPI spec
-//      (uc-client/openapi/unity-catalog.yaml). That spec is the exact source the
-//      `@open-lakehouse/uc-client` TS types are generated from (via
+//   2. UNITY CATALOG entities — extracted from the OpenAPI spec that ships in the
+//      @open-lakehouse/unity-catalog-client package (openapi/unity-catalog.yaml). That
+//      spec is the exact source that package's UC TS types are generated from (via
 //      openapi-typescript), so it matches what the UI consumes — and needs no
 //      network or git access. We resolve intra-spec `$ref`s into a self-contained
 //      `$defs` block and stamp a draft 2020-12 `$schema`.
@@ -23,6 +24,7 @@
 // Regenerate with `npm run gen:fixture-schemas` (or `just gen-fixture-schemas`).
 // The portal half requires the `buf` CLI + BSR access; the UC half is offline.
 
+import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,9 +35,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const uiDir = path.resolve(here, "..");
 const tmpDir = path.join(uiDir, ".gen-fixture-jsonschema");
 const outDir = path.join(uiDir, "src/lib/fixtures/schemas");
-const openapiPath = path.resolve(
-  uiDir,
-  "../uc-client/openapi/unity-catalog.yaml",
+// The UC OpenAPI spec ships inside the @open-lakehouse/unity-catalog-client
+// package (in the sibling mangrove repo, consumed via a file: link), which
+// exposes it as an `exports` subpath. Resolve it via Node's module resolution —
+// robust to npm hoisting the link into any ancestor node_modules.
+const require = createRequire(import.meta.url);
+const openapiPath = require.resolve(
+  "@open-lakehouse/unity-catalog-client/openapi/unity-catalog.yaml",
 );
 
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";

@@ -45,6 +45,10 @@ export const COLUMN_TYPES: ColumnType[] = [
 
 /** One editable column in the schema editor. */
 export interface EditableColumn {
+  /** Stable identity for React keys — the editable `name` can change or collide,
+   *  so it can't serve as a key. Assigned once when the column is created and
+   *  carried through edits; ignored by encoding/validation. */
+  id: string;
   name: string;
   type: ColumnType;
   nullable: boolean;
@@ -98,7 +102,8 @@ function arrowType(type: ColumnType): DataType {
 /** Decode a schema-only Arrow IPC stream into the editable column model. */
 export function columnsFromSchemaIpc(schemaIpc: Uint8Array): EditableColumn[] {
   const table = tableFromIPC(schemaIpc);
-  return table.schema.fields.map((f) => ({
+  return table.schema.fields.map((f, i) => ({
+    id: `col-${i}-${f.name}`,
     name: f.name,
     type: inferColumnType(f.type),
     nullable: f.nullable,

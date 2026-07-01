@@ -1,4 +1,4 @@
-import { parseUcError } from "@open-lakehouse/unity-catalog";
+import { parseUcError } from "@open-lakehouse/unity-catalog-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";

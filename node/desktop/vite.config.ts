@@ -10,6 +10,12 @@ import { defineConfig, type ProxyOptions } from "vite";
 // `exports` surface.
 const UI_SRC = path.resolve(__dirname, "../ui/src");
 
+// The shared UI packages (@open-lakehouse/{ui-kit,data-grid,unity-catalog}) are
+// consumed via file: links into the sibling mangrove checkout (through ui/), so
+// their real source lives outside this project root. Let Vite's dev server read
+// it (module source + the ui's Tailwind @source scanning of those packages).
+const mangroveNodeRoot = path.resolve(__dirname, "../../../mangrove/node");
+
 // In dev the Tauri webview loads this Vite server, so it needs the same gateway
 // proxy the UI uses (see ../ui/vite.config.ts) for the Unity Catalog REST API and
 // the embedded MLflow/marimo iframes. Mirrored here so desktop dev talks to one
@@ -45,6 +51,15 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { "@": UI_SRC },
+    // Force a single copy of React and the TanStack context/singleton libs across
+    // the two node_modules trees (this app's install and the file:-linked mangrove
+    // packages'), same as ../ui/vite.config.ts.
+    dedupe: [
+      "react",
+      "react-dom",
+      "@tanstack/react-query",
+      "@tanstack/react-router",
+    ],
   },
   // Tauri expects a fixed port and quiet output; surface its env to the build.
   clearScreen: false,
@@ -52,6 +67,9 @@ export default defineConfig({
   server: {
     port: 3003,
     strictPort: true,
+    fs: {
+      allow: [path.resolve(__dirname, ".."), mangroveNodeRoot],
+    },
     proxy: {
       "/api": {
         target: GATEWAY_URL,

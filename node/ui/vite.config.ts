@@ -44,13 +44,33 @@ function serviceProxy(): ProxyOptions {
   };
 }
 
+// The shared UI packages (@open-lakehouse/{ui-kit,data-grid,unity-catalog}) are
+// consumed via file: links into the sibling mangrove checkout, so their real
+// source lives outside this project root. Let Vite's dev server read it (both for
+// serving the linked module source and for Tailwind's @source scanning).
+const mangroveNodeRoot = path.resolve(__dirname, "../../../mangrove/node");
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
+    // The file:-linked shared packages live in a separate npm install (the
+    // mangrove checkout), so React and the TanStack context/singleton libs would
+    // otherwise be duplicated across the two node_modules trees — which breaks
+    // hooks and query/router context at runtime. Force a single copy from this
+    // app's install.
+    dedupe: [
+      "react",
+      "react-dom",
+      "@tanstack/react-query",
+      "@tanstack/react-router",
+    ],
   },
   server: {
     port: 3002,
+    fs: {
+      allow: [path.resolve(__dirname, ".."), mangroveNodeRoot],
+    },
     proxy: {
       // Unity Catalog REST API (Envoy routes /api/2.1/unity-catalog -> unity-catalog:8081).
       "/api": {

@@ -7,7 +7,7 @@
 // unchanged and unaware: they call the same generic seams the desktop host
 // satisfies with Tauri, which Storybook satisfies with fixtures.
 
-import { setDefaultUnityCatalogFetch } from "@open-lakehouse/unity-catalog";
+import { setDefaultUnityCatalogFetch } from "@open-lakehouse/unity-catalog-client";
 import { registerEnvironmentHost } from "@/lib/client/environments";
 import { registerFetch, registerTransport } from "@/lib/client/registry";
 import { registerFilePicker } from "@/lib/ingest/registry";

@@ -15,8 +15,6 @@
       "**/*.json",
       "!**/dist",
       "!**/node_modules",
-      "!**/uc-client/src/uc-api.d.ts",
-      "!**/unity-catalog/src/forms/schemas",
       "!**/ui/src/lib/fixtures/schemas",
       "!**/ui/src/gen"
     ]
@@ -57,26 +55,6 @@
         "rules": {
           "style": {
             "noDefaultExport": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["data-grid/src/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": ["@open-lakehouse/unity-catalog"],
-                    "message": "data-grid is a leaf: it must not import Unity Catalog. The Unity Catalog package may build on data-grid, never the reverse."
-                  }
-                ]
-              }
-            }
           }
         }
       }

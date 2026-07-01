@@ -24,7 +24,7 @@ import {
   invalidateTables,
   useCatalogs,
   useSchemas,
-} from "@open-lakehouse/unity-catalog";
+} from "@open-lakehouse/unity-catalog-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { createLazyRoute } from "@tanstack/react-router";
 import { Loader2, TableProperties, Upload } from "lucide-react";
@@ -254,7 +254,7 @@ function SchemaEditor({
           </thead>
           <tbody>
             {columns.map((col, i) => (
-              <tr key={i} className="border-t">
+              <tr key={col.id} className="border-t">
                 <td className="px-3 py-1.5">
                   <Input
                     value={col.name}

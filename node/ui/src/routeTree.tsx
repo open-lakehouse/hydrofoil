@@ -1,4 +1,4 @@
-import { prefetchCatalogs } from "@open-lakehouse/unity-catalog";
+import { prefetchCatalogs } from "@open-lakehouse/unity-catalog-client";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
