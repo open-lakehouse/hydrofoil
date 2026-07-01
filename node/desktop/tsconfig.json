@@ -16,7 +16,15 @@
     "noEmit": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "@/*": ["../ui/src/*"]
+      "@/*": ["../ui/src/*"],
+      // Dedup the TanStack context/singleton libs to a single copy (the app
+      // reuses ui/, which consumes the file:-linked shared packages from the
+      // mangrove checkout). Mirrors node/ui/tsconfig.json; the runtime counterpart
+      // is `resolve.dedupe` in this app's vite.config.ts.
+      "@tanstack/react-query": ["../node_modules/@tanstack/react-query"],
+      "@tanstack/react-query/*": ["../node_modules/@tanstack/react-query/*"],
+      "@tanstack/react-router": ["../node_modules/@tanstack/react-router"],
+      "@tanstack/react-router/*": ["../node_modules/@tanstack/react-router/*"]
     }
   },
   "include": ["env.d.ts", "src", "../ui/src", "vite.config.ts"],

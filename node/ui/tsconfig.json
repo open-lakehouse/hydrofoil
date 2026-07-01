@@ -16,7 +16,17 @@
     "noEmit": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // The file:-linked shared packages resolve the TanStack context/singleton
+      // libs from a separate install (the mangrove checkout), so tsc would see two
+      // nominally-incompatible copies of `QueryClient`/router types (the `#private`
+      // brand differs). Pin them to this app's single copy — these packages ship
+      // their own types, so mapping the package dir resolves declarations too. The
+      // runtime counterpart is `resolve.dedupe` in vite.config.ts.
+      "@tanstack/react-query": ["../node_modules/@tanstack/react-query"],
+      "@tanstack/react-query/*": ["../node_modules/@tanstack/react-query/*"],
+      "@tanstack/react-router": ["../node_modules/@tanstack/react-router"],
+      "@tanstack/react-router/*": ["../node_modules/@tanstack/react-router/*"]
     }
   },
   "include": ["env.d.ts", "src", "vite.config.ts", ".storybook"],

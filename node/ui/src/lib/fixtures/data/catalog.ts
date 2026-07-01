@@ -3,7 +3,7 @@
 // two catalogs, a few schemas, tables with realistic columns, volumes, a
 // function, a model, plus metastore-level credentials and external locations.
 //
-// Typed against the real `@open-lakehouse/uc-client` types (the OpenAPI surface
+// Typed against the real `@open-lakehouse/unity-catalog` UC types (the OpenAPI surface
 // the UI consumes) and validated at runtime against the generated JSON Schemas in
 // ../schemas/ by fixtures.test.ts. Referential integrity is intentional: every
 // child's catalog_name/schema_name resolves to a parent defined here, and
@@ -22,7 +22,7 @@ import type {
   SchemaInfo,
   TableInfo,
   VolumeInfo,
-} from "@open-lakehouse/uc-client";
+} from "@open-lakehouse/unity-catalog";
 
 // A couple of fixed instants (2024-01-15 and 2024-06-20, UTC) reused throughout.
 const CREATED = 1705320000000;
