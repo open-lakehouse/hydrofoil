@@ -1,6 +1,6 @@
+import { cn } from "@open-lakehouse/ui-kit";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
-import { cn } from "@/lib/utils";
 import { DataGridCell } from "./data-grid-cell";
 import { DataGridHeader } from "./data-grid-header";
 import type { ArrowResultStore } from "./lib/arrowResultStore";

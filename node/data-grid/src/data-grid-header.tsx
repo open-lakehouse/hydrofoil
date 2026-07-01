@@ -1,7 +1,6 @@
+import { Badge, cn } from "@open-lakehouse/ui-kit";
 import type { Header } from "@tanstack/react-table";
 import { ChevronDown, ChevronsUpDown, ChevronUp } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import { arrowTypeLabel } from "./lib/arrowTypeLabel";
 import type { ArrowColumnMeta } from "./lib/useArrowTable";
 

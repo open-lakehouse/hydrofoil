@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
-import { arrow } from "@/lib/fixtures";
 import { DataGrid } from "./data-grid";
+import * as arrow from "./story-fixtures";
 
 // The grid reads zero-copy from an ArrowResultStore built from real Arrow IPC
 // fixtures — the same bytes the streaming QueryService would deliver.
