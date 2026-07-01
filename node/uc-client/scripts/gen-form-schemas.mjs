@@ -14,7 +14,7 @@
 //        - collapse the proto scalar `anyOf` unions (e.g. enum int|string) to
 //          their human-facing branch,
 //        - keep a single draft 2020-12 `$schema` at the root.
-//   3. Output is checked in under ui/src/lib/forms/schemas/ so the UI build needs
+//   3. Output is checked in under unity-catalog/src/forms/schemas/ so the UI build needs
 //      no network access.
 //
 // Regenerate with `npm run gen:form-schemas` (or `just gen-forms`). Requires the
@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ucClientDir = path.resolve(here, "..");
 const tmpDir = path.join(ucClientDir, ".gen-jsonschema");
-const outDir = path.resolve(ucClientDir, "../ui/src/lib/forms/schemas");
+const outDir = path.resolve(ucClientDir, "../unity-catalog/src/forms/schemas");
 
 /** Output file name (without extension) -> fully-qualified proto message. */
 const TARGETS = {
