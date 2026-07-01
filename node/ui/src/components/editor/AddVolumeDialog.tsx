@@ -1,21 +1,23 @@
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { useCatalogs, useSchemas, useVolumes } from "@/features/unity-catalog";
+} from "@open-lakehouse/ui-kit";
+import {
+  useCatalogs,
+  useSchemas,
+  useVolumes,
+} from "@open-lakehouse/unity-catalog";
+import { useState } from "react";
 import { ucVolume, type Volume } from "@/lib/editor/volumes";
 
 // A small catalog → schema → volume picker. On confirm, hands back the chosen

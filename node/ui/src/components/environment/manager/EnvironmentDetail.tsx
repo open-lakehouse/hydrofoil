@@ -6,6 +6,19 @@
 // tab is read-only metadata (editable config is a separate task).
 
 import {
+  Badge,
+  Button,
+  cn,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@open-lakehouse/ui-kit";
+import { Meta, MetaGrid, StorageTable } from "@open-lakehouse/unity-catalog";
+import {
   Boxes,
   ChevronDown,
   CircleStop,
@@ -16,20 +29,6 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Meta, MetaGrid, StorageTable } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   type Environment,
@@ -37,7 +36,6 @@ import {
   getEnvironmentHost,
   type KeyStatus,
 } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 import { ConfigureKeyDialog } from "../ConfigureKeyDialog";
 import { capabilitySummary } from "../capabilitySummary";
 import {

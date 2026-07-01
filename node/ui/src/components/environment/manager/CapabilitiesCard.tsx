@@ -9,10 +9,10 @@
 // EnvironmentDetail) explains how to install it. Editing is idle-only: a running
 // environment isn't hot-reconfigured.
 
+import { cn } from "@open-lakehouse/ui-kit";
 import { Boxes, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type EnvModule, getEnvironmentHost } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 
 export function CapabilitiesCard({
   environmentId,

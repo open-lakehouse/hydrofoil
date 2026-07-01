@@ -5,23 +5,21 @@
 // selectable. Configuration is only meaningful while the environment is idle —
 // the caller gates on that.
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@open-lakehouse/ui-kit";
+import { useState } from "react";
 import {
   getEnvironmentHost,
   type KeyProvider,

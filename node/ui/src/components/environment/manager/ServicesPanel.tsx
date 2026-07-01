@@ -4,12 +4,12 @@
 // lightweight: a periodic fetch, not a streaming subscription. Polling runs only
 // while mounted AND running, so it stops when the user leaves or the env stops.
 
+import { cn } from "@open-lakehouse/ui-kit";
 import { useEffect, useState } from "react";
 import {
   getEnvironmentHost,
   type ServiceStatus,
 } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 
 const POLL_MS = 4000;
 

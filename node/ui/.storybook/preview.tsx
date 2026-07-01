@@ -1,10 +1,12 @@
+import {
+  ThemeProvider,
+  Toaster,
+  TooltipProvider,
+} from "@open-lakehouse/ui-kit";
 import type { Decorator, Preview } from "@storybook/react-vite";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { ActiveEnvironmentProvider } from "@/components/environment/ActiveEnvironmentContext";
-import { ThemeProvider } from "@/components/ThemeProvider";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { activeEnvironment } from "@/lib/fixtures";
 import { createQueryClient } from "@/lib/query-client";
 

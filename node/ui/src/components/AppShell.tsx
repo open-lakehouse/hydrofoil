@@ -1,3 +1,9 @@
+import {
+  cn,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@open-lakehouse/ui-kit";
 import { Link, Outlet } from "@tanstack/react-router";
 import {
   Database,
@@ -8,14 +14,8 @@ import {
   Upload,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { ingestSupported } from "@/lib/ingest/registry";
 import { SERVICE_SURFACES } from "@/lib/services";
-import { cn } from "@/lib/utils";
 
 // Collapsed state is an app-wide UI preference (not per-environment), so it
 // persists in localStorage rather than the env-namespaced session storage.

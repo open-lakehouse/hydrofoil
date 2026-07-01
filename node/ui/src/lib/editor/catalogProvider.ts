@@ -10,7 +10,7 @@
 // Swap via `setCatalogProvider`. Lookups are memoized with a short TTL by the
 // completion layer, so providers can be naive.
 
-import { fetchClient } from "@/lib/api";
+import { fetchClient } from "@open-lakehouse/unity-catalog";
 
 export interface CatalogColumn {
   name: string;

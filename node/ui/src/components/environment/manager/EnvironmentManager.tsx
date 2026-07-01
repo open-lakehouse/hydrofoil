@@ -10,16 +10,16 @@
 // context. Wrapped in the shared dialog provider so the storage tables can drive
 // the existing create/edit/delete flows.
 
+import { cn } from "@open-lakehouse/ui-kit";
+import { CatalogDialogsProvider } from "@open-lakehouse/unity-catalog";
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useState } from "react";
-import { CatalogDialogsProvider } from "@/features/unity-catalog";
 import {
   type ActiveEnvironment,
   type Environment,
   getEnvironmentHost,
 } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 import type { EnvironmentTransition } from "../environmentStatus";
 import { EnvironmentDetail } from "./EnvironmentDetail";
 import { EnvironmentList } from "./EnvironmentList";

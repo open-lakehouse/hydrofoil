@@ -6,15 +6,14 @@
 // environment's detail the right pane shows; it does NOT switch the running
 // environment (that is an explicit action in the detail pane).
 
+import { Button, cn } from "@open-lakehouse/ui-kit";
 import { CheckCircle2, Circle, Loader2, Plus } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import type {
   ActiveEnvironment,
   Environment,
   EnvironmentStatus,
 } from "@/lib/client/environments";
-import { cn } from "@/lib/utils";
 import { CreateEnvironmentDialog } from "../CreateEnvironmentDialog";
 import { capabilitySummary } from "../capabilitySummary";
 import {

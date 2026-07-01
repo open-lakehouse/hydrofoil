@@ -1,3 +1,4 @@
+import { prefetchCatalogs } from "@open-lakehouse/unity-catalog";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
@@ -7,7 +8,6 @@ import {
 } from "@tanstack/react-router";
 import { EnvironmentGate } from "@/components/EnvironmentGate";
 import { ErrorFallback } from "@/components/ErrorBoundary";
-import { prefetchCatalogs } from "@/features/unity-catalog";
 
 export interface RouterContext {
   queryClient: QueryClient;

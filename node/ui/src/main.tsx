@@ -1,16 +1,28 @@
+import {
+  ThemeProvider,
+  Toaster,
+  TooltipProvider,
+} from "@open-lakehouse/ui-kit";
+import {
+  defaultUnityCatalogClient,
+  setDefaultUnityCatalogFetch,
+  UnityCatalogProvider,
+} from "@open-lakehouse/unity-catalog";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { ThemeProvider } from "@/components/ThemeProvider";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { UnityCatalogProvider } from "@/features/unity-catalog";
-import { defaultUnityCatalogClient } from "@/lib/api";
+import { clientFetch } from "@/lib/client/registry";
 import { createQueryClient } from "@/lib/query-client";
 import { routeTree } from "./routeTree";
 import "./app/globals.css";
+
+// Route the default Unity Catalog client through the app's fetch registry, so a
+// host that registers an alternative fetch (the Tauri desktop shell) transports
+// UC calls over it — matching the pre-carve-out behavior where the default
+// client used `clientFetch` directly. Must run before the first UC request.
+setDefaultUnityCatalogFetch(clientFetch);
 
 const queryClient = createQueryClient();
 
