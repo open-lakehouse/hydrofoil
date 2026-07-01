@@ -254,7 +254,7 @@ function SchemaEditor({
           </thead>
           <tbody>
             {columns.map((col, i) => (
-              <tr key={i} className="border-t">
+              <tr key={col.id} className="border-t">
                 <td className="px-3 py-1.5">
                   <Input
                     value={col.name}
