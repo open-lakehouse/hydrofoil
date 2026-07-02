@@ -15,8 +15,12 @@
 use std::collections::BTreeSet;
 
 use datafusion::error::DataFusionError;
-use datafusion_cedar::CatalogFactSink;
 use unitycatalog_common::models::tables::v1::Table;
+
+// The catalog-fact-sink `SessionConfig` extension now lives in `datafusion-cedar`
+// (the crate owns its per-request seam); re-export it so the rest of hydrofoil
+// keeps importing it from `crate::catalog`.
+pub use datafusion_cedar::CatalogFactSinkExt;
 
 /// gRPC/property convention keys.
 mod keys {
@@ -28,14 +32,6 @@ mod keys {
     pub const READERS: &str = "readers";
     pub const WRITERS: &str = "writers";
 }
-
-/// A `SessionConfig` extension carrying the per-session [`CatalogFactSink`].
-///
-/// Set on the session config before the Unity resolver captures the task
-/// context, so `build_delta` (deep in catalog resolution) and the policy layer
-/// share one sink instance. Mirrors `PrincipalExt` / `AgentContextExt`.
-#[derive(Debug, Clone, Default)]
-pub struct CatalogFactSinkExt(pub CatalogFactSink);
 
 /// The classification of one table: its table-level tags and per-column tags.
 #[derive(Debug, Clone, Default)]
