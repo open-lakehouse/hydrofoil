@@ -20,6 +20,8 @@ mod cedar;
 mod facts;
 mod policy;
 mod principal;
+mod rule;
+mod session;
 mod visitor;
 
 #[cfg(feature = "governance")]
@@ -36,11 +38,19 @@ pub use principal::{
     AgentClaims, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
     PrincipalIdentity,
 };
+pub use rule::PolicyQueryPlanner;
+pub use session::{
+    CatalogFactSinkExt, EvalContextProvider, PolicyBuilder, PolicyExtension, PolicySessionExt,
+    PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
+    SessionConfigPrincipalProvider, authorize_and_govern, instrument_session_state,
+};
 
 #[cfg(feature = "governance")]
 pub use fact_store::{FactStore, InMemoryFactStore};
 #[cfg(feature = "governance")]
 pub use govern::{TablePolicy, govern_plan};
+#[cfg(feature = "governance")]
+pub use session::FactStoreExt;
 #[cfg(feature = "governance")]
 pub use translate::{CedarResidualTranslator, ResidualTranslator};
 
