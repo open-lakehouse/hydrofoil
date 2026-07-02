@@ -24,7 +24,7 @@ use datafusion::{
 use datafusion_cedar::{
     EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
 };
-use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
+use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -57,8 +57,10 @@ use crate::{
 };
 
 mod log_store;
+mod supervisor;
 
 use log_store::DataFusionLogStore;
+use supervisor::SessionSupervisor;
 
 // The taint-ledger `SessionConfig` extension now lives in `datafusion-cedar`
 // (the crate owns its per-request seam), alongside the `SessionConfigEvalContextProvider`
@@ -707,7 +709,7 @@ pub fn create_session_for(
     let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
         Arc::new(UnityQueryPlanner::default());
 
-    let mut session_state = SessionStateBuilder::new_with_default_features()
+    let base = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
         .with_query_planner(query_planner)
@@ -715,32 +717,37 @@ pub fn create_session_for(
             DeltaTableFactory::FILE_FORMAT.to_string(),
             DeltaTableFactory::instance(),
         )
-        .with_physical_optimizer_rule(instrument_rule)
-        .build();
+        .with_physical_optimizer_rule(instrument_rule);
 
-    // Emit OpenLineage events around physical planning when a client is wired.
-    // The context provider reads the per-request `LineageContext` the server
-    // attaches to the `SessionConfig` via `LakehouseCtx::session_with_lineage`
-    // (parent-run facet + SQL text); when none is attached it resolves to empty.
+    // Compose the two independent session extensions onto the base (Unity)
+    // planner in the order `lineage → policy → unity` (outermost → innermost).
+    // Augmentors are applied in order, and last-applied is outermost, so:
+    //   1. policy — governs + gates, then delegates physical planning down to the
+    //      Unity planner. Reads the principal + per-query facts back from the
+    //      `SessionConfig` extensions attached above via the crate's default
+    //      providers. `LakehouseSession::create_physical_plan` delegates through it.
+    //   2. lineage (outermost, nested) — emits START, delegates the real query to
+    //      the policy planner, wraps the result in the terminal exec, emits
+    //      COMPLETE/FAIL. Nesting outside policy means a *denied* query still emits
+    //      a START+FAIL run (an audit trail of blocked access). The context
+    //      provider reads the per-request `LineageContext` the server attaches via
+    //      `LakehouseCtx::session_with_lineage`; when none is attached it's empty.
+    let mut supervisor = SessionSupervisor::new(base).with(Box::new(move |state| {
+        datafusion_cedar::PolicyExtension::builder()
+            .policy(policy)
+            .instrument(state)
+    }));
     if let Some(client) = lineage {
-        session_state = instrument_session_state(
-            session_state,
-            client,
-            Arc::new(crate::lineage::HydrofoilContextProvider),
-            lineage_config,
-        );
+        supervisor = supervisor.with(Box::new(move |state| {
+            datafusion_openlineage::OpenLineage::builder()
+                .client(client)
+                .context(Arc::new(crate::lineage::HydrofoilContextProvider))
+                .config(lineage_config)
+                .nest_over_existing_planner(true)
+                .instrument(state)
+        }));
     }
-
-    // Install the Cedar policy gate as the outermost query planner: it governs
-    // (row filters + column masks) and gates the query, then delegates physical
-    // planning down to the wrapped planner (the lineage planner when one was
-    // installed above, else the Unity planner). Reads the principal + per-query
-    // facts back from the `SessionConfig` extensions attached above via the
-    // crate's default `SessionConfig` providers. `LakehouseSession::create_physical_plan`
-    // now just delegates through this.
-    session_state = datafusion_cedar::PolicyExtension::builder()
-        .policy(policy)
-        .instrument(session_state);
+    let session_state = supervisor.build();
 
     let ctx = SessionContext::new_with_state(session_state);
 
@@ -1013,6 +1020,69 @@ mod integration_tests {
             .as_ref()
             .expect("sql job facet present");
         assert_eq!(sql.query, "SELECT id FROM t");
+    }
+
+    /// A query denied by the policy gate still emits a START+FAIL lineage run:
+    /// the supervisor nests the lineage planner *outside* the policy planner, so
+    /// START fires before the gate runs and FAIL fires when the gate denies —
+    /// an audit trail of attempted-but-blocked access.
+    #[tokio::test]
+    async fn denied_query_still_emits_start_and_fail() {
+        use datafusion_openlineage::context::LineageContext;
+        let transport = RecordingTransport::default();
+        let client = OpenLineageClient::new(Arc::new(transport.clone()));
+        // `DenyAll` gate + lineage wired: the query is denied, but lineage sits
+        // outside the gate.
+        let ctx = ctx_with_table(Arc::new(DenyAll), Some(client)).await;
+
+        let session = ctx.session_with_lineage(LineageContext {
+            sql: Some("SELECT id FROM t".to_string()),
+            ..Default::default()
+        });
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
+        // Planning is denied by the policy gate (which the lineage planner wraps).
+        let err = session.create_physical_plan(&plan).await.unwrap_err();
+        assert!(err.to_string().contains("not authorized"), "got: {err}");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let events = transport.events.lock().unwrap();
+        let start = events
+            .iter()
+            .find(|e| e.event_type == RunEventType::Start)
+            .expect("START emitted before the gate ran");
+        let fail = events
+            .iter()
+            .find(|e| e.event_type == RunEventType::Fail)
+            .expect("FAIL emitted when the gate denied");
+        assert_eq!(
+            start.run.run_id, fail.run.run_id,
+            "START/FAIL share a run id"
+        );
+    }
+
+    /// Both the policy and lineage query planners register themselves as typed
+    /// `SessionConfig` extensions; composing them must preserve both (they key on
+    /// distinct `TypeId`s), so a host can still recover either after both install.
+    #[tokio::test]
+    async fn composed_session_resolves_both_planner_extensions() {
+        let client = OpenLineageClient::new(Arc::new(RecordingTransport::default()));
+        let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), Some(client)).await;
+        let config = ctx.ctx().state().config().clone();
+        assert!(
+            config
+                .get_extension::<datafusion_cedar::PolicyQueryPlanner>()
+                .is_some(),
+            "policy planner recoverable from config"
+        );
+        assert!(
+            config
+                .get_extension::<datafusion_openlineage::OpenLineageQueryPlanner>()
+                .is_some(),
+            "lineage planner recoverable from config"
+        );
     }
 
     /// With the governance feature, a `TablePolicy` filters rows and masks
