@@ -25,9 +25,6 @@ criticals = "criticals"
 # on its own and flagged as a misspelling of miss/mist.
 mis = "mis"
 
-# MUC = Munich's IATA / city code, used in demo data (notebooks/caspers_gen.py).
-muc = "muc"
-
 # We only want typos to police code we own. Three classes of files carry
 # intentional or upstream-owned "misspellings" and are excluded here:
 #
