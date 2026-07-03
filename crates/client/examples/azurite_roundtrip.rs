@@ -9,16 +9,15 @@
 //!
 //! ## Running
 //!
+//! Requires a running stack that vends Azurite (Azure Blob emulator) credentials:
+//! Azurite, a Unity Catalog server whose managed catalog roots at `azurite://…`
+//! with a registered storage credential + external location, and a hydrofoil
+//! server pointed at that UC. Then create the catalog/schema and run the example:
+//!
 //! ```bash
-//! # 1. Azurite:            just env-up azurite
-//! # 2. Rust UC server:     cargo run -p unitycatalog-cli -- server --rest --port 8081 \
-//! #                          --config environments/config/azurite/uc-config.yaml   (sibling repo)
-//! # 3. Seed credential:    ./scripts/azurite-seed.sh
-//! # 4. Create catalog/schema (managed root inherited from the UC config):
-//! #      curl -XPOST .../catalogs -d '{"name":"azc"}'
-//! #      curl -XPOST .../schemas  -d '{"name":"s","catalog_name":"azc"}'
-//! # 5. hydrofoil:          HYDROFOIL_CONFIG=environments/config/azurite/hydrofoil.toml just hydro
-//! # 6. This example:
+//! # Create catalog/schema (managed root inherited from the UC config):
+//! #   curl -XPOST .../catalogs -d '{"name":"azc"}'
+//! #   curl -XPOST .../schemas  -d '{"name":"s","catalog_name":"azc"}'
 //! HYDROFOIL_URL=http://localhost:50051 UC_TABLE=azc.s.orders_hf \
 //!   cargo run -p hydrofoil-client --example azurite_roundtrip
 //! ```
