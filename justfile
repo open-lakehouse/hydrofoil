@@ -83,7 +83,7 @@ build_policy:
 # Regenerate the portal crate's buffa message types + connect-rust service stubs.
 # One-time plugin install (local binaries; no remote BSR plugin yet):
 #   cargo install --locked connectrpc-codegen     # protoc-gen-connect-rust
-#   cargo install --locked protoc-gen-buffa protoc-gen-buffa-packaging
+# cargo install --locked protoc-gen-buffa protoc-gen-buffa-packaging
 portal-gen:
     cd crates/portal && buf generate
     cargo fmt -p portal
