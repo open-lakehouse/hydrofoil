@@ -235,6 +235,7 @@ impl Engine {
             self.lineage_config.clone(),
             Some(principal.clone()),
             unity_factory.clone(),
+            self.policy.clone(),
         )?;
 
         let unity = unity_factory.map(|factory| build_unity_resolver(&ctx, factory));
@@ -341,12 +342,7 @@ impl Session {
     pub fn lakehouse(&self) -> LakehouseSession {
         let mut state = self.ctx.state();
         self.attach_fact_store(&mut state);
-        LakehouseSession::new(
-            state,
-            self.policy.clone(),
-            self.principal.clone(),
-            self.unity.clone(),
-        )
+        LakehouseSession::new(state, self.unity.clone())
     }
 
     /// A per-query [`LakehouseSession`] decorated with the request's lineage
@@ -372,12 +368,7 @@ impl Session {
                 .set_extension(Arc::new(AgentContextExt(agent)));
         }
         self.attach_fact_store(&mut state);
-        LakehouseSession::new(
-            state,
-            self.policy.clone(),
-            self.principal.clone(),
-            self.unity.clone(),
-        )
+        LakehouseSession::new(state, self.unity.clone())
     }
 
     /// Attach the session's taint ledger to a per-query state so the governance
@@ -429,8 +420,8 @@ impl Session {
 
     /// The session's catalog fact sink (the instance `build_delta` writes to and
     /// the policy layer reads). For tests that populate facts without standing
-    /// up Unity Catalog.
-    #[cfg(test)]
+    /// up Unity Catalog. Only the governance taint tests use it.
+    #[cfg(all(test, feature = "governance"))]
     pub(crate) fn catalog_fact_sink(&self) -> datafusion_cedar::CatalogFactSink {
         self.ctx
             .state()
@@ -441,14 +432,15 @@ impl Session {
     }
 
     /// This session's correlation id (its session id), the key under which the
-    /// governance PEP records taints.
-    #[cfg(test)]
+    /// governance PEP records taints. Only the governance taint tests use it.
+    #[cfg(all(test, feature = "governance"))]
     pub(crate) fn correlation_id(&self) -> String {
         self.ctx.state().session_id().to_string()
     }
 
     /// The session's `SessionContext`, for tests that register tables directly.
-    #[cfg(test)]
+    /// Only the governance taint tests use it.
+    #[cfg(all(test, feature = "governance"))]
     pub(crate) fn session_context(&self) -> &SessionContext {
         &self.ctx
     }

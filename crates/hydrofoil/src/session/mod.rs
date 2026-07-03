@@ -6,7 +6,7 @@ use datafusion::{
     catalog::{
         AsyncCatalogProviderList as _, CatalogProvider as _, MemoryCatalogProvider, Session,
     },
-    common::{DFSchema, exec_err},
+    common::DFSchema,
     config::{ConfigOptions, TableOptions},
     datasource::{TableProvider, provider_as_source},
     error::Result,
@@ -21,8 +21,10 @@ use datafusion::{
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
-use datafusion_cedar::{EvalContext, PrincipalIdentity};
-use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig, instrument_session_state};
+use datafusion_cedar::{
+    EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
+};
+use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -58,68 +60,12 @@ mod log_store;
 
 use log_store::DataFusionLogStore;
 
-/// Inject fine-grained governance (row filters + column masks) into a plan
-/// before optimization.
-///
-/// With the `governance` feature this delegates to
-/// [`datafusion_cedar::govern_plan`]; without it (the default), it is a no-op
-/// that returns the plan unchanged — the coarse access gate still applies.
+// The taint-ledger `SessionConfig` extension now lives in `datafusion-cedar`
+// (the crate owns its per-request seam), alongside the `SessionConfigEvalContextProvider`
+// that assembles the `EvalContext` from these extensions. Re-export it so
+// `crate::engine` keeps populating it via `crate::session::FactStoreExt`.
 #[cfg(feature = "governance")]
-async fn govern_plan(
-    plan: &LogicalPlan,
-    policy: &dyn Policy,
-    principal: &PrincipalIdentity,
-    eval: &EvalContext,
-) -> Result<LogicalPlan> {
-    datafusion_cedar::govern_plan(plan, policy, principal, eval).await
-}
-
-#[cfg(not(feature = "governance"))]
-async fn govern_plan(
-    plan: &LogicalPlan,
-    _policy: &dyn Policy,
-    _principal: &PrincipalIdentity,
-    _eval: &EvalContext,
-) -> Result<LogicalPlan> {
-    Ok(plan.clone())
-}
-
-/// A `SessionConfig` extension carrying the session's taint ledger, attached to
-/// the per-query state so the policy layer can build the [`EvalContext`].
-#[cfg(feature = "governance")]
-#[derive(Clone)]
-pub(crate) struct FactStoreExt(pub Arc<dyn datafusion_cedar::FactStore>);
-
-/// Assemble the per-query [`EvalContext`] from a session state: the catalog
-/// fact sink and (under `governance`) the correlation id + taint ledger, all
-/// read back from `SessionConfig` extensions the session layer attached. The
-/// correlation id is the session id, stable per connection.
-fn eval_context(state: &SessionState) -> EvalContext {
-    let catalog_facts = state
-        .config()
-        .get_extension::<crate::catalog::CatalogFactSinkExt>()
-        .map(|ext| ext.0.clone())
-        .unwrap_or_default();
-
-    #[cfg(feature = "governance")]
-    {
-        EvalContext {
-            catalog_facts,
-            correlation_id: Some(state.session_id().to_string()),
-            fact_store: state
-                .config()
-                .get_extension::<FactStoreExt>()
-                .map(|ext| ext.0.clone()),
-        }
-    }
-    #[cfg(not(feature = "governance"))]
-    {
-        EvalContext {
-            catalog_facts,
-            correlation_id: Some(state.session_id().to_string()),
-        }
-    }
-}
+pub(crate) use datafusion_cedar::FactStoreExt;
 
 /// Context for executing queries in a Lakehouse.
 ///
@@ -195,8 +141,6 @@ impl LakehouseCtx {
     pub fn session(&self) -> LakehouseSession {
         LakehouseSession {
             inner: self.inner.state(),
-            policy: self.policy.clone(),
-            principal: self.principal.clone(),
             unity: self.unity.clone(),
         }
     }
@@ -219,8 +163,6 @@ impl LakehouseCtx {
             .set_extension(Arc::new(LineageContextExt(context)));
         LakehouseSession {
             inner,
-            policy: self.policy.clone(),
-            principal: self.principal.clone(),
             unity: self.unity.clone(),
         }
     }
@@ -250,21 +192,20 @@ impl LakehouseCtx {
     /// insert plan it would otherwise execute; a writer authorized for an
     /// external table is thus authorized for a managed one under one policy.
     pub async fn authorize_logical_plan(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let eval = eval_context(&self.inner.state());
-        let governed = govern_plan(&plan, self.policy.as_ref(), &self.principal, &eval).await?;
-        let optimized_plan = self.inner.state().optimize(&governed)?;
-        if self
-            .policy
-            .is_allowed(&optimized_plan, &self.principal, &eval)
-            .await?
-            == Decision::Deny
-        {
-            return exec_err!(
-                "Principal '{}' is not authorized to execute this query",
-                self.principal.uid
-            );
-        }
-        Ok(governed)
+        // Same enforcement sequence the `PolicyQueryPlanner` runs on the statement
+        // path (govern → optimize → gate), through the one shared implementation.
+        // This write path executes on the inner `SessionContext` and so does not
+        // route through the policy planner; it enforces the identical policy here.
+        let state = self.inner.state();
+        let eval = SessionConfigEvalContextProvider.eval_context(&state).await;
+        datafusion_cedar::authorize_and_govern(
+            &state,
+            &plan,
+            self.policy.as_ref(),
+            &self.principal,
+            &eval,
+        )
+        .await
     }
 }
 
@@ -275,12 +216,13 @@ impl LakehouseCtx {
 #[derive(Debug, Clone)]
 pub struct LakehouseSession {
     /// The underlying DataFusion session state that manages most of the execution context.
+    ///
+    /// Access-control enforcement (govern + gate) now lives in the session's
+    /// `PolicyQueryPlanner`, installed on this state when the session was built;
+    /// `create_physical_plan` delegates through it. So the session no longer
+    /// carries the policy/principal itself — they reach the planner via the
+    /// `SessionConfig` extensions and the crate's default providers.
     inner: SessionState,
-    /// The policy engine used to enforce access control
-    /// and other policies during query planning and execution.
-    policy: Arc<dyn Policy>,
-    /// The principal (user or service) on behalf of whom queries are executed.
-    principal: PrincipalIdentity,
     /// Optional Unity Catalog resolver used to back catalog/schema/table
     /// resolution during planning.
     unity: Option<Arc<UnityCatalogProviderList>>,
@@ -292,19 +234,9 @@ impl LakehouseSession {
     /// The per-connection [`crate::engine::Session`] uses this to build a
     /// per-query session from a (cheaply cloned) `SessionState` it has already
     /// decorated with per-request `SessionConfig` extensions (lineage / agent
-    /// context).
-    pub fn new(
-        inner: SessionState,
-        policy: Arc<dyn Policy>,
-        principal: PrincipalIdentity,
-        unity: Option<Arc<UnityCatalogProviderList>>,
-    ) -> Self {
-        Self {
-            inner,
-            policy,
-            principal,
-            unity,
-        }
+    /// context) and the policy planner.
+    pub fn new(inner: SessionState, unity: Option<Arc<UnityCatalogProviderList>>) -> Self {
+        Self { inner, unity }
     }
 
     pub async fn create_logical_plan(
@@ -412,34 +344,13 @@ impl Session for LakehouseSession {
             );
         }
 
-        // Inject fine-grained governance (row filters + column masks) before
-        // optimization, so the injected predicate pushes into the scan and
-        // masked-away columns are pruned. Then optimize, so the coarse gate
-        // sees projections/filters pushed down to the table scan level and can
-        // authorize based on the actual data being accessed.
-        // Per-query facts: the catalog fact sink (resource folding) and, under
-        // governance, the correlation id + taint ledger (so reading a tagged
-        // column accrues taints). Assembled from the session-attached config
-        // extensions.
-        let eval = eval_context(&self.inner);
-        let governed =
-            govern_plan(logical_plan, self.policy.as_ref(), &self.principal, &eval).await?;
-        let optimized_plan = self.inner.optimize(&governed)?;
-        if self
-            .policy
-            .is_allowed(&optimized_plan, &self.principal, &eval)
-            .await?
-            == Decision::Deny
-        {
-            return exec_err!(
-                "Principal '{}' is not authorized to execute this query",
-                self.principal.uid
-            );
-        }
-        self.inner
-            .query_planner()
-            .create_physical_plan(&optimized_plan, &self.inner)
-            .await
+        // Governance (row filters + column masks) and the coarse access gate now
+        // run inside the session's `PolicyQueryPlanner` (installed by the engine),
+        // which the inner `SessionState` routes through here. So this just
+        // delegates: the planner extracts the per-query facts + principal from the
+        // session extensions, governs and gates, then hands off to physical
+        // planning (composing with the lineage planner when one is installed).
+        self.inner.create_physical_plan(logical_plan).await
     }
 
     fn create_physical_expr(
@@ -680,50 +591,20 @@ impl TaskExt for SessionContext {
     }
 }
 
-/// A `QueryPlanner` that lowers logical plans with `DefaultPhysicalPlanner`,
-/// extended to recognize the Unity Catalog DDL extension node via
-/// [`UnityCatalogPlanner`].
-struct UnityQueryPlanner {
-    inner: datafusion::physical_planner::DefaultPhysicalPlanner,
-}
-
-impl std::fmt::Debug for UnityQueryPlanner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UnityQueryPlanner").finish_non_exhaustive()
-    }
-}
-
-impl Default for UnityQueryPlanner {
-    fn default() -> Self {
-        Self {
-            inner: datafusion::physical_planner::DefaultPhysicalPlanner::with_extension_planners(
-                vec![Arc::new(UnityCatalogPlanner)],
-            ),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl datafusion::execution::context::QueryPlanner for UnityQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_planner::PhysicalPlanner as _;
-        self.inner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn create_session(
     session_id: impl Into<Option<Uuid>>,
     lineage: Option<OpenLineageClient>,
     lineage_config: OpenLineageConfig,
 ) -> Result<SessionContext> {
-    create_session_for(session_id, lineage, lineage_config, None, None)
+    create_session_for(
+        session_id,
+        lineage,
+        lineage_config,
+        None,
+        None,
+        Arc::new(datafusion_cedar::StaticPolicy::new(Decision::Allow)),
+    )
 }
 
 /// Build a session context, optionally binding a [`PrincipalIdentity`] into the
@@ -739,6 +620,7 @@ pub fn create_session_for(
     lineage_config: OpenLineageConfig,
     principal: Option<PrincipalIdentity>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
+    policy: Arc<dyn Policy>,
 ) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
@@ -782,13 +664,32 @@ pub fn create_session_for(
         session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
     }
 
-    // Base physical planner that also lowers the Unity Catalog DDL extension
-    // node (`ExecuteUnityCatalogPlanNode`) to its executor. OpenLineage wraps
-    // this planner below, so the wrapping preserves UC-DDL planning.
+    // The single session query planner composes policy + lineage over one shared
+    // physical planner (see `GovernedLineagePlanner`): it governs + gates first
+    // (a denied query errors here, emitting no lineage), then — if lineage is
+    // wired — emits START and wraps the governed plan in a `LineageMarker`, then
+    // delegates lowering to one `DefaultPhysicalPlanner` carrying both the Unity
+    // DDL lowerer (`UnityCatalogPlanner`, for `ExecuteUnityCatalogPlanNode`) and
+    // the `LineageExtensionPlanner`. The principal + per-query facts are read from
+    // the `SessionConfig` extensions attached above via the crate's default
+    // providers; the lineage context provider reads the per-request `LineageContext`
+    // the server attaches via `LakehouseCtx::session_with_lineage`.
     let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
-        Arc::new(UnityQueryPlanner::default());
+        Arc::new(crate::planner::GovernedLineagePlanner::new(
+            policy,
+            Arc::new(datafusion_cedar::SessionConfigPrincipalProvider),
+            Arc::new(datafusion_cedar::SessionConfigEvalContextProvider),
+            vec![Arc::new(UnityCatalogPlanner)],
+            lineage.map(|client| {
+                (
+                    client,
+                    Arc::new(crate::lineage::HydrofoilContextProvider) as Arc<_>,
+                    lineage_config,
+                )
+            }),
+        ));
 
-    let mut session_state = SessionStateBuilder::new_with_default_features()
+    let session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
         .with_query_planner(query_planner)
@@ -798,19 +699,6 @@ pub fn create_session_for(
         )
         .with_physical_optimizer_rule(instrument_rule)
         .build();
-
-    // Emit OpenLineage events around physical planning when a client is wired.
-    // The context provider reads the per-request `LineageContext` the server
-    // attaches to the `SessionConfig` via `LakehouseCtx::session_with_lineage`
-    // (parent-run facet + SQL text); when none is attached it resolves to empty.
-    if let Some(client) = lineage {
-        session_state = instrument_session_state(
-            session_state,
-            client,
-            Arc::new(crate::lineage::HydrofoilContextProvider),
-            lineage_config,
-        );
-    }
 
     let ctx = SessionContext::new_with_state(session_state);
 
@@ -882,7 +770,7 @@ mod integration_tests {
     use datafusion::logical_expr::LogicalPlan;
 
     use cedar_oci::{Decision, EntityUid};
-    use datafusion_cedar::PrincipalIdentity;
+    use datafusion_cedar::{EvalContext, PrincipalIdentity};
     use datafusion_openlineage::OpenLineageClient;
     use datafusion_openlineage::event::{RunEvent, RunEventType};
     use datafusion_openlineage::transport::{Transport, TransportError};
@@ -900,7 +788,19 @@ mod integration_tests {
         policy: Arc<dyn Policy>,
         lineage: Option<OpenLineageClient>,
     ) -> LakehouseCtx {
-        let session = create_session(None, lineage, OpenLineageConfig::default()).unwrap();
+        // Build the session *with* the policy so its `PolicyQueryPlanner` enforces
+        // it on the statement path (mirroring `Engine::new_session`), and bind the
+        // principal so the planner's default provider can resolve it. The same
+        // policy is also handed to `LakehouseCtx` for the write path's explicit gate.
+        let session = create_session_for(
+            None,
+            lineage,
+            OpenLineageConfig::default(),
+            Some(principal("alice")),
+            None,
+            policy.clone(),
+        )
+        .unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
             Field::new("region", DataType::Utf8, true),
@@ -1071,6 +971,36 @@ mod integration_tests {
             .as_ref()
             .expect("sql job facet present");
         assert_eq!(sql.query, "SELECT id FROM t");
+    }
+
+    /// A query denied by the policy gate emits NO lineage: the single planner
+    /// runs govern+gate first, so a Deny errors before the lineage step ever
+    /// fires — no START, no FAIL. (The audit trail for blocked access, if wanted,
+    /// is the policy layer's concern, not lineage's.)
+    #[tokio::test]
+    async fn denied_query_emits_no_lineage() {
+        use datafusion_openlineage::context::LineageContext;
+        let transport = RecordingTransport::default();
+        let client = OpenLineageClient::new(Arc::new(transport.clone()));
+        // `DenyAll` gate + lineage wired: the gate runs first, before any lineage.
+        let ctx = ctx_with_table(Arc::new(DenyAll), Some(client)).await;
+
+        let session = ctx.session_with_lineage(LineageContext {
+            sql: Some("SELECT id FROM t".to_string()),
+            ..Default::default()
+        });
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
+        let err = session.create_physical_plan(&plan).await.unwrap_err();
+        assert!(err.to_string().contains("not authorized"), "got: {err}");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            transport.events.lock().unwrap().is_empty(),
+            "a denied query emits no lineage events"
+        );
     }
 
     /// With the governance feature, a `TablePolicy` filters rows and masks

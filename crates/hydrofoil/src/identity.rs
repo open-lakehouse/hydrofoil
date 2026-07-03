@@ -34,13 +34,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionConfig;
 use datafusion_cedar::{
     Entity, EntityUid, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
-    PrincipalIdentity, RestrictedExpression,
+    PrincipalExt, PrincipalIdentity, RestrictedExpression,
 };
 use tonic::metadata::MetadataMap;
+
+// The principal `SessionConfig` extension (`PrincipalExt`), its read-back
+// provider, and the `PrincipalProvider` trait now live in `datafusion-cedar`
+// (the crate owns its per-request seam). Consumers that need the provider import
+// it from there directly; hydrofoil only attaches the extension (via
+// [`with_principal`]) and reads it through the policy planner's default provider.
 
 /// gRPC metadata keys carrying the principal and its attributes.
 pub mod headers {
@@ -64,13 +69,6 @@ pub mod headers {
 /// An unauthenticated/local caller; policies decide what `User::"anonymous"`
 /// may do.
 pub const DEFAULT_PRINCIPAL: &str = "User::\"anonymous\"";
-
-/// The `SessionConfig` extension type carrying the per-request principal.
-///
-/// A distinct newtype so `SessionConfig::get_extension` (which keys by
-/// `TypeId`) resolves it unambiguously.
-#[derive(Debug, Clone)]
-pub struct PrincipalExt(pub PrincipalIdentity);
 
 /// Parse the principal (and its attributes) from gRPC request metadata.
 ///
@@ -170,34 +168,6 @@ fn principal_from_headers(
 /// [`SessionConfigPrincipalProvider`] can read it back during planning.
 pub fn with_principal(config: SessionConfig, principal: PrincipalIdentity) -> SessionConfig {
     config.with_extension(Arc::new(PrincipalExt(principal)))
-}
-
-/// Resolves the principal a query runs as, from a [`SessionState`].
-///
-/// Mirrors [`datafusion_openlineage::context::LineageContextProvider`]: the
-/// provider only sees a `SessionState`, so per-request data reaches it through
-/// a typed `SessionConfig` extension. Retained as the provider-facing seam; the
-/// policy gate currently reads the principal from a `LakehouseSession` field.
-#[allow(dead_code)]
-#[async_trait::async_trait]
-pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
-    async fn principal(&self, session_state: &SessionState) -> Option<PrincipalIdentity>;
-}
-
-/// A [`PrincipalProvider`] that reads the [`PrincipalIdentity`] attached to the
-/// session's `SessionConfig` as a [`PrincipalExt`] extension.
-#[allow(dead_code)]
-#[derive(Debug, Default)]
-pub struct SessionConfigPrincipalProvider;
-
-#[async_trait::async_trait]
-impl PrincipalProvider for SessionConfigPrincipalProvider {
-    async fn principal(&self, session_state: &SessionState) -> Option<PrincipalIdentity> {
-        session_state
-            .config()
-            .get_extension::<PrincipalExt>()
-            .map(|ext| ext.0.clone())
-    }
 }
 
 /// A user's facts in the static identity config: string attributes and the
