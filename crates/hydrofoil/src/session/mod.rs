@@ -57,10 +57,8 @@ use crate::{
 };
 
 mod log_store;
-mod supervisor;
 
 use log_store::DataFusionLogStore;
-use supervisor::SessionSupervisor;
 
 // The taint-ledger `SessionConfig` extension now lives in `datafusion-cedar`
 // (the crate owns its per-request seam), alongside the `SessionConfigEvalContextProvider`
@@ -593,43 +591,6 @@ impl TaskExt for SessionContext {
     }
 }
 
-/// A `QueryPlanner` that lowers logical plans with `DefaultPhysicalPlanner`,
-/// extended to recognize the Unity Catalog DDL extension node via
-/// [`UnityCatalogPlanner`].
-struct UnityQueryPlanner {
-    inner: datafusion::physical_planner::DefaultPhysicalPlanner,
-}
-
-impl std::fmt::Debug for UnityQueryPlanner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UnityQueryPlanner").finish_non_exhaustive()
-    }
-}
-
-impl Default for UnityQueryPlanner {
-    fn default() -> Self {
-        Self {
-            inner: datafusion::physical_planner::DefaultPhysicalPlanner::with_extension_planners(
-                vec![Arc::new(UnityCatalogPlanner)],
-            ),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl datafusion::execution::context::QueryPlanner for UnityQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_planner::PhysicalPlanner as _;
-        self.inner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn create_session(
     session_id: impl Into<Option<Uuid>>,
@@ -703,13 +664,32 @@ pub fn create_session_for(
         session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
     }
 
-    // Base physical planner that also lowers the Unity Catalog DDL extension
-    // node (`ExecuteUnityCatalogPlanNode`) to its executor. OpenLineage wraps
-    // this planner below, so the wrapping preserves UC-DDL planning.
+    // The single session query planner composes policy + lineage over one shared
+    // physical planner (see `GovernedLineagePlanner`): it governs + gates first
+    // (a denied query errors here, emitting no lineage), then — if lineage is
+    // wired — emits START and wraps the governed plan in a `LineageMarker`, then
+    // delegates lowering to one `DefaultPhysicalPlanner` carrying both the Unity
+    // DDL lowerer (`UnityCatalogPlanner`, for `ExecuteUnityCatalogPlanNode`) and
+    // the `LineageExtensionPlanner`. The principal + per-query facts are read from
+    // the `SessionConfig` extensions attached above via the crate's default
+    // providers; the lineage context provider reads the per-request `LineageContext`
+    // the server attaches via `LakehouseCtx::session_with_lineage`.
     let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
-        Arc::new(UnityQueryPlanner::default());
+        Arc::new(crate::planner::GovernedLineagePlanner::new(
+            policy,
+            Arc::new(datafusion_cedar::SessionConfigPrincipalProvider),
+            Arc::new(datafusion_cedar::SessionConfigEvalContextProvider),
+            vec![Arc::new(UnityCatalogPlanner)],
+            lineage.map(|client| {
+                (
+                    client,
+                    Arc::new(crate::lineage::HydrofoilContextProvider) as Arc<_>,
+                    lineage_config,
+                )
+            }),
+        ));
 
-    let base = SessionStateBuilder::new_with_default_features()
+    let session_state = SessionStateBuilder::new_with_default_features()
         .with_session_id(session_id.into().unwrap_or_else(Uuid::new_v4).to_string())
         .with_config(session_config)
         .with_query_planner(query_planner)
@@ -717,37 +697,8 @@ pub fn create_session_for(
             DeltaTableFactory::FILE_FORMAT.to_string(),
             DeltaTableFactory::instance(),
         )
-        .with_physical_optimizer_rule(instrument_rule);
-
-    // Compose the two independent session extensions onto the base (Unity)
-    // planner in the order `lineage → policy → unity` (outermost → innermost).
-    // Augmentors are applied in order, and last-applied is outermost, so:
-    //   1. policy — governs + gates, then delegates physical planning down to the
-    //      Unity planner. Reads the principal + per-query facts back from the
-    //      `SessionConfig` extensions attached above via the crate's default
-    //      providers. `LakehouseSession::create_physical_plan` delegates through it.
-    //   2. lineage (outermost, nested) — emits START, delegates the real query to
-    //      the policy planner, wraps the result in the terminal exec, emits
-    //      COMPLETE/FAIL. Nesting outside policy means a *denied* query still emits
-    //      a START+FAIL run (an audit trail of blocked access). The context
-    //      provider reads the per-request `LineageContext` the server attaches via
-    //      `LakehouseCtx::session_with_lineage`; when none is attached it's empty.
-    let mut supervisor = SessionSupervisor::new(base).with(Box::new(move |state| {
-        datafusion_cedar::PolicyExtension::builder()
-            .policy(policy)
-            .instrument(state)
-    }));
-    if let Some(client) = lineage {
-        supervisor = supervisor.with(Box::new(move |state| {
-            datafusion_openlineage::OpenLineage::builder()
-                .client(client)
-                .context(Arc::new(crate::lineage::HydrofoilContextProvider))
-                .config(lineage_config)
-                .nest_over_existing_planner(true)
-                .instrument(state)
-        }));
-    }
-    let session_state = supervisor.build();
+        .with_physical_optimizer_rule(instrument_rule)
+        .build();
 
     let ctx = SessionContext::new_with_state(session_state);
 
@@ -1022,17 +973,16 @@ mod integration_tests {
         assert_eq!(sql.query, "SELECT id FROM t");
     }
 
-    /// A query denied by the policy gate still emits a START+FAIL lineage run:
-    /// the supervisor nests the lineage planner *outside* the policy planner, so
-    /// START fires before the gate runs and FAIL fires when the gate denies —
-    /// an audit trail of attempted-but-blocked access.
+    /// A query denied by the policy gate emits NO lineage: the single planner
+    /// runs govern+gate first, so a Deny errors before the lineage step ever
+    /// fires — no START, no FAIL. (The audit trail for blocked access, if wanted,
+    /// is the policy layer's concern, not lineage's.)
     #[tokio::test]
-    async fn denied_query_still_emits_start_and_fail() {
+    async fn denied_query_emits_no_lineage() {
         use datafusion_openlineage::context::LineageContext;
         let transport = RecordingTransport::default();
         let client = OpenLineageClient::new(Arc::new(transport.clone()));
-        // `DenyAll` gate + lineage wired: the query is denied, but lineage sits
-        // outside the gate.
+        // `DenyAll` gate + lineage wired: the gate runs first, before any lineage.
         let ctx = ctx_with_table(Arc::new(DenyAll), Some(client)).await;
 
         let session = ctx.session_with_lineage(LineageContext {
@@ -1043,45 +993,13 @@ mod integration_tests {
             .create_logical_plan("SELECT id FROM t")
             .await
             .unwrap();
-        // Planning is denied by the policy gate (which the lineage planner wraps).
         let err = session.create_physical_plan(&plan).await.unwrap_err();
         assert!(err.to_string().contains("not authorized"), "got: {err}");
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let events = transport.events.lock().unwrap();
-        let start = events
-            .iter()
-            .find(|e| e.event_type == RunEventType::Start)
-            .expect("START emitted before the gate ran");
-        let fail = events
-            .iter()
-            .find(|e| e.event_type == RunEventType::Fail)
-            .expect("FAIL emitted when the gate denied");
-        assert_eq!(
-            start.run.run_id, fail.run.run_id,
-            "START/FAIL share a run id"
-        );
-    }
-
-    /// Both the policy and lineage query planners register themselves as typed
-    /// `SessionConfig` extensions; composing them must preserve both (they key on
-    /// distinct `TypeId`s), so a host can still recover either after both install.
-    #[tokio::test]
-    async fn composed_session_resolves_both_planner_extensions() {
-        let client = OpenLineageClient::new(Arc::new(RecordingTransport::default()));
-        let ctx = ctx_with_table(Arc::new(StaticPolicy::new(Decision::Allow)), Some(client)).await;
-        let config = ctx.ctx().state().config().clone();
         assert!(
-            config
-                .get_extension::<datafusion_cedar::PolicyQueryPlanner>()
-                .is_some(),
-            "policy planner recoverable from config"
-        );
-        assert!(
-            config
-                .get_extension::<datafusion_openlineage::OpenLineageQueryPlanner>()
-                .is_some(),
-            "lineage planner recoverable from config"
+            transport.events.lock().unwrap().is_empty(),
+            "a denied query emits no lineage events"
         );
     }
 
