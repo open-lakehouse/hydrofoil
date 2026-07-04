@@ -17,9 +17,6 @@ hydro:
     HYDROFOIL__LINEAGE__URL="${HYDROFOIL__LINEAGE__URL:-https://lineage.openlakehousedemos.dev}" \
     cargo run --bin hydrofoil -- "${HYDROFOIL_CONFIG:?set HYDROFOIL_CONFIG to a hydrofoil.toml}"
 
-build_policy:
-    cd crates/policy && buf generate
-
 # Regenerate the portal crate's buffa message types + connect-rust service stubs.
 # One-time plugin install (local binaries; no remote BSR plugin yet):
 #   cargo install --locked connectrpc-codegen     # protoc-gen-connect-rust

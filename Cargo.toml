@@ -16,14 +16,16 @@ arrow-schema = { version = "58" }
 arrow-select = { version = "58" }
 async-trait = { version = "^0.1.89" }
 bytes = { version = "1" }
-cedar-local-agent = "3.0.0"
-cedar-policy = { version = "4.8.2", features = ["protobufs"] }
+# The Cedar/policy crates moved to the breakwater sibling repo
+# (open-lakehouse/breakwater), published to crates.io. Consumers import them as
+# `cedar_oci` / `datafusion_cedar` (names unchanged from the in-tree crates).
+cedar-oci = { version = "0.0.1" }
+datafusion-cedar = { version = "0.0.1" }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
 dashmap = "6.0.1"
 datafusion = "54"
 datafusion-common = "54"
-datafusion-expr = "54"
 # The OpenLineage / DataFusion integration moved to the headwaters sibling repo
 # (open-lakehouse/headwaters), published to crates.io as `datafusion-openlineage`.
 # Consumers import it as `datafusion_openlineage`.

@@ -6,11 +6,11 @@ rust-version = { workspace = true }
 
 [dependencies]
 datafusion-openlineage = { workspace = true }
-datafusion-cedar = { path = "../datafusion-cedar" }
+datafusion-cedar = { workspace = true }
 deltalake-datafusion = { path = "../datafusion" }
 datafusion-unitycatalog = { workspace = true }
 hydrofoil-common = { path = "../common" }
-cedar-oci = { path = "../cedar-oci" }
+cedar-oci = { workspace = true }
 
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
