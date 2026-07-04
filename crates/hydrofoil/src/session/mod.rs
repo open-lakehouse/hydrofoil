@@ -661,6 +661,17 @@ pub fn create_session_for(
             factory.unity_client().clone(),
         )));
         session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
+
+        // Resolve policy-named mask functions (`@mask_fn`) against the UC
+        // Functions API. `SessionConfigEvalContextProvider` reads this into
+        // `EvalContext.function_resolver`; a name that fails to resolve masks the
+        // column with the default literal (fail-closed at the Cedar layer).
+        #[cfg(feature = "governance")]
+        session_config.set_extension(Arc::new(datafusion_policy_cedar::FunctionResolverExt(
+            Arc::new(crate::catalog::UnityFunctionResolver::new(
+                factory.unity_client().clone(),
+            )),
+        )));
     }
 
     // The single session query planner composes policy + lineage over one shared
@@ -725,7 +736,13 @@ pub fn build_unity_resolver(
 ) -> Arc<UnityCatalogProviderList> {
     let runtime = ctx.runtime_env();
     let builder =
-        LakehouseTableProviderBuilder::new(ctx.task_ctx(), factory.unity_client().clone());
+        LakehouseTableProviderBuilder::new(ctx.task_ctx(), factory.unity_client().clone())
+            // Source governed (key→value) tags from the UC entity-tag-assignments API —
+            // the real ABAC governed-tag source, reachable via the same client. Offline /
+            // deterministic tests keep the convention provider (the builder's default).
+            .with_governed_tag_provider(Arc::new(crate::catalog::UnityGovernedTagProvider::new(
+                factory.unity_client().clone(),
+            )));
     Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 
@@ -1134,6 +1151,133 @@ mod integration_tests {
                 .fact_store()
                 .observed_taints(&session.correlation_id()),
             ["pii".to_string()].into_iter().collect()
+        );
+    }
+
+    /// End-to-end column mask through the **real** Cedar engine: a governed tag
+    /// `pii = "ssn"` on the `ssn` column flows facts → sink → `EvalContext` →
+    /// `column_is_masked` → `resolve_mask_expr`. A standard-clearance principal
+    /// sees `ssn` masked (the default `***` literal, since no `@mask_fn` resolver
+    /// is wired on this session path); a high-clearance principal — who discharges
+    /// the forbid via `unless { principal.clearance == "high" }` — sees it raw.
+    ///
+    /// The engine is stood up in-process from Cedar policy + schema text via
+    /// `CedarPolicyEngine::from_sources`, so the whole governed-tag mask contract
+    /// is exercised without an OCI registry or a live Unity Catalog.
+    #[cfg(feature = "governance")]
+    #[tokio::test]
+    async fn governed_tag_masks_column_end_to_end() {
+        use std::collections::{BTreeMap, HashMap};
+
+        use datafusion::sql::TableReference;
+        use datafusion_policy_cedar::{CedarPolicyEngine, TableFacts};
+
+        use crate::engine::Engine;
+
+        // A minimal self-contained schema + policy (the showcase's `pii=ssn`
+        // column mask), embedded so the test stays hermetic. `read_table` is
+        // permitted for any principal with a region; the `read_column` forbid
+        // masks a column tagged `pii == "ssn"` unless the principal is
+        // high-clearance.
+        const SCHEMA: &str = r#"
+            entity UserGroup in [UserGroup];
+            entity User in [UserGroup] { region: String, clearance?: String };
+            entity Table { region: String } tags String;
+            entity Column in [Table] { name: String } tags String;
+            action read_table appliesTo {
+                principal: [User], resource: [Table],
+                context: { catalog?: String, schema?: String, table?: String, columns?: Set<String> }
+            };
+            action read_column appliesTo {
+                principal: [User], resource: [Column],
+                context: { catalog?: String, schema?: String, table?: String }
+            };
+        "#;
+        const POLICY: &str = r#"
+            permit (principal, action == Action::"read_table", resource)
+            when { principal has region };
+
+            forbid (principal, action == Action::"read_column", resource)
+            when { resource.hasTag("pii") && resource.getTag("pii") == "ssn" }
+            unless { principal has clearance && principal.clearance == "high" };
+        "#;
+
+        // Run the query as `principal`, seeding `t.ssn` with the governed tag, and
+        // return the pretty-printed result batches.
+        async fn run(principal: PrincipalIdentity) -> String {
+            let policy =
+                Arc::new(CedarPolicyEngine::from_sources(POLICY, "", Some(SCHEMA)).unwrap());
+            let engine = Engine::new(policy, None, None, OpenLineageConfig::default());
+            let session = engine.new_session(principal, None).await.expect("session");
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("ssn", DataType::Utf8, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![1, 2])),
+                    Arc::new(StringArray::from(vec!["secret-a", "secret-b"])),
+                ],
+            )
+            .unwrap();
+            let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            session
+                .session_context()
+                .register_table("t", Arc::new(table))
+                .unwrap();
+
+            // `t.ssn` carries the governed tag `pii = "ssn"` — what `record_facts`
+            // records after Unity Catalog resolution.
+            session.catalog_fact_sink().record(
+                TableReference::bare("t"),
+                TableFacts {
+                    governed_column_tags: HashMap::from([(
+                        "ssn".to_string(),
+                        BTreeMap::from([("pii".to_string(), "ssn".to_string())]),
+                    )]),
+                    ..Default::default()
+                },
+            );
+
+            let lh = session.lakehouse_for_query(LineageContext::default(), None);
+            let plan = lh
+                .create_logical_plan("SELECT id, ssn FROM t")
+                .await
+                .unwrap();
+            let physical = lh.create_physical_plan(&plan).await.unwrap();
+            let batches = datafusion::physical_plan::collect(physical, lh.task_ctx())
+                .await
+                .unwrap();
+            datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+                .unwrap()
+                .to_string()
+        }
+
+        // Standard-clearance principal: the forbid fires, `ssn` is masked to the
+        // default literal and the raw values never surface.
+        let masked = run(principal("alice")).await;
+        assert!(
+            masked.contains("***"),
+            "ssn masked for standard clearance: {masked}"
+        );
+        assert!(
+            !masked.contains("secret-a") && !masked.contains("secret-b"),
+            "raw ssn must not leak: {masked}"
+        );
+
+        // High-clearance principal: the `unless` clause discharges the forbid, so
+        // `ssn` is returned raw.
+        let high = principal("carol").with_attribute("clearance", "high");
+        let unmasked = run(high).await;
+        assert!(
+            unmasked.contains("secret-a") && unmasked.contains("secret-b"),
+            "high-clearance principal sees raw ssn: {unmasked}"
+        );
+        assert!(
+            !unmasked.contains("***"),
+            "no mask for high clearance: {unmasked}"
         );
     }
 
