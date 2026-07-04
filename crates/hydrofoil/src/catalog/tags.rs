@@ -12,7 +12,7 @@
 //! into the policy layer; this module is the only place a UC `Table` is read for
 //! facts, keeping `datafusion-cedar` free of any catalog dependency.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use datafusion::error::DataFusionError;
 use unitycatalog_common::models::tables::v1::Table;
@@ -31,6 +31,12 @@ mod keys {
     /// Reader/writer ACLs: `properties["readers"|"writers"] = "grp_a,grp_b"`.
     pub const READERS: &str = "readers";
     pub const WRITERS: &str = "writers";
+    /// Governed (key→value) tags, the UC ABAC model consumed by the Cedar
+    /// column-mask / row-filter path (distinct from the opaque classification
+    /// tags above, which feed taints):
+    /// - table-level:  `properties["govtag.<key>"] = "<value>"`
+    /// - per-column:   `properties["govtag.<column>.<key>"] = "<value>"`
+    pub const GOVERNED_TAG_PREFIX: &str = "govtag.";
 }
 
 /// The classification of one table: its table-level tags and per-column tags.
@@ -85,6 +91,71 @@ impl TagProvider for ConventionTagProvider {
                         .entry(col.name.clone())
                         .or_default()
                         .extend(tags);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// The governed (key→value) tags of one table: table-level and per-column.
+///
+/// Distinct from [`TableClassification`] (opaque `BTreeSet<String>` sets that
+/// feed the session taint ledger): governed tags are key→value because the Cedar
+/// policy layer matches them exactly (`resource.getTag("pii") == "ssn"`), the
+/// Unity Catalog ABAC model. They fold into `TableFacts.governed_tags` /
+/// `governed_column_tags` and drive the column-mask / row-filter path.
+#[derive(Debug, Clone, Default)]
+pub struct GovernedTags {
+    pub table_tags: BTreeMap<String, String>,
+    pub column_tags: HashMap<String, BTreeMap<String, String>>,
+}
+
+/// Source of a table's governed (key→value) tags — the seam for sourcing the UC
+/// ABAC governed tags the Cedar mask/filter path consumes. v1 reads UC
+/// conventions ([`ConventionGovernedTagProvider`]); the production impl
+/// ([`UnityGovernedTagProvider`]) calls the UC entity-tag-assignments API. One
+/// trait per PIP (per ADR-0007), kept separate from [`TagProvider`] (opaque
+/// sets, taint path).
+#[async_trait::async_trait]
+pub trait GovernedTagProvider: Send + Sync + std::fmt::Debug {
+    /// Best-effort: an error means "no governed tags" and must not block
+    /// resolution. The mask decision stays fail-closed at the Cedar layer.
+    async fn governed_tags(&self, table: &Table) -> Result<GovernedTags, DataFusionError>;
+}
+
+/// v1 [`GovernedTagProvider`]: derives governed tags by convention from UC
+/// `Table` properties (synchronous, zero network):
+///
+/// - table-level `properties["govtag.<key>"] = "<value>"` → `table_tags[key]`,
+/// - per-column `properties["govtag.<column>.<key>"] = "<value>"` →
+///   `column_tags[column][key]`.
+///
+/// Keys and values are preserved verbatim (no lower-casing or splitting): the
+/// Cedar layer matches governed tags exactly, unlike the opaque classification
+/// tags in [`ConventionTagProvider`].
+#[derive(Debug, Default)]
+pub struct ConventionGovernedTagProvider;
+
+#[async_trait::async_trait]
+impl GovernedTagProvider for ConventionGovernedTagProvider {
+    async fn governed_tags(&self, table: &Table) -> Result<GovernedTags, DataFusionError> {
+        let mut out = GovernedTags::default();
+        for (k, v) in &table.properties {
+            let Some(rest) = k.strip_prefix(keys::GOVERNED_TAG_PREFIX) else {
+                continue;
+            };
+            // `govtag.<column>.<key>` is a per-column tag; `govtag.<key>` (no dot)
+            // is a table-level tag. Split on the first dot.
+            match rest.split_once('.') {
+                Some((col, key)) if !col.is_empty() && !key.is_empty() => {
+                    out.column_tags
+                        .entry(col.to_string())
+                        .or_default()
+                        .insert(key.to_string(), v.clone());
+                }
+                _ => {
+                    out.table_tags.insert(rest.to_string(), v.clone());
                 }
             }
         }
@@ -205,5 +276,60 @@ mod tests {
             .unwrap();
         assert!(c.table_tags.is_empty());
         assert!(c.column_tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn convention_governed_tags_fold_table_and_column_keys() {
+        let table = Table {
+            properties: std::collections::HashMap::from([
+                // Table-level governed tag (no dot after the prefix).
+                (
+                    "govtag.classification".to_string(),
+                    "restricted".to_string(),
+                ),
+                // Per-column governed tags.
+                ("govtag.ssn.pii".to_string(), "ssn".to_string()),
+                (
+                    "govtag.salary.classification".to_string(),
+                    "secret".to_string(),
+                ),
+                // A non-governed property is ignored.
+                ("tags".to_string(), "internal".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let g = ConventionGovernedTagProvider
+            .governed_tags(&table)
+            .await
+            .unwrap();
+
+        // Table-level tag, key/value preserved verbatim (not lower-cased/split).
+        assert_eq!(
+            g.table_tags.get("classification").map(String::as_str),
+            Some("restricted")
+        );
+        // Per-column governed tags land under their column, keyed by tag key.
+        assert_eq!(g.column_tags.get("ssn").unwrap().get("pii").unwrap(), "ssn");
+        assert_eq!(
+            g.column_tags
+                .get("salary")
+                .unwrap()
+                .get("classification")
+                .unwrap(),
+            "secret"
+        );
+        // The opaque `tags` property is not a governed tag.
+        assert!(!g.table_tags.contains_key("tags"));
+    }
+
+    #[tokio::test]
+    async fn convention_governed_tags_empty_when_no_govtag_properties() {
+        let g = ConventionGovernedTagProvider
+            .governed_tags(&Table::default())
+            .await
+            .unwrap();
+        assert!(g.table_tags.is_empty());
+        assert!(g.column_tags.is_empty());
     }
 }
