@@ -661,6 +661,17 @@ pub fn create_session_for(
             factory.unity_client().clone(),
         )));
         session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
+
+        // Resolve policy-named mask functions (`@mask_fn`) against the UC
+        // Functions API. `SessionConfigEvalContextProvider` reads this into
+        // `EvalContext.function_resolver`; a name that fails to resolve masks the
+        // column with the default literal (fail-closed at the Cedar layer).
+        #[cfg(feature = "governance")]
+        session_config.set_extension(Arc::new(datafusion_policy_cedar::FunctionResolverExt(
+            Arc::new(crate::catalog::UnityFunctionResolver::new(
+                factory.unity_client().clone(),
+            )),
+        )));
     }
 
     // The single session query planner composes policy + lineage over one shared
