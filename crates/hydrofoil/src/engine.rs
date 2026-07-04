@@ -31,10 +31,12 @@ use dashmap::DashMap;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_cedar::{IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity};
 use datafusion_openlineage::OpenLineageClient;
 use datafusion_openlineage::config::OpenLineageConfig;
 use datafusion_openlineage::context::LineageContext;
+use datafusion_policy_cedar::{
+    IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity,
+};
 use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 use uuid::Uuid;
@@ -97,7 +99,7 @@ pub struct Engine {
     /// id. Shared across sessions, as a future shared-KV backend would be. The
     /// governance PEP records taints here; a later PEP reads them back.
     #[cfg(feature = "governance")]
-    fact_store: Arc<dyn datafusion_cedar::FactStore>,
+    fact_store: Arc<dyn datafusion_policy_cedar::FactStore>,
 }
 
 impl Engine {
@@ -117,7 +119,7 @@ impl Engine {
             identity: Arc::new(NoopIdentityProvider),
             enrichment_cache: DashMap::new(),
             #[cfg(feature = "governance")]
-            fact_store: Arc::new(datafusion_cedar::InMemoryFactStore::new()),
+            fact_store: Arc::new(datafusion_policy_cedar::InMemoryFactStore::new()),
         })
     }
 
@@ -142,7 +144,7 @@ impl Engine {
     /// wired (PR7) this is exercised only by tests.
     #[cfg(feature = "governance")]
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn fact_store(&self) -> Arc<dyn datafusion_cedar::FactStore> {
+    pub fn fact_store(&self) -> Arc<dyn datafusion_policy_cedar::FactStore> {
         self.fact_store.clone()
     }
 
@@ -266,9 +268,9 @@ struct NoopIdentityProvider;
 impl IdentityProvider for NoopIdentityProvider {
     async fn enrich(
         &self,
-        _uid: &datafusion_cedar::EntityUid,
+        _uid: &str,
         _claims: &PrincipalClaims,
-    ) -> std::result::Result<PrincipalEnrichment, datafusion_cedar::IdentityError> {
+    ) -> std::result::Result<PrincipalEnrichment, datafusion_policy_cedar::IdentityError> {
         Ok(PrincipalEnrichment::default())
     }
 }
@@ -291,7 +293,7 @@ pub struct Session {
     /// each per-query [`LakehouseSession`] so the governance PEP can record
     /// taints keyed by this session's correlation id.
     #[cfg(feature = "governance")]
-    fact_store: Arc<dyn datafusion_cedar::FactStore>,
+    fact_store: Arc<dyn datafusion_policy_cedar::FactStore>,
 }
 
 impl Session {
@@ -399,7 +401,10 @@ impl Session {
     // `x-hydrofoil-agent-*` metadata, and call this before dispatching the tool.
     #[cfg(feature = "governance")]
     #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn authorize_tool_call(&self, action: &str) -> Result<datafusion_cedar::Decision> {
+    pub async fn authorize_tool_call(
+        &self,
+        action: &str,
+    ) -> Result<datafusion_policy_cedar::Decision> {
         let correlation_id = self.ctx.state().session_id().to_string();
         let taints = self.fact_store.observed_taints(&correlation_id);
         self.policy
@@ -422,7 +427,7 @@ impl Session {
     /// the policy layer reads). For tests that populate facts without standing
     /// up Unity Catalog. Only the governance taint tests use it.
     #[cfg(all(test, feature = "governance"))]
-    pub(crate) fn catalog_fact_sink(&self) -> datafusion_cedar::CatalogFactSink {
+    pub(crate) fn catalog_fact_sink(&self) -> datafusion_policy_cedar::CatalogFactSink {
         self.ctx
             .state()
             .config()
@@ -569,15 +574,13 @@ impl SessionStore {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
-    use cedar_oci::{Decision, EntityUid};
+    use datafusion_policy_cedar::Decision;
 
     use super::*;
     use crate::policy::StaticPolicy;
 
     fn principal(name: &str) -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
+        PrincipalIdentity::new(format!("User::\"{name}\""))
     }
 
     /// A `Transport` that records every emitted event, for asserting on lineage

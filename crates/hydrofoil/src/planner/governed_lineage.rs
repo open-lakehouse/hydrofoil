@@ -6,7 +6,7 @@
 //! OpenLineage's START/marker step (async, whole-plan, emits before lowering).
 //! Neither fits an `ExtensionPlanner` (sync, per-node, cannot reject). So this
 //! one hydrofoil-owned planner sequences both crates' *reusable steps* —
-//! `datafusion_cedar::authorize_and_govern` and `datafusion_openlineage::begin_lineage`
+//! `datafusion_policy_cedar::authorize_and_govern` and `datafusion_openlineage::begin_lineage`
 //! — then delegates lowering to one `DefaultPhysicalPlanner` carrying every
 //! `ExtensionPlanner` (`UnityCatalogPlanner` for UC DDL nodes,
 //! `LineageExtensionPlanner` for the lineage terminal node). That is the
@@ -27,10 +27,12 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner as _,
 };
 
-use datafusion_cedar::{EvalContextProvider, Policy, PrincipalProvider, authorize_and_govern};
 use datafusion_openlineage::context::LineageContextProvider;
 use datafusion_openlineage::{
     LineageExtensionPlanner, OpenLineageClient, OpenLineageConfig, begin_lineage,
+};
+use datafusion_policy_cedar::{
+    EvalContextProvider, PolicyEngine as Policy, PrincipalProvider, authorize_and_govern,
 };
 
 /// The OpenLineage pieces the planner needs, present only when lineage is wired.

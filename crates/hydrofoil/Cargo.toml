@@ -6,11 +6,11 @@ rust-version = { workspace = true }
 
 [dependencies]
 datafusion-openlineage = { workspace = true }
-datafusion-cedar = { path = "../datafusion-cedar" }
+datafusion-policy-cedar = { workspace = true }
 deltalake-datafusion = { path = "../datafusion" }
 datafusion-unitycatalog = { workspace = true }
 hydrofoil-common = { path = "../common" }
-cedar-oci = { path = "../cedar-oci" }
+cedar-oci = { workspace = true }
 
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
@@ -71,4 +71,4 @@ default = []
 # Fine-grained governance (row filters + column masks) via Cedar partial
 # evaluation. The coarse Cedar access gate is always available through the
 # `datafusion-cedar` dependency; this feature opts into the Layer 2 machinery.
-governance = ["datafusion-cedar/governance"]
+governance = ["datafusion-policy-cedar/fgac"]

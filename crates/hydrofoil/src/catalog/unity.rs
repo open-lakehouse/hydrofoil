@@ -4,7 +4,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::sql::TableReference;
-use datafusion_cedar::TableFacts;
+use datafusion_policy_cedar::TableFacts;
 use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
 use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};
 use unitycatalog_client::UnityCatalogClient;
@@ -27,7 +27,7 @@ use crate::session::TaskExt;
 /// This is also the **resource/catalog PIP seam**: as each table resolves, its
 /// catalog facts (owner / readers / writers / classification tags) are gathered
 /// from the UC [`Table`] and recorded into the session's
-/// [`CatalogFactSink`](datafusion_cedar::CatalogFactSink) (read from the
+/// [`CatalogFactSink`](datafusion_policy_cedar::CatalogFactSink) (read from the
 /// `CatalogFactSinkExt` config extension) so the policy layer can fold them into
 /// Cedar evaluation.
 pub struct LakehouseTableProviderBuilder {
@@ -85,6 +85,10 @@ impl LakehouseTableProviderBuilder {
                 writers,
                 tags: classification.table_tags,
                 column_tags: classification.column_tags,
+                // Governed (key→value) tags are populated by the governed-tag
+                // provider in a later phase; default them for now.
+                governed_tags: Default::default(),
+                governed_column_tags: Default::default(),
             },
         );
     }

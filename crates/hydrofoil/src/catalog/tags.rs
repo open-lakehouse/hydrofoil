@@ -8,7 +8,7 @@
 //! external classification service instead — same trait, async already. See
 //! `docs/adr/0007-fact-gathering-pips.md`.
 //!
-//! The neutral [`TableFacts`](datafusion_cedar::TableFacts) these produce cross
+//! The neutral [`TableFacts`](datafusion_policy_cedar::TableFacts) these produce cross
 //! into the policy layer; this module is the only place a UC `Table` is read for
 //! facts, keeping `datafusion-cedar` free of any catalog dependency.
 
@@ -20,7 +20,7 @@ use unitycatalog_common::models::tables::v1::Table;
 // The catalog-fact-sink `SessionConfig` extension now lives in `datafusion-cedar`
 // (the crate owns its per-request seam); re-export it so the rest of hydrofoil
 // keeps importing it from `crate::catalog`.
-pub use datafusion_cedar::CatalogFactSinkExt;
+pub use datafusion_policy_cedar::CatalogFactSinkExt;
 
 /// gRPC/property convention keys.
 mod keys {

@@ -35,9 +35,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::prelude::SessionConfig;
-use datafusion_cedar::{
-    Entity, EntityUid, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
-    PrincipalExt, PrincipalIdentity, RestrictedExpression,
+use datafusion_policy_cedar::{
+    AttrValue, EntityUid, Group, IdentityError, IdentityProvider, PrincipalClaims,
+    PrincipalEnrichment, PrincipalExt, PrincipalIdentity,
 };
 use tonic::metadata::MetadataMap;
 
@@ -150,11 +150,14 @@ fn principal_from_headers(
     get: impl Fn(&str) -> Option<String>,
 ) -> Result<PrincipalIdentity, PrincipalParseError> {
     let uid_str = get(headers::PRINCIPAL).unwrap_or_else(|| DEFAULT_PRINCIPAL.to_string());
-    let uid: EntityUid = uid_str.parse().map_err(|e| PrincipalParseError {
+    // Validate the uid is a well-formed entity reference before trusting it, but
+    // carry the neutral string form into the principal (the Cedar adapter parses
+    // it back when lowering to entities).
+    let _uid: EntityUid = uid_str.parse().map_err(|e| PrincipalParseError {
         message: format!("invalid principal '{uid_str}': {e}"),
     })?;
 
-    let mut identity = PrincipalIdentity::new(uid);
+    let mut identity = PrincipalIdentity::new(uid_str);
     if let Some(role) = get(headers::ROLE) {
         identity = identity.with_attribute("role", role);
     }
@@ -207,16 +210,18 @@ impl ConfigIdentityProvider {
         Self { users, groups }
     }
 
-    /// Build the entity for a group uid, carrying its parent groups as Cedar
-    /// parents so the hierarchy resolves.
-    fn group_entity(&self, uid: &EntityUid) -> Entity {
-        let parents: std::collections::HashSet<EntityUid> = self
+    /// Build the neutral [`Group`] for a group uid, carrying its parent group
+    /// uids so the policy-engine adapter can resolve the hierarchy.
+    fn group_node(&self, uid: &EntityUid) -> Group {
+        let parents = self
             .groups
             .get(&uid.to_string())
-            .map(|g| g.parents.iter().cloned().collect())
+            .map(|g| g.parents.iter().map(|p| p.to_string()).collect())
             .unwrap_or_default();
-        Entity::new(uid.clone(), HashMap::new(), parents)
-            .unwrap_or_else(|_| Entity::new_no_attrs(uid.clone(), Default::default()))
+        Group {
+            uid: uid.to_string(),
+            parents,
+        }
     }
 }
 
@@ -224,10 +229,10 @@ impl ConfigIdentityProvider {
 impl IdentityProvider for ConfigIdentityProvider {
     async fn enrich(
         &self,
-        uid: &EntityUid,
+        uid: &str,
         _claims: &PrincipalClaims,
     ) -> Result<PrincipalEnrichment, IdentityError> {
-        let Some(user) = self.users.get(&uid.to_string()) else {
+        let Some(user) = self.users.get(uid) else {
             // Unknown principal: no extra facts (a success, not an error).
             return Ok(PrincipalEnrichment::default());
         };
@@ -235,12 +240,12 @@ impl IdentityProvider for ConfigIdentityProvider {
         let attributes = user
             .attributes
             .iter()
-            .map(|(k, v)| (k.clone(), RestrictedExpression::new_string(v.clone())))
+            .map(|(k, v)| (k.clone(), AttrValue::String(v.clone())))
             .collect();
 
         // Walk up the group hierarchy from the principal's direct groups,
-        // collecting the transitive closure of group entities (deduped).
-        let mut group_entities = Vec::new();
+        // collecting the transitive closure of group nodes (deduped).
+        let mut group_hierarchy = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut frontier: Vec<EntityUid> = user.groups.clone();
         while let Some(g) = frontier.pop() {
@@ -250,13 +255,13 @@ impl IdentityProvider for ConfigIdentityProvider {
             if let Some(facts) = self.groups.get(&g.to_string()) {
                 frontier.extend(facts.parents.iter().cloned());
             }
-            group_entities.push(self.group_entity(&g));
+            group_hierarchy.push(self.group_node(&g));
         }
 
         Ok(PrincipalEnrichment {
             attributes,
-            groups: user.groups.clone(),
-            group_entities,
+            groups: user.groups.iter().map(|g| g.to_string()).collect(),
+            group_hierarchy,
         })
     }
 }
@@ -340,12 +345,15 @@ mod tests {
         let provider = ConfigIdentityProvider::new(users, groups);
 
         let e = provider
-            .enrich(&uid("User::\"alice\""), &PrincipalClaims::default())
+            .enrich("User::\"alice\"", &PrincipalClaims::default())
             .await
             .unwrap();
-        assert_eq!(e.groups, vec![uid("UserGroup::\"privileged_readers\"")]);
+        assert_eq!(
+            e.groups,
+            vec!["UserGroup::\"privileged_readers\"".to_string()]
+        );
         // Closure includes both privileged_readers and readers.
-        assert_eq!(e.group_entities.len(), 2);
+        assert_eq!(e.group_hierarchy.len(), 2);
         assert!(e.attributes.contains_key("region"));
     }
 
@@ -353,11 +361,11 @@ mod tests {
     async fn config_provider_unknown_uid_is_empty_success() {
         let provider = ConfigIdentityProvider::default();
         let e = provider
-            .enrich(&uid("User::\"nobody\""), &PrincipalClaims::default())
+            .enrich("User::\"nobody\"", &PrincipalClaims::default())
             .await
             .unwrap();
         assert!(e.groups.is_empty());
-        assert!(e.group_entities.is_empty());
+        assert!(e.group_hierarchy.is_empty());
         assert!(e.attributes.is_empty());
     }
 
