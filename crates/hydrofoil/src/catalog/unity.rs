@@ -12,7 +12,8 @@ use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
 
 use crate::catalog::tags::{
-    CatalogFactSinkExt, ConventionTagProvider, TagProvider, table_acl_facts,
+    CatalogFactSinkExt, ConventionGovernedTagProvider, ConventionTagProvider, GovernedTagProvider,
+    TagProvider, table_acl_facts,
 };
 use crate::session::TaskExt;
 
@@ -38,6 +39,7 @@ pub struct LakehouseTableProviderBuilder {
     /// authoritative for managed tables).
     client: UnityCatalogClient,
     tag_provider: Arc<dyn TagProvider>,
+    governed_tag_provider: Arc<dyn GovernedTagProvider>,
 }
 
 impl LakehouseTableProviderBuilder {
@@ -46,6 +48,22 @@ impl LakehouseTableProviderBuilder {
             ctx,
             client,
             tag_provider: Arc::new(ConventionTagProvider),
+            governed_tag_provider: Arc::new(ConventionGovernedTagProvider),
+        })
+    }
+
+    /// Override the governed-tag provider (the UC ABAC key→value tags feeding the
+    /// Cedar mask/filter path). Defaults to [`ConventionGovernedTagProvider`];
+    /// `build_unity_resolver` selects the UC-API-backed provider in production.
+    pub fn with_governed_tag_provider(
+        self: Arc<Self>,
+        governed_tag_provider: Arc<dyn GovernedTagProvider>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            ctx: self.ctx.clone(),
+            client: self.client.clone(),
+            tag_provider: self.tag_provider.clone(),
+            governed_tag_provider,
         })
     }
 
@@ -71,6 +89,17 @@ impl LakehouseTableProviderBuilder {
                 tracing::warn!(error = %e, table = %table.full_name, "tag classification failed; recording no tags");
                 Default::default()
             });
+        // Governed (key→value) tags for the Cedar mask/filter path. Best-effort:
+        // a sourcing error records no governed tags rather than blocking
+        // resolution — the mask decision stays fail-closed at the Cedar layer.
+        let governed = self
+            .governed_tag_provider
+            .governed_tags(table)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, table = %table.full_name, "governed-tag sourcing failed; recording none");
+                Default::default()
+            });
 
         let table_ref = TableReference::full(
             table.catalog_name.clone(),
@@ -85,10 +114,8 @@ impl LakehouseTableProviderBuilder {
                 writers,
                 tags: classification.table_tags,
                 column_tags: classification.column_tags,
-                // Governed (key→value) tags are populated by the governed-tag
-                // provider in a later phase; default them for now.
-                governed_tags: Default::default(),
-                governed_column_tags: Default::default(),
+                governed_tags: governed.table_tags,
+                governed_column_tags: governed.column_tags,
             },
         );
     }
@@ -162,5 +189,67 @@ impl TableProviderBuilder for LakehouseTableProviderBuilder {
                 self.ctx.lh().delta_provider_for(location, at_version).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::execution::config::SessionConfig;
+
+    use super::*;
+
+    /// `record_facts` folds the governed-tag provider's output into the two
+    /// governed `TableFacts` fields the Cedar mask path reads. A `Table` carrying
+    /// `govtag.*` properties yields a fact record with populated governed tags.
+    #[tokio::test]
+    async fn record_facts_populates_governed_tags_from_convention() {
+        // A task context whose session config carries the fact sink `record_facts`
+        // writes into (no network / catalog access is exercised on this path).
+        let config = SessionConfig::new().with_extension(Arc::new(CatalogFactSinkExt::default()));
+        let ctx = Arc::new(TaskContext::default().with_session_config(config));
+        let client =
+            UnityCatalogClient::new_unauthenticated(Url::parse("http://localhost:0/").unwrap());
+        let builder = LakehouseTableProviderBuilder::new(ctx.clone(), client);
+
+        let table = Table {
+            catalog_name: "hr".to_string(),
+            schema_name: "security".to_string(),
+            name: "employees".to_string(),
+            properties: std::collections::HashMap::from([
+                ("govtag.ssn.pii".to_string(), "ssn".to_string()),
+                (
+                    "govtag.classification".to_string(),
+                    "restricted".to_string(),
+                ),
+            ]),
+            ..Default::default()
+        };
+
+        builder.record_facts(&table).await;
+
+        let sink = ctx
+            .session_config()
+            .get_extension::<CatalogFactSinkExt>()
+            .unwrap();
+        let facts = sink
+            .0
+            .get(&TableReference::full("hr", "security", "employees"))
+            .expect("facts recorded for the table");
+        assert_eq!(
+            facts
+                .governed_column_tags
+                .get("ssn")
+                .unwrap()
+                .get("pii")
+                .unwrap(),
+            "ssn"
+        );
+        assert_eq!(
+            facts
+                .governed_tags
+                .get("classification")
+                .map(String::as_str),
+            Some("restricted")
+        );
     }
 }
