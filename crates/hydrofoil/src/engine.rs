@@ -266,7 +266,7 @@ struct NoopIdentityProvider;
 impl IdentityProvider for NoopIdentityProvider {
     async fn enrich(
         &self,
-        _uid: &datafusion_cedar::EntityUid,
+        _uid: &str,
         _claims: &PrincipalClaims,
     ) -> std::result::Result<PrincipalEnrichment, datafusion_cedar::IdentityError> {
         Ok(PrincipalEnrichment::default())
@@ -569,15 +569,13 @@ impl SessionStore {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
-    use cedar_oci::{Decision, EntityUid};
+    use datafusion_cedar::Decision;
 
     use super::*;
     use crate::policy::StaticPolicy;
 
     fn principal(name: &str) -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
+        PrincipalIdentity::new(format!("User::\"{name}\""))
     }
 
     /// A `Transport` that records every emitted event, for asserting on lineage

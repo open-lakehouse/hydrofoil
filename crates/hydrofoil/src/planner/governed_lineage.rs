@@ -27,7 +27,9 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner as _,
 };
 
-use datafusion_cedar::{EvalContextProvider, Policy, PrincipalProvider, authorize_and_govern};
+use datafusion_cedar::{
+    EvalContextProvider, PolicyEngine as Policy, PrincipalProvider, authorize_and_govern,
+};
 use datafusion_openlineage::context::LineageContextProvider;
 use datafusion_openlineage::{
     LineageExtensionPlanner, OpenLineageClient, OpenLineageConfig, begin_lineage,

@@ -596,10 +596,7 @@ mod tests {
 
     #[test]
     fn hydrofoil_run_facet_carries_principal_and_agent() {
-        use std::str::FromStr as _;
-        let principal = PrincipalIdentity::new(
-            datafusion_cedar::EntityUid::from_str("User::\"alice\"").unwrap(),
-        );
+        let principal = PrincipalIdentity::new("User::\"alice\"");
         let agent = AgentContext {
             agent_id: Some("assistant-7".into()),
             task: Some("verify-volume".into()),
@@ -616,10 +613,7 @@ mod tests {
 
     #[test]
     fn hydrofoil_run_facet_absent_for_anonymous_without_agent() {
-        use std::str::FromStr as _;
-        let anonymous = PrincipalIdentity::new(
-            datafusion_cedar::EntityUid::from_str(crate::identity::DEFAULT_PRINCIPAL).unwrap(),
-        );
+        let anonymous = PrincipalIdentity::new(crate::identity::DEFAULT_PRINCIPAL);
         assert!(hydrofoil_run_facet(Some(&anonymous), None, &config()).is_none());
         assert!(hydrofoil_run_facet(None, None, &config()).is_none());
 

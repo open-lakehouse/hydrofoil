@@ -1,7 +1,6 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use arrow::array::RecordBatch;
-use cedar_oci::Decision;
 use datafusion::{
     catalog::{
         AsyncCatalogProviderList as _, CatalogProvider as _, MemoryCatalogProvider, Session,
@@ -22,7 +21,7 @@ use datafusion::{
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
 use datafusion_cedar::{
-    EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
+    Decision, EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
 };
 use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
 use datafusion_tracing::{
@@ -603,7 +602,7 @@ pub fn create_session(
         lineage_config,
         None,
         None,
-        Arc::new(datafusion_cedar::StaticPolicy::new(Decision::Allow)),
+        Arc::new(crate::policy::StaticPolicy::new(Decision::Allow)),
     )
 }
 
@@ -769,8 +768,7 @@ mod integration_tests {
     use datafusion::datasource::MemTable;
     use datafusion::logical_expr::LogicalPlan;
 
-    use cedar_oci::{Decision, EntityUid};
-    use datafusion_cedar::{EvalContext, PrincipalIdentity};
+    use datafusion_cedar::{Decision, EvalContext, PrincipalIdentity};
     use datafusion_openlineage::OpenLineageClient;
     use datafusion_openlineage::event::{RunEvent, RunEventType};
     use datafusion_openlineage::transport::{Transport, TransportError};
@@ -779,9 +777,7 @@ mod integration_tests {
     use crate::policy::{Policy, StaticPolicy};
 
     fn principal(name: &str) -> PrincipalIdentity {
-        use std::str::FromStr as _;
-        PrincipalIdentity::new(EntityUid::from_str(&format!("User::\"{name}\"")).unwrap())
-            .with_attribute("region", "eu")
+        PrincipalIdentity::new(format!("User::\"{name}\"")).with_attribute("region", "eu")
     }
 
     async fn ctx_with_table(
@@ -1026,7 +1022,7 @@ mod integration_tests {
             ) -> Result<Decision> {
                 Ok(Decision::Allow)
             }
-            async fn table_policy(
+            async fn constrain(
                 &self,
                 _table: &TableReference,
                 _schema: &DFSchema,
@@ -1149,7 +1145,7 @@ mod integration_tests {
     async fn authorize_tool_call_forbids_on_observed_pii() {
         use std::collections::BTreeSet;
 
-        use cedar_oci::Decision;
+        use datafusion_cedar::Decision;
 
         use crate::engine::Engine;
         use crate::policy::Policy;

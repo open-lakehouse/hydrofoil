@@ -19,10 +19,10 @@ use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,
 };
 use bytes::Bytes;
-use cedar_oci::Decision;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
+use datafusion_cedar::Decision;
 use datafusion_openlineage::OpenLineageClient;
 use datafusion_openlineage::config::OpenLineageConfig;
 use futures::{Stream, TryStreamExt};

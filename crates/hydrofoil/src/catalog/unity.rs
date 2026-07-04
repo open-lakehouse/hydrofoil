@@ -85,6 +85,10 @@ impl LakehouseTableProviderBuilder {
                 writers,
                 tags: classification.table_tags,
                 column_tags: classification.column_tags,
+                // Governed (key→value) tags are populated by the governed-tag
+                // provider in a later phase; default them for now.
+                governed_tags: Default::default(),
+                governed_column_tags: Default::default(),
             },
         );
     }

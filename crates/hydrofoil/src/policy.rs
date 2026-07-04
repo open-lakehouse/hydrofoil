@@ -6,4 +6,6 @@
 //! `crate::policy::*` path; hydrofoil-specific glue (principal extraction,
 //! session wiring) will live alongside it in later phases.
 
-pub use datafusion_cedar::{CedarPolicy, Policy, StaticPolicy};
+pub use datafusion_cedar::{
+    CedarPolicyEngine as CedarPolicy, PolicyEngine as Policy, StaticPolicyEngine as StaticPolicy,
+};
