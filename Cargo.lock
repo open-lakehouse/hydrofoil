@@ -822,16 +822,13 @@ dependencies = [
 
 [[package]]
 name = "cedar-oci"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
  "cedar-policy",
- "config",
  "oci-client",
  "prost",
- "serde",
- "serde_json",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -1491,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cedar"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -1500,10 +1497,8 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-common",
- "datafusion-expr",
  "serde_json",
  "thiserror",
- "tokio",
  "tracing",
 ]
 
