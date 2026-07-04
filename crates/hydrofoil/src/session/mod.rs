@@ -725,7 +725,13 @@ pub fn build_unity_resolver(
 ) -> Arc<UnityCatalogProviderList> {
     let runtime = ctx.runtime_env();
     let builder =
-        LakehouseTableProviderBuilder::new(ctx.task_ctx(), factory.unity_client().clone());
+        LakehouseTableProviderBuilder::new(ctx.task_ctx(), factory.unity_client().clone())
+            // Source governed (key→value) tags from the UC entity-tag-assignments API —
+            // the real ABAC governed-tag source, reachable via the same client. Offline /
+            // deterministic tests keep the convention provider (the builder's default).
+            .with_governed_tag_provider(Arc::new(crate::catalog::UnityGovernedTagProvider::new(
+                factory.unity_client().clone(),
+            )));
     Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 
