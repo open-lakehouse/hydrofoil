@@ -20,10 +20,10 @@ use datafusion::{
     physical_plan::{ExecutionPlan, PhysicalExpr},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
-use datafusion_cedar::{
+use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
+use datafusion_policy_cedar::{
     Decision, EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
 };
-use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
@@ -64,7 +64,7 @@ use log_store::DataFusionLogStore;
 // that assembles the `EvalContext` from these extensions. Re-export it so
 // `crate::engine` keeps populating it via `crate::session::FactStoreExt`.
 #[cfg(feature = "governance")]
-pub(crate) use datafusion_cedar::FactStoreExt;
+pub(crate) use datafusion_policy_cedar::FactStoreExt;
 
 /// Context for executing queries in a Lakehouse.
 ///
@@ -197,7 +197,7 @@ impl LakehouseCtx {
         // route through the policy planner; it enforces the identical policy here.
         let state = self.inner.state();
         let eval = SessionConfigEvalContextProvider.eval_context(&state).await;
-        datafusion_cedar::authorize_and_govern(
+        datafusion_policy_cedar::authorize_and_govern(
             &state,
             &plan,
             self.policy.as_ref(),
@@ -676,8 +676,8 @@ pub fn create_session_for(
     let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
         Arc::new(crate::planner::GovernedLineagePlanner::new(
             policy,
-            Arc::new(datafusion_cedar::SessionConfigPrincipalProvider),
-            Arc::new(datafusion_cedar::SessionConfigEvalContextProvider),
+            Arc::new(datafusion_policy_cedar::SessionConfigPrincipalProvider),
+            Arc::new(datafusion_policy_cedar::SessionConfigEvalContextProvider),
             vec![Arc::new(UnityCatalogPlanner)],
             lineage.map(|client| {
                 (
@@ -768,10 +768,10 @@ mod integration_tests {
     use datafusion::datasource::MemTable;
     use datafusion::logical_expr::LogicalPlan;
 
-    use datafusion_cedar::{Decision, EvalContext, PrincipalIdentity};
     use datafusion_openlineage::OpenLineageClient;
     use datafusion_openlineage::event::{RunEvent, RunEventType};
     use datafusion_openlineage::transport::{Transport, TransportError};
+    use datafusion_policy_cedar::{Decision, EvalContext, PrincipalIdentity};
 
     use super::*;
     use crate::policy::{Policy, StaticPolicy};
@@ -828,7 +828,7 @@ mod integration_tests {
             .get_extension::<crate::catalog::CatalogFactSinkExt>()
             .expect("catalog fact sink attached to the session config");
 
-        use datafusion_cedar::TableFacts;
+        use datafusion_policy_cedar::TableFacts;
         let facts = TableFacts {
             tags: ["pii".to_string()].into_iter().collect(),
             ..Default::default()
@@ -1007,7 +1007,7 @@ mod integration_tests {
         use datafusion::common::DFSchema;
         use datafusion::logical_expr::{col, lit};
         use datafusion::sql::TableReference;
-        use datafusion_cedar::TablePolicy;
+        use datafusion_policy_cedar::TablePolicy;
         use std::collections::HashMap;
 
         #[derive(Debug)]
@@ -1071,7 +1071,7 @@ mod integration_tests {
     #[tokio::test]
     async fn governance_records_observed_taints() {
         use datafusion::sql::TableReference;
-        use datafusion_cedar::TableFacts;
+        use datafusion_policy_cedar::TableFacts;
         use std::collections::HashMap;
 
         use crate::engine::Engine;
@@ -1145,7 +1145,7 @@ mod integration_tests {
     async fn authorize_tool_call_forbids_on_observed_pii() {
         use std::collections::BTreeSet;
 
-        use datafusion_cedar::Decision;
+        use datafusion_policy_cedar::Decision;
 
         use crate::engine::Engine;
         use crate::policy::Policy;

@@ -22,9 +22,9 @@ use bytes::Bytes;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
-use datafusion_cedar::Decision;
 use datafusion_openlineage::OpenLineageClient;
 use datafusion_openlineage::config::OpenLineageConfig;
+use datafusion_policy_cedar::Decision;
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
@@ -107,7 +107,7 @@ pub struct FlightSqlServiceImpl {
     /// built once at startup from the hydrofoil config and threaded through the
     /// engine + the per-request lineage context. Default until [`Self::with_lineage`].
     lineage_config: OpenLineageConfig,
-    identity: Option<Arc<dyn datafusion_cedar::IdentityProvider>>,
+    identity: Option<Arc<dyn datafusion_policy_cedar::IdentityProvider>>,
 }
 
 impl FlightSqlServiceImpl {
@@ -172,7 +172,7 @@ impl FlightSqlServiceImpl {
     #[allow(dead_code)]
     pub fn with_identity_provider(
         mut self,
-        identity: Arc<dyn datafusion_cedar::IdentityProvider>,
+        identity: Arc<dyn datafusion_policy_cedar::IdentityProvider>,
     ) -> Self {
         self.identity = Some(identity);
         self
@@ -230,7 +230,7 @@ impl FlightSqlServiceImpl {
     #[allow(clippy::result_large_err)]
     pub(crate) async fn session_for_principal(
         &self,
-        principal: datafusion_cedar::PrincipalIdentity,
+        principal: datafusion_policy_cedar::PrincipalIdentity,
         uc_token: Option<&str>,
     ) -> Result<Arc<Session>, Status> {
         let principal = self
@@ -265,7 +265,7 @@ impl FlightSqlServiceImpl {
         req: &Request<T>,
         run_id: Uuid,
         sql: Option<&str>,
-        principal: &datafusion_cedar::PrincipalIdentity,
+        principal: &datafusion_policy_cedar::PrincipalIdentity,
         agent: Option<&crate::agent::AgentContext>,
     ) -> datafusion_openlineage::context::LineageContext {
         let mut ctx = crate::lineage::context_from_metadata(req.metadata(), &self.lineage_config);

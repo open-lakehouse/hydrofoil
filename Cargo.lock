@@ -821,21 +821,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cedar-oci"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "cedar-local-agent",
- "cedar-policy",
- "oci-client",
- "prost",
- "tokio",
- "tonic",
- "tonic-prost",
- "tracing",
-]
-
-[[package]]
 name = "cedar-policy"
 version = "4.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1484,22 +1469,6 @@ dependencies = [
  "itertools",
  "log",
  "object_store",
-]
-
-[[package]]
-name = "datafusion-cedar"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "cedar-local-agent",
- "cedar-oci",
- "cedar-policy",
- "dashmap",
- "datafusion",
- "datafusion-common",
- "serde_json",
- "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -2899,12 +2868,10 @@ dependencies = [
  "buffa-types",
  "buoyant_kernel",
  "bytes",
- "cedar-oci",
  "config",
  "connectrpc",
  "dashmap",
  "datafusion",
- "datafusion-cedar",
  "datafusion-openlineage",
  "datafusion-tracing",
  "deltalake-core",
@@ -2916,6 +2883,8 @@ dependencies = [
  "itertools",
  "mimalloc",
  "object_store",
+ "olai-cedar-oci",
+ "olai-datafusion-policy-cedar",
  "olai-uc-client",
  "olai-uc-common",
  "olai-uc-datafusion",
@@ -3916,6 +3885,46 @@ dependencies = [
  "strum",
  "strum_macros",
  "thiserror",
+]
+
+[[package]]
+name = "olai-cedar-oci"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "cedar-local-agent",
+ "cedar-policy",
+ "oci-client",
+ "prost",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tracing",
+]
+
+[[package]]
+name = "olai-datafusion-policy"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "datafusion",
+ "datafusion-common",
+ "thiserror",
+]
+
+[[package]]
+name = "olai-datafusion-policy-cedar"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "cedar-local-agent",
+ "cedar-policy",
+ "datafusion",
+ "olai-cedar-oci",
+ "olai-datafusion-policy",
+ "smol_str",
+ "tracing",
 ]
 
 [[package]]

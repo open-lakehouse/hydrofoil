@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::prelude::SessionConfig;
-use datafusion_cedar::{
+use datafusion_policy_cedar::{
     AttrValue, EntityUid, Group, IdentityError, IdentityProvider, PrincipalClaims,
     PrincipalEnrichment, PrincipalExt, PrincipalIdentity,
 };

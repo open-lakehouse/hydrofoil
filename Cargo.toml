@@ -18,9 +18,9 @@ async-trait = { version = "^0.1.89" }
 bytes = { version = "1" }
 # The Cedar/policy crates moved to the breakwater sibling repo
 # (open-lakehouse/breakwater), published to crates.io. Consumers import them as
-# `cedar_oci` / `datafusion_cedar` (names unchanged from the in-tree crates).
-cedar-oci = { version = "0.0.1" }
-datafusion-cedar = { version = "0.0.1" }
+# `cedar_oci` / `datafusion_policy_cedar` (names unchanged from the in-tree crates).
+cedar-oci = { package = "olai-cedar-oci", version = "0.0.1" }
+datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.1" }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
 dashmap = "6.0.1"

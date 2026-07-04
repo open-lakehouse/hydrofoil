@@ -40,13 +40,13 @@
 //! who ran the query and on whose behalf/why.
 
 use datafusion::execution::context::SessionState;
-use datafusion_cedar::PrincipalIdentity;
 use datafusion_openlineage::config::OpenLineageConfig;
 use datafusion_openlineage::context::{LineageContext, LineageContextProvider};
 use datafusion_openlineage::facets::{
     BaseFacet, DocumentationJobFacet, Owner, OwnershipJobFacet, ParentJob, ParentRun,
     ParentRunFacet, RootParent, TagsJobFacet, TagsJobFacetFields,
 };
+use datafusion_policy_cedar::PrincipalIdentity;
 use serde_json::{Map, Value, json};
 use tonic::metadata::MetadataMap;
 
