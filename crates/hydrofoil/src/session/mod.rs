@@ -1284,6 +1284,237 @@ mod integration_tests {
         );
     }
 
+    /// End-to-end **row filter** through the real Cedar engine: a governed table
+    /// tag gates a `read_table` permit whose residual is a per-row predicate, so
+    /// the query returns only the rows the principal is entitled to.
+    ///
+    /// The permit fires only for a table carrying the governed tag `access =
+    /// "row-scoped"` (folded into the Cedar `Table` entity's native tags by the
+    /// resource PIP — breakwater S2). Its `resource.region == principal.region`
+    /// clause has no static answer for `resource.region` (a table column), so TPE
+    /// leaves it as the residual `col("region") == <principal region>`. Before
+    /// S2's table-tag folding the `hasTag` guard was unsatisfiable and this
+    /// scenario failed closed for everyone; this is the full-stack proof of the
+    /// fix — an `eu` principal sees only `eu` rows, a `us` principal only `us`.
+    #[tokio::test]
+    async fn governed_tag_row_filter_end_to_end() {
+        use std::collections::BTreeMap;
+
+        use datafusion::sql::TableReference;
+        use datafusion_policy_cedar::{CedarPolicyEngine, TableFacts};
+
+        use crate::engine::Engine;
+
+        // `read_table` is permitted only when the table carries the governed
+        // `access` tag AND the row's `region` matches the principal's region; the
+        // region comparison survives TPE as a row filter. (No `read_column` rule,
+        // so no masking — this isolates the row-filter path.)
+        const SCHEMA: &str = r#"
+            entity User { region: String };
+            entity Table { region: String } tags String;
+            entity Column in [Table] { name: String } tags String;
+            action read_table appliesTo {
+                principal: [User], resource: [Table],
+                context: { catalog?: String, schema?: String, table?: String, columns?: Set<String> }
+            };
+            action read_column appliesTo {
+                principal: [User], resource: [Column],
+                context: { catalog?: String, schema?: String, table?: String }
+            };
+        "#;
+        // Two `read_table` permits:
+        //   1. the coarse gate — permit any principal with a region, so the
+        //      concrete `is_allowed` gate lets the read through (governed tags are
+        //      not folded on the concrete gate path, only under TPE, so the coarse
+        //      permit must not depend on `hasTag`);
+        //   2. the row-filter grant — gated on the governed table tag
+        //      `access = "row-scoped"`, so it only contributes a residual once the
+        //      resource PIP has folded the tag into the `Table` entity's native
+        //      Cedar tags (breakwater S2). Under TPE `resource.hasTag("access")`
+        //      is discharged by the folded tag while `resource.region` (a column)
+        //      stays unknown, leaving the per-row residual
+        //      `col("region") == <principal region>`. Without S2's folding the
+        //      `hasTag` guard is unsatisfiable, no residual survives, and the row
+        //      filter silently vanishes — the regression this test guards.
+        const POLICY: &str = r#"
+            permit (principal, action == Action::"read_table", resource)
+            when { principal has region };
+
+            permit (principal, action == Action::"read_table", resource)
+            when {
+                resource.hasTag("access") && resource.getTag("access") == "row-scoped"
+                && resource.region == principal.region
+            };
+        "#;
+
+        // Run `SELECT region, amount FROM t` as `principal`, seeding `t` with the
+        // governed table tag, and return the pretty-printed result batches.
+        async fn run(principal: PrincipalIdentity) -> String {
+            let policy =
+                Arc::new(CedarPolicyEngine::from_sources(POLICY, "", Some(SCHEMA)).unwrap());
+            let engine = Engine::new(policy, None, None, OpenLineageConfig::default());
+            let session = engine.new_session(principal, None).await.expect("session");
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("region", DataType::Utf8, false),
+                Field::new("amount", DataType::Int64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(vec!["eu", "us", "eu", "us"])),
+                    Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+                ],
+            )
+            .unwrap();
+            let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            session
+                .session_context()
+                .register_table("t", Arc::new(table))
+                .unwrap();
+
+            // `t` carries the governed table tag `access = "row-scoped"` — what
+            // `record_facts` records after Unity Catalog resolution.
+            session.catalog_fact_sink().record(
+                TableReference::bare("t"),
+                TableFacts {
+                    governed_tags: BTreeMap::from([(
+                        "access".to_string(),
+                        "row-scoped".to_string(),
+                    )]),
+                    ..Default::default()
+                },
+            );
+
+            let lh = session.lakehouse_for_query(LineageContext::default(), None);
+            let plan = lh
+                .create_logical_plan("SELECT region, amount FROM t ORDER BY amount")
+                .await
+                .unwrap();
+            let physical = lh.create_physical_plan(&plan).await.unwrap();
+            let batches = datafusion::physical_plan::collect(physical, lh.task_ctx())
+                .await
+                .unwrap();
+            datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+                .unwrap()
+                .to_string()
+        }
+
+        // `eu` principal: the residual filters to `region == "eu"`, so only the
+        // two `eu` rows (10, 30) survive; the `us` rows never surface.
+        let eu = run(principal("alice")).await; // `principal` seeds region = "eu"
+        assert!(
+            eu.contains("| eu     | 10"),
+            "eu principal sees eu rows: {eu}"
+        );
+        assert!(
+            eu.contains("| eu     | 30"),
+            "eu principal sees all eu rows: {eu}"
+        );
+        assert!(
+            !eu.contains("| us"),
+            "eu principal must not see us rows: {eu}"
+        );
+
+        // `us` principal: the same policy filters to `region == "us"`, a disjoint
+        // row set — proving the filter is principal-scoped, not a static grant.
+        let bob = principal("bob").with_attribute("region", "us");
+        let us = run(bob).await;
+        assert!(
+            us.contains("| us     | 20") && us.contains("| us     | 40"),
+            "us principal sees us rows: {us}"
+        );
+        assert!(
+            !us.contains("| eu"),
+            "us principal must not see eu rows: {us}"
+        );
+    }
+
+    /// The coarse write gate still fires under the resolver-tier secured-view
+    /// wrapper: `authorize_logical_plan` (the write/ingest path's explicit gate,
+    /// the same one Flight ingest and managed-append run) authorizes an `INSERT`
+    /// under the `write_table` action. The secured-view wrapper handles only the
+    /// fine-grained (row/column) path and marks the table governed — it does not
+    /// swallow the coarse `is_allowed` gate — so a writer authorized by the ACL
+    /// facts appends, while a non-writer is rejected.
+    #[tokio::test]
+    async fn governed_write_gate_still_fires_end_to_end() {
+        use datafusion_policy_cedar::CedarPolicyEngine;
+
+        const SCHEMA: &str = r#"
+            entity User { region: String };
+            entity Table { region: String } tags String;
+            action read_table appliesTo {
+                principal: [User], resource: [Table],
+                context: { catalog?: String, schema?: String, table?: String, columns?: Set<String> }
+            };
+            action write_table appliesTo { principal: [User], resource: [Table] };
+        "#;
+        // Reads are open; only alice may write (the analog of a table `writers`
+        // ACL — here a direct principal match, since Cedar policies match the
+        // principal entity, not a uid string).
+        const POLICY: &str = r#"
+            permit (principal, action == Action::"read_table", resource)
+            when { principal has region };
+
+            permit (principal == User::"alice", action == Action::"write_table", resource);
+        "#;
+
+        // Build a `LakehouseCtx` over an in-memory `t`, seed `t`'s writers ACL,
+        // then authorize an `INSERT` as `principal`. Returns the gate's result.
+        async fn insert_as(principal: PrincipalIdentity) -> Result<()> {
+            let policy =
+                Arc::new(CedarPolicyEngine::from_sources(POLICY, "", Some(SCHEMA)).unwrap());
+            // Bind the *writing* principal so the write-path gate resolves it.
+            let session = create_session_for(
+                None,
+                None,
+                OpenLineageConfig::default(),
+                Some(principal.clone()),
+                None,
+                policy.clone(),
+            )
+            .unwrap();
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("region", DataType::Utf8, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(StringArray::from(vec!["eu"])),
+                ],
+            )
+            .unwrap();
+            let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+            session.register_table("t", Arc::new(table)).unwrap();
+
+            let ctx = LakehouseCtx::new(session, policy, principal);
+            let lh = ctx.session();
+            let plan = lh
+                .create_logical_plan("INSERT INTO t VALUES (2, 'us')")
+                .await?;
+            // The write path's explicit gate (govern → optimize → coarse gate).
+            ctx.authorize_logical_plan(plan).await.map(|_| ())
+        }
+
+        // alice is in the writers ACL: the write is authorized.
+        insert_as(principal("alice"))
+            .await
+            .expect("authorized writer's INSERT must pass the gate");
+
+        // bob is not: the coarse `write_table` gate denies (proving the wrapper
+        // did not swallow it).
+        let denied = insert_as(principal("bob"))
+            .await
+            .expect_err("non-writer's INSERT must be rejected");
+        assert!(
+            denied.to_string().contains("not authorized"),
+            "write denied for a non-writer: {denied}"
+        );
+    }
+
     /// The agent-tool PEP seam: `Session::authorize_tool_call` reads the
     /// session's observed taints back and runs the tool policy. Here a guardrail
     /// policy forbids `send_external` once `pii` has been observed.
