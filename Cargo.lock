@@ -2884,6 +2884,7 @@ dependencies = [
  "mimalloc",
  "object_store",
  "olai-cedar-oci",
+ "olai-datafusion-policy",
  "olai-datafusion-policy-cedar",
  "olai-uc-client",
  "olai-uc-common",
@@ -3904,18 +3905,19 @@ dependencies = [
 
 [[package]]
 name = "olai-datafusion-policy"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "dashmap",
  "datafusion",
  "datafusion-common",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
 name = "olai-datafusion-policy-cedar"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -7108,3 +7110,7 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "olai-stack-topology"
+version = "0.0.2"
