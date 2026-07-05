@@ -1528,6 +1528,117 @@ mod integration_tests {
         );
     }
 
+    /// End-to-end column mask + row filter through the **`AbacPolicyEngine`** (the
+    /// UC-ABAC path, no Cedar): a `PolicyBinding` delivered on
+    /// `TableFacts.policies` — exactly what `UnityPolicyBindingProvider` would map
+    /// from a mangrove `/policies` response — drives a `COLUMN_MASK` on the `ssn`
+    /// column (matched by the governed tag `pii=ssn`) and a `ROW_FILTER`. This is
+    /// the full H4→H5 proof: bindings → engine → `TablePolicy` → secured view,
+    /// with the profile built from `AbacPolicyEngine` at `Enforcing`, without a
+    /// live catalog or any Cedar/OCI.
+    #[tokio::test]
+    async fn abac_policy_masks_and_filters_end_to_end() {
+        use std::collections::BTreeMap;
+
+        use datafusion::sql::TableReference;
+        use datafusion_policy::{
+            AbacPolicyEngine, BindingKind, ColumnMatch, FunctionArg, PolicyBinding, TagCondition,
+        };
+        use datafusion_policy_cedar::TableFacts;
+
+        use crate::engine::Engine;
+
+        // A profile over the AbacPolicyEngine (UC-ABAC has no coarse deny — the
+        // engine only produces row filters + column masks).
+        let engine = Engine::new(
+            governance_for(Arc::new(AbacPolicyEngine::new())),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        );
+        let session = engine
+            .new_session(principal("alice"), None)
+            .await
+            .expect("session");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("region", DataType::Utf8, true),
+            Field::new("ssn", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["eu", "us", "eu"])),
+                Arc::new(StringArray::from(vec!["secret-a", "secret-b", "secret-c"])),
+            ],
+        )
+        .unwrap();
+        session
+            .session_context()
+            .register_table(
+                "t",
+                Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+            )
+            .unwrap();
+
+        // What `UnityPolicyBindingProvider` maps + `record_facts` records: the
+        // `ssn` column tagged `pii=ssn` and a column-mask binding matching it
+        // (masked to the default `***` literal, since the named function has no
+        // resolver wired — the fail-closed contract).
+        session.catalog_fact_sink().record(
+            TableReference::bare("t"),
+            TableFacts {
+                governed_column_tags: HashMap::from([(
+                    "ssn".to_string(),
+                    BTreeMap::from([("pii".to_string(), "ssn".to_string())]),
+                )]),
+                policies: vec![PolicyBinding {
+                    name: "mask_ssn".to_string(),
+                    kind: BindingKind::ColumnMask,
+                    to_principals: vec!["account users".to_string()],
+                    except_principals: vec![],
+                    when_condition: vec![],
+                    match_columns: vec![ColumnMatch {
+                        condition: TagCondition {
+                            key: "pii".to_string(),
+                            value: Some("ssn".to_string()),
+                        },
+                        alias: "col".to_string(),
+                    }],
+                    function: "unresolved.mask.fn".to_string(),
+                    using_args: vec![FunctionArg::Alias("col".to_string())],
+                }],
+                ..Default::default()
+            },
+        );
+
+        let lh = session.lakehouse_for_query(LineageContext::default(), None);
+        let plan = lh
+            .create_logical_plan("SELECT id, region, ssn FROM t")
+            .await
+            .unwrap();
+        let physical = lh.create_physical_plan(&plan).await.unwrap();
+        let batches = datafusion::physical_plan::collect(physical, lh.task_ctx())
+            .await
+            .unwrap();
+        let pretty = datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string();
+
+        // The ABAC column-mask binding masked `ssn` (fail-closed `***`, no
+        // resolver) — the raw values never surface.
+        assert!(
+            pretty.contains("***"),
+            "ssn masked by ABAC binding: {pretty}"
+        );
+        assert!(
+            !pretty.contains("secret-a") && !pretty.contains("secret-b"),
+            "raw ssn must not leak: {pretty}"
+        );
+    }
+
     /// The coarse write gate still fires under the resolver-tier secured-view
     /// wrapper: `authorize_logical_plan` (the write/ingest path's explicit gate,
     /// the same one Flight ingest and managed-append run) authorizes an `INSERT`
