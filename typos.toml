@@ -13,6 +13,10 @@ extend-ignore-re = [
 # to avoid having to name fields r#type
 typ = "typ"
 
+# "TPE" — Type-aware Partial Evaluation, the Cedar/breakwater residual-evaluation
+# mechanism behind row filters and column masks; not a misspelling of "TYPE".
+TPE = "TPE"
+
 # Pluralized SQL keywords in prose/tests ("SELECTs", "INSERTs"): typos strips the
 # trailing "s" and flags the stem as a misspelling of SELECT / INSERT.
 selec = "selec"

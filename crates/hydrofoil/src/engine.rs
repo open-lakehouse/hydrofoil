@@ -98,7 +98,6 @@ pub struct Engine {
     /// Process-wide session fact store (the taint ledger), keyed by correlation
     /// id. Shared across sessions, as a future shared-KV backend would be. The
     /// governance PEP records taints here; a later PEP reads them back.
-    #[cfg(feature = "governance")]
     fact_store: Arc<dyn datafusion_policy_cedar::FactStore>,
 }
 
@@ -118,7 +117,6 @@ impl Engine {
             lineage_config,
             identity: Arc::new(NoopIdentityProvider),
             enrichment_cache: DashMap::new(),
-            #[cfg(feature = "governance")]
             fact_store: Arc::new(datafusion_policy_cedar::InMemoryFactStore::new()),
         })
     }
@@ -142,7 +140,6 @@ impl Engine {
     /// The process-wide session fact store (taint ledger). The agent-tool PEP
     /// reads observed taints back from here by correlation id; until that PEP is
     /// wired (PR7) this is exercised only by tests.
-    #[cfg(feature = "governance")]
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn fact_store(&self) -> Arc<dyn datafusion_policy_cedar::FactStore> {
         self.fact_store.clone()
@@ -250,7 +247,6 @@ impl Engine {
             statements: DashMap::new(),
             created_at: Instant::now(),
             last_used_ms: AtomicU64::new(0),
-            #[cfg(feature = "governance")]
             fact_store: self.fact_store.clone(),
         }))
     }
@@ -292,7 +288,6 @@ pub struct Session {
     /// The process-wide taint ledger, shared from the [`Engine`]. Threaded into
     /// each per-query [`LakehouseSession`] so the governance PEP can record
     /// taints keyed by this session's correlation id.
-    #[cfg(feature = "governance")]
     fact_store: Arc<dyn datafusion_policy_cedar::FactStore>,
 }
 
@@ -374,8 +369,7 @@ impl Session {
     }
 
     /// Attach the session's taint ledger to a per-query state so the governance
-    /// PEP records into it. No-op without the `governance` feature.
-    #[cfg(feature = "governance")]
+    /// PEP records into it.
     fn attach_fact_store(&self, state: &mut datafusion::execution::context::SessionState) {
         state
             .config_mut()
@@ -383,9 +377,6 @@ impl Session {
                 self.fact_store.clone(),
             )));
     }
-
-    #[cfg(not(feature = "governance"))]
-    fn attach_fact_store(&self, _state: &mut datafusion::execution::context::SessionState) {}
 
     /// The agent-tool PEP: decide whether this session's principal may invoke
     /// the tool named `action`, given the taints the session has observed so far
@@ -399,7 +390,6 @@ impl Session {
     // SEAM: not yet invoked. A future agent-tool RPC in `server.rs` (a
     // `do_action`-style handler) would resolve the session, read the
     // `x-hydrofoil-agent-*` metadata, and call this before dispatching the tool.
-    #[cfg(feature = "governance")]
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn authorize_tool_call(
         &self,
@@ -426,7 +416,7 @@ impl Session {
     /// The session's catalog fact sink (the instance `build_delta` writes to and
     /// the policy layer reads). For tests that populate facts without standing
     /// up Unity Catalog. Only the governance taint tests use it.
-    #[cfg(all(test, feature = "governance"))]
+    #[cfg(test)]
     pub(crate) fn catalog_fact_sink(&self) -> datafusion_policy_cedar::CatalogFactSink {
         self.ctx
             .state()
@@ -438,14 +428,14 @@ impl Session {
 
     /// This session's correlation id (its session id), the key under which the
     /// governance PEP records taints. Only the governance taint tests use it.
-    #[cfg(all(test, feature = "governance"))]
+    #[cfg(test)]
     pub(crate) fn correlation_id(&self) -> String {
         self.ctx.state().session_id().to_string()
     }
 
     /// The session's `SessionContext`, for tests that register tables directly.
     /// Only the governance taint tests use it.
-    #[cfg(all(test, feature = "governance"))]
+    #[cfg(test)]
     pub(crate) fn session_context(&self) -> &SessionContext {
         &self.ctx
     }
