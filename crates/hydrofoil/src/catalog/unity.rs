@@ -116,6 +116,9 @@ impl LakehouseTableProviderBuilder {
                 column_tags: classification.column_tags,
                 governed_tags: governed.table_tags,
                 governed_column_tags: governed.column_tags,
+                // UC `/policies` sourcing (neutral `PolicyBinding`s attached per
+                // table) is a follow-up (S7); no bindings are recorded yet.
+                policies: Vec::new(),
             },
         );
     }

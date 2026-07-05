@@ -59,11 +59,10 @@ mod log_store;
 
 use log_store::DataFusionLogStore;
 
-// The taint-ledger `SessionConfig` extension now lives in `datafusion-cedar`
+// The taint-ledger `SessionConfig` extension lives in `datafusion-policy-cedar`
 // (the crate owns its per-request seam), alongside the `SessionConfigEvalContextProvider`
 // that assembles the `EvalContext` from these extensions. Re-export it so
 // `crate::engine` keeps populating it via `crate::session::FactStoreExt`.
-#[cfg(feature = "governance")]
 pub(crate) use datafusion_policy_cedar::FactStoreExt;
 
 /// Context for executing queries in a Lakehouse.
@@ -666,7 +665,6 @@ pub fn create_session_for(
         // Functions API. `SessionConfigEvalContextProvider` reads this into
         // `EvalContext.function_resolver`; a name that fails to resolve masks the
         // column with the default literal (fail-closed at the Cedar layer).
-        #[cfg(feature = "governance")]
         session_config.set_extension(Arc::new(datafusion_policy_cedar::FunctionResolverExt(
             Arc::new(crate::catalog::UnityFunctionResolver::new(
                 factory.unity_client().clone(),
@@ -1018,7 +1016,6 @@ mod integration_tests {
 
     /// With the governance feature, a `TablePolicy` filters rows and masks
     /// columns end-to-end through the real session path.
-    #[cfg(feature = "governance")]
     #[tokio::test]
     async fn governance_filters_and_masks_rows() {
         use datafusion::common::DFSchema;
@@ -1084,7 +1081,6 @@ mod integration_tests {
     /// store, keyed by the session's correlation id. Stands up the engine and a
     /// registered table, and seeds the catalog fact sink directly (rather than
     /// resolving through Unity Catalog).
-    #[cfg(feature = "governance")]
     #[tokio::test]
     async fn governance_records_observed_taints() {
         use datafusion::sql::TableReference;
@@ -1164,7 +1160,6 @@ mod integration_tests {
     /// The engine is stood up in-process from Cedar policy + schema text via
     /// `CedarPolicyEngine::from_sources`, so the whole governed-tag mask contract
     /// is exercised without an OCI registry or a live Unity Catalog.
-    #[cfg(feature = "governance")]
     #[tokio::test]
     async fn governed_tag_masks_column_end_to_end() {
         use std::collections::{BTreeMap, HashMap};
@@ -1284,7 +1279,6 @@ mod integration_tests {
     /// The agent-tool PEP seam: `Session::authorize_tool_call` reads the
     /// session's observed taints back and runs the tool policy. Here a guardrail
     /// policy forbids `send_external` once `pii` has been observed.
-    #[cfg(feature = "governance")]
     #[tokio::test]
     async fn authorize_tool_call_forbids_on_observed_pii() {
         use std::collections::BTreeSet;
