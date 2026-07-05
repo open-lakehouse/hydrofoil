@@ -650,6 +650,14 @@ pub fn create_session_for(
     // session-scoped (see docs/adr/0007-fact-gathering-pips.md).
     session_config.set_extension(Arc::new(crate::catalog::CatalogFactSinkExt::default()));
 
+    // Bind the policy engine into the config so the secured-view provider seam
+    // (`govern_provider_from_config`, applied to UC-resolved tables in
+    // `LakehouseTableProviderBuilder::build_delta`) can discover it. It is the
+    // same engine the query planner receives below; the resolver tier governs a
+    // resolved provider at construction, and the shared `CatalogFactSink` marker
+    // keeps the planner tier from governing the inlined scan a second time.
+    session_config.set_extension(Arc::new(datafusion_policy::PolicyEngineExt(policy.clone())));
+
     // When Unity Catalog is wired, make its client available to the physical
     // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
     // The factory is also exposed (carrying per-table credential vending) so the

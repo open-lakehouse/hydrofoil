@@ -19,7 +19,11 @@ bytes = { version = "1" }
 # The Cedar/policy crates moved to the breakwater sibling repo
 # (open-lakehouse/breakwater), published to crates.io. Consumers import them as
 # `cedar_oci` / `datafusion_policy_cedar` (names unchanged from the in-tree crates).
+# `datafusion-policy` is the neutral (engine-agnostic) core: it owns the
+# secured-view provider seam (`govern_provider_from_config`) hydrofoil wraps
+# UC-resolved tables with, imported as `datafusion_policy`.
 cedar-oci = { package = "olai-cedar-oci", version = "0.0.2" }
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.2" }
 datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.2" }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"

@@ -6,6 +6,7 @@ rust-version = { workspace = true }
 
 [dependencies]
 datafusion-openlineage = { workspace = true }
+datafusion-policy = { workspace = true }
 datafusion-policy-cedar = { workspace = true }
 deltalake-datafusion = { path = "../datafusion" }
 datafusion-unitycatalog = { workspace = true }
