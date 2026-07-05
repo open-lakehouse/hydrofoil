@@ -739,6 +739,7 @@ pub fn create_session_for(
 pub fn build_unity_resolver(
     ctx: &SessionContext,
     factory: Arc<UnityObjectStoreFactory>,
+    posture: datafusion_policy::Posture,
 ) -> Arc<UnityCatalogProviderList> {
     let runtime = ctx.runtime_env();
     let builder =
@@ -748,7 +749,16 @@ pub fn build_unity_resolver(
             // deterministic tests keep the convention provider (the builder's default).
             .with_governed_tag_provider(Arc::new(crate::catalog::UnityGovernedTagProvider::new(
                 factory.unity_client().clone(),
-            )));
+            )))
+            // Source the UC-ABAC row-filter / column-mask policy bindings from the
+            // `/policies` API (`include_inherited=true`). Carries the server's
+            // enforcement posture so a sourcing failure fails closed under Enforcing.
+            .with_policy_provider(
+                Arc::new(crate::catalog::UnityPolicyBindingProvider::new(
+                    factory.unity_client().clone(),
+                )),
+                posture,
+            );
     Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 

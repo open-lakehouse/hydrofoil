@@ -237,7 +237,12 @@ impl Engine {
             self.policy.clone(),
         )?;
 
-        let unity = unity_factory.map(|factory| build_unity_resolver(&ctx, factory));
+        // Posture defaults to the safe stance today; H5 threads the server's
+        // `Governance` posture here so a config-selected permissive dry-run
+        // reaches the policy-sourcing fail-closed decision in `record_facts`.
+        let unity = unity_factory.map(|factory| {
+            build_unity_resolver(&ctx, factory, datafusion_policy::Posture::Enforcing)
+        });
 
         Ok(Arc::new(Session {
             ctx,
