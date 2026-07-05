@@ -24,7 +24,6 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SQLOptions;
 use datafusion_openlineage::OpenLineageClient;
 use datafusion_openlineage::config::OpenLineageConfig;
-use datafusion_policy_cedar::Decision;
 use futures::{Stream, TryStreamExt};
 use hydrofoil_common::DeltaCommand;
 use prost::Message;
@@ -36,12 +35,11 @@ use uuid::Uuid;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use crate::engine::{Engine, Session, SessionStore, StoredStatement};
-use crate::stream::FlightDataReceiverStreamBuilder;
-use crate::{execution::CpuRuntime, policy::Policy};
-use crate::{
-    planner::{DeltaPlanner, FlightPlanner, coerce_batches_to_schema, collect_coerced_batches},
-    policy::StaticPolicy,
+use crate::execution::CpuRuntime;
+use crate::planner::{
+    DeltaPlanner, FlightPlanner, coerce_batches_to_schema, collect_coerced_batches,
 };
+use crate::stream::FlightDataReceiverStreamBuilder;
 
 mod metadata;
 
@@ -95,7 +93,12 @@ pub struct FlightSqlServiceImpl {
     executor: CpuRuntime,
 
     // Builder-stage inputs, assembled into the `Engine` by [`Self::build`].
-    policy: Arc<dyn Policy>,
+    /// The governance profile (policy engine + posture + identity provider +
+    /// taint ledger), assembled once at startup by `main.rs` from the
+    /// `[governance]` config and installed via [`Self::with_governance`]. Defaults
+    /// to a `Disabled` profile so an unconfigured server runs ungoverned (never a
+    /// silent allow-all — the posture is explicit).
+    governance: Arc<datafusion_policy::Governance>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
     /// UC REST endpoint + AWS region, threaded to the [`Engine`] so it can build
     /// a *per-user* factory from a request-supplied UC token (see
@@ -107,27 +110,47 @@ pub struct FlightSqlServiceImpl {
     /// built once at startup from the hydrofoil config and threaded through the
     /// engine + the per-request lineage context. Default until [`Self::with_lineage`].
     lineage_config: OpenLineageConfig,
-    identity: Option<Arc<dyn datafusion_policy_cedar::IdentityProvider>>,
+    /// The S3-compatible object store registered on each session's runtime
+    /// (seaweedfs dev gateway by default; from `[object-store]` config).
+    object_store: crate::config::ObjectStoreConfig,
+}
+
+/// A `Disabled`-posture governance profile: no enforcement installed. The
+/// default before `main.rs` installs the config-derived profile, and the
+/// standalone / test default.
+fn disabled_governance() -> Arc<datafusion_policy::Governance> {
+    datafusion_policy::Governance::builder()
+        .posture(datafusion_policy::Posture::Disabled)
+        .build()
+        .expect("disabled governance builds without an engine")
 }
 
 impl FlightSqlServiceImpl {
     pub fn try_new() -> Result<Self, DataFusionError> {
-        let policy: Arc<dyn Policy> = Arc::new(StaticPolicy::new(Decision::Allow));
+        let governance = disabled_governance();
         // A placeholder store; replaced by `build()` once the optional
-        // components (lineage/policy/unity) are configured.
-        let engine = Engine::new(policy.clone(), None, None, OpenLineageConfig::default());
+        // components (lineage/governance/unity) are configured.
+        let engine = Engine::new(governance.clone(), None, None, OpenLineageConfig::default());
         let ttl = Duration::from_secs(DEFAULT_SESSION_TTL_SECS);
         Ok(Self {
             sessions: SessionStore::new(engine, ttl),
             executor: CpuRuntime::try_new()?,
-            policy,
+            governance,
             unity_factory: None,
             unity_endpoint: None,
             unity_region: None,
             lineage: None,
             lineage_config: OpenLineageConfig::default(),
-            identity: Some(crate::identity::default_identity_provider()),
+            object_store: crate::config::ObjectStoreConfig::default(),
         })
+    }
+
+    /// Set the S3-compatible object store (from the `[object-store]` config)
+    /// registered on each session's runtime. Defaults to the seaweedfs dev
+    /// gateway.
+    pub fn with_object_store(mut self, object_store: crate::config::ObjectStoreConfig) -> Self {
+        self.object_store = object_store;
+        self
     }
 
     /// Attach an OpenLineage client (and its static config) so sessions emit
@@ -139,9 +162,13 @@ impl FlightSqlServiceImpl {
         self
     }
 
-    /// Set the policy for the server.
-    pub fn with_policy(mut self, policy: Arc<dyn Policy>) -> Self {
-        self.policy = policy;
+    /// Install the governance profile for the server (policy engine + posture +
+    /// identity provider + taint ledger), built once at startup from config. This
+    /// replaces the former separate `with_policy` / `with_identity_provider`
+    /// hooks: posture, engine composition, and the identity provider (the demo
+    /// map only when config chose it) are all decided when the profile is built.
+    pub fn with_governance(mut self, governance: Arc<datafusion_policy::Governance>) -> Self {
+        self.governance = governance;
         self
     }
 
@@ -163,35 +190,20 @@ impl FlightSqlServiceImpl {
         self
     }
 
-    /// Set the identity provider (the principal/identity PIP) used to enrich
-    /// principals with attributes + group membership at session creation,
-    /// overriding the [`default_identity_provider`](crate::identity::default_identity_provider).
-    /// A deployment uses this to swap in a real IdP/directory backend.
-    // The default provider is wired in `try_new`; this is the public override
-    // hook, not yet exercised by the env-driven `main.rs` wiring.
-    #[allow(dead_code)]
-    pub fn with_identity_provider(
-        mut self,
-        identity: Arc<dyn datafusion_policy_cedar::IdentityProvider>,
-    ) -> Self {
-        self.identity = Some(identity);
-        self
-    }
-
     /// Finalize the configured components into an [`Engine`] + [`SessionStore`]
     /// and start the background session sweeper, using `ttl` as the idle session
     /// timeout. Call once before serving.
     pub fn build(mut self, ttl: Duration) -> Self {
         let mut engine = Engine::new(
-            self.policy.clone(),
+            self.governance.clone(),
             self.unity_factory.clone(),
             self.lineage.clone(),
             self.lineage_config.clone(),
         );
         engine = engine.with_unity_config(self.unity_endpoint.clone(), self.unity_region.clone());
-        if let Some(identity) = self.identity.clone() {
-            engine = engine.with_identity_provider(identity);
-        }
+        engine = engine.with_object_store(self.object_store.clone());
+        // The identity provider is part of the governance profile now (installed
+        // via `with_governance`); no separate wiring step here.
         let sessions = SessionStore::new(engine, ttl);
         sessions.spawn_sweeper();
         self.sessions = sessions;

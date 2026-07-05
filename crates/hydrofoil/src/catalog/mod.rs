@@ -2,7 +2,7 @@ pub use self::external_table::DeltaTableFactory;
 pub use self::functions::UnityFunctionResolver;
 pub use self::policies::UnityPolicyBindingProvider;
 pub use self::schema::LakehouseSchemaProvider;
-pub use self::tags::{CatalogFactSinkExt, UnityGovernedTagProvider};
+pub use self::tags::UnityGovernedTagProvider;
 pub use self::unity::LakehouseTableProviderBuilder;
 
 mod external_table;

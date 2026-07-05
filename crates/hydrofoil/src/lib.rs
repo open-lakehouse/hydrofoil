@@ -55,6 +55,10 @@ pub mod telemetry;
 // Re-exports for embedders (e.g. `desktop-host`): the shared engine/session
 // service, the ConnectRPC QueryService executor wrapper, and the layered config.
 pub use config::Config;
+/// The built-in demo directory map (the fixed `alice`/`bob`/`r2d2` principals),
+/// installed as the identity provider only when `[governance.identity] provider
+/// = "demo"`. Exposed so the binary's governance wiring can select it.
+pub use identity::default_identity_provider as demo_identity_provider;
 pub use ingest_service::IngestAppState;
 pub use query_service::QueryAppState;
 pub use server::FlightSqlServiceImpl;

@@ -32,7 +32,8 @@ use datafusion_openlineage::{
     LineageExtensionPlanner, OpenLineageClient, OpenLineageConfig, begin_lineage,
 };
 use datafusion_policy_cedar::{
-    EvalContextProvider, PolicyEngine as Policy, PrincipalProvider, authorize_and_govern,
+    EvalContextProvider, PolicyEngine as Policy, Posture, PrincipalProvider,
+    authorize_and_govern_with_posture,
 };
 
 /// The OpenLineage pieces the planner needs, present only when lineage is wired.
@@ -48,6 +49,12 @@ pub struct GovernedLineagePlanner {
     policy: Arc<dyn Policy>,
     principal: Arc<dyn PrincipalProvider>,
     eval: Arc<dyn EvalContextProvider>,
+    /// The enforcement posture, carried into `authorize_and_govern_with_posture`
+    /// so a `Permissive` session logs `would_block` / `would_constrain` and plans
+    /// unconstrained, while `Enforcing` fails closed. (`Disabled` never installs
+    /// this planner — see `Governance::instrument` — so the two live values here
+    /// are `Permissive` and `Enforcing`.)
+    posture: Posture,
     lineage: Option<LineageParts>,
     /// The one physical planner, carrying every extension planner. Both
     /// `UnityCatalogPlanner` and `LineageExtensionPlanner` return `Ok(None)` for
@@ -73,6 +80,7 @@ impl GovernedLineagePlanner {
     /// to enable OpenLineage; `None` disables it (policy still runs).
     pub fn new(
         policy: Arc<dyn Policy>,
+        posture: Posture,
         principal: Arc<dyn PrincipalProvider>,
         eval: Arc<dyn EvalContextProvider>,
         extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
@@ -89,6 +97,7 @@ impl GovernedLineagePlanner {
             policy,
             principal,
             eval,
+            posture,
             lineage: lineage.map(|(client, context, config)| LineageParts {
                 client,
                 context,
@@ -116,12 +125,13 @@ impl QueryPlanner for GovernedLineagePlanner {
                 "no principal bound to session; cannot authorize query"
             );
         };
-        let governed = authorize_and_govern(
+        let governed = authorize_and_govern_with_posture(
             session_state,
             logical_plan,
             self.policy.as_ref(),
             &principal,
             &eval,
+            self.posture,
         )
         .await?;
         // Optimize the governed plan so lineage extraction and physical planning

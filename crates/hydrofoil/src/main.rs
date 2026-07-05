@@ -48,20 +48,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lineage_shutdown = lineage.clone();
     service = service.with_lineage(lineage, lineage_config);
 
-    // Wire Cedar policy enforcement when a policy reference is configured.
-    // `policy.oci_ref` is an OCI reference to a Cedar policy image (e.g.
-    // `localhost:10100/hydrofoil/plan-policy:latest`). Without it, the server
-    // runs with the allow-all default (an open, ungoverned server).
-    match cfg.policy.oci_ref.as_deref() {
-        Some(reference) if !reference.is_empty() => {
-            let policy = policy::CedarPolicy::from_oci(reference).await?;
-            tracing::info!("Cedar policy enforcement enabled (ref: {reference})");
-            service = service.with_policy(Arc::new(policy));
-        }
-        _ => {
-            tracing::info!("Cedar policy enforcement disabled (set policy.oci_ref to enable)")
-        }
-    }
+    // Assemble the one governance profile from the [governance] config (posture +
+    // composed engine sources + identity provider). `resolve_governance` has
+    // already validated the config at startup (refusing to run rather than
+    // under-enforcing); `build_governance` turns it into the `Governance` the
+    // server installs. A disabled posture yields an ungoverned (but explicit)
+    // server.
+    let governance = build_governance(&cfg).await?;
+    tracing::info!(posture = ?governance.posture(), "governance profile assembled");
+    service = service.with_governance(governance);
+
+    // The S3-compatible object store registered on each session's runtime. The
+    // defaults reproduce the seaweedfs dev gateway; `[object-store]` overrides it.
+    service = service.with_object_store(cfg.object_store.clone());
 
     // Wire Unity Catalog when an endpoint is configured. `unity.endpoint` is the
     // Unity Catalog REST base URL (e.g.
@@ -150,6 +149,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Assemble the runtime [`Governance`] profile from validated config.
+///
+/// [`Config::resolve_governance`] has already validated the config (a
+/// misconfigured deployment failed to start there); this composes the profile:
+/// the policy engine per `sources`, the posture, and the identity provider (the
+/// demo map only when `provider = "demo"`).
+///
+/// The `unity-abac` + `cedar-oci` combination is **rejected** here until a
+/// composite engine lands (breakwater W9): there is no way to compose the two
+/// engines yet, so running would silently drop one.
+async fn build_governance(
+    cfg: &config::Config,
+) -> Result<Arc<datafusion_policy::Governance>, Box<dyn std::error::Error>> {
+    use datafusion_policy::{Governance, Posture};
+
+    let resolved = cfg.resolve_governance()?;
+
+    let mut builder = Governance::builder().posture(Posture::from(resolved.posture));
+
+    // Compose the policy engine from the configured sources.
+    match (resolved.has_unity_abac(), resolved.has_cedar_oci()) {
+        (true, true) => {
+            return Err(
+                "governance.sources = [unity-abac, cedar-oci] is not yet supported \
+                 (no composite engine); choose one source"
+                    .into(),
+            );
+        }
+        (true, false) => {
+            tracing::info!("policy engine: UC-ABAC over /policies-sourced bindings");
+            builder = builder.engine(Arc::new(datafusion_policy::AbacPolicyEngine::new()));
+        }
+        (false, true) => {
+            // Validation guarantees a ref is present when cedar-oci is a source.
+            let reference = resolved
+                .cedar_oci_ref
+                .as_deref()
+                .expect("validated: cedar-oci requires oci_ref");
+            tracing::info!("policy engine: Cedar (ref: {reference})");
+            let engine = policy::CedarPolicy::from_oci(reference).await?;
+            builder = builder.engine(Arc::new(engine));
+        }
+        (false, false) => {
+            // Disabled: no engine needed (the builder installs an allow-all
+            // stand-in that is never consulted, since no planner is installed).
+        }
+    }
+
+    // The identity provider: the demo directory map only when explicitly chosen.
+    match resolved.identity_provider {
+        config::IdentityProvider::Demo => {
+            tracing::info!("identity provider: demo directory map");
+            builder = builder.identity_provider(hydrofoil::demo_identity_provider());
+        }
+        config::IdentityProvider::None => {
+            tracing::info!("identity provider: none (principal enrichment is a pass-through)");
+        }
+    }
+
+    Ok(builder.build()?)
 }
 
 /// Resolve when the process receives a shutdown signal (Ctrl-C / SIGINT). Used

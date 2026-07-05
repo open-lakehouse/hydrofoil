@@ -21,12 +21,12 @@
 //! seam); a real IdP/directory backend is the same trait. See
 //! `docs/adr/0008-principal-identity-resolution.md`.
 //!
-//! [`principal_from_metadata`] is wired into the server, and [`with_principal`]
-//! is now called when a session is built (`Engine::new_session` →
-//! `create_session_for`), so the principal reaches planning-time policy
-//! evaluation via the [`PrincipalExt`] `SessionConfig` extension. The
-//! [`PrincipalProvider`] read-back trait is the provider-facing seam for
-//! components that only see a `SessionState` (mirroring
+//! [`principal_from_metadata`] is wired into the server; the parsed principal is
+//! bound onto the session config when a session is built (`Engine::new_session` →
+//! `create_session_for` → `Governance::attach`), so it reaches planning-time
+//! policy evaluation via the `PrincipalExt` `SessionConfig` extension the policy
+//! crate owns. The `PrincipalProvider` read-back trait is the provider-facing
+//! seam for components that only see a `SessionState` (mirroring
 //! [`datafusion_openlineage::context::LineageContextProvider`]); it is retained
 //! for that use even though the policy gate currently reads the principal from a
 //! struct field.
@@ -34,18 +34,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::prelude::SessionConfig;
 use datafusion_policy_cedar::{
     AttrValue, EntityUid, Group, IdentityError, IdentityProvider, PrincipalClaims,
-    PrincipalEnrichment, PrincipalExt, PrincipalIdentity,
+    PrincipalEnrichment, PrincipalIdentity,
 };
 use tonic::metadata::MetadataMap;
 
 // The principal `SessionConfig` extension (`PrincipalExt`), its read-back
 // provider, and the `PrincipalProvider` trait now live in `datafusion-cedar`
 // (the crate owns its per-request seam). Consumers that need the provider import
-// it from there directly; hydrofoil only attaches the extension (via
-// [`with_principal`]) and reads it through the policy planner's default provider.
+// it from there directly; hydrofoil attaches the extension via
+// `Governance::attach` and reads it through the policy planner's default provider.
 
 /// gRPC metadata keys carrying the principal and its attributes.
 pub mod headers {
@@ -165,12 +164,6 @@ fn principal_from_headers(
         identity = identity.with_attribute("region", region);
     }
     Ok(identity)
-}
-
-/// Attach a [`PrincipalIdentity`] to a `SessionConfig` so the
-/// [`SessionConfigPrincipalProvider`] can read it back during planning.
-pub fn with_principal(config: SessionConfig, principal: PrincipalIdentity) -> SessionConfig {
-    config.with_extension(Arc::new(PrincipalExt(principal)))
 }
 
 /// A user's facts in the static identity config: string attributes and the
