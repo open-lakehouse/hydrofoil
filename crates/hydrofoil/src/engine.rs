@@ -34,9 +34,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_openlineage::OpenLineageClient;
 use datafusion_openlineage::config::OpenLineageConfig;
 use datafusion_openlineage::context::LineageContext;
-use datafusion_policy_cedar::{
-    IdentityProvider, PrincipalClaims, PrincipalEnrichment, PrincipalIdentity,
-};
+use datafusion_policy::Governance;
+use datafusion_policy_cedar::{PrincipalClaims, PrincipalIdentity};
 use datafusion_unitycatalog::catalog::UnityCatalogProviderList;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 use uuid::Uuid;
@@ -70,7 +69,12 @@ pub struct StoredStatement {
 /// live `RuntimeEnv` / object stores**, so no vended credentials can leak across
 /// principals (see module docs).
 pub struct Engine {
-    policy: Arc<dyn Policy>,
+    /// The one governance profile, assembled once at startup: the policy engine,
+    /// the runtime posture, the identity provider, and the session taint
+    /// ledger. Replaces the former separate `policy` / `identity` / `fact_store`
+    /// fields so an ungoverned session can't be the accidental result of a
+    /// forgotten wire-up (see `datafusion_policy::Governance`).
+    governance: Arc<Governance>,
     /// The server-wide UC factory built at startup from `unity.token`. Used as
     /// the fallback when a request carries no per-user UC token.
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
@@ -85,40 +89,46 @@ pub struct Engine {
     /// Static OpenLineage config (job namespace, producer, engine identity),
     /// built once at startup and used when instrumenting each session's planner.
     lineage_config: OpenLineageConfig,
-    /// The principal/identity PIP: resolves a principal's attributes + group
-    /// membership from external systems (`docs/adr/0008-...`). Defaults to a
-    /// no-op provider (empty enrichment) so an unconfigured server / the
-    /// anonymous dev path still works.
-    identity: Arc<dyn IdentityProvider>,
-    /// Process-wide enrichment cache, keyed by principal uid. v1 resolves once
-    /// per session and reuses; the cache being here (rather than baked into a
-    /// `Session`) is what lets enrichment move to a per-query lookup with a TTL
-    /// later without re-plumbing.
-    enrichment_cache: DashMap<String, PrincipalEnrichment>,
-    /// Process-wide session fact store (the taint ledger), keyed by correlation
-    /// id. Shared across sessions, as a future shared-KV backend would be. The
-    /// governance PEP records taints here; a later PEP reads them back.
-    fact_store: Arc<dyn datafusion_policy_cedar::FactStore>,
+    /// Process-wide enrichment cache, keyed by principal uid, holding the
+    /// fully-bound principal. v1 resolves once per session and reuses; the cache
+    /// being here (rather than baked into a `Session`) is what lets enrichment
+    /// move to a per-query lookup with a TTL later without re-plumbing.
+    enrichment_cache: DashMap<String, PrincipalIdentity>,
+    /// The S3-compatible object store registered on every session's runtime
+    /// (the seaweedfs dev gateway by default; overridable via `[object-store]`).
+    object_store: crate::config::ObjectStoreConfig,
 }
 
 impl Engine {
     pub fn new(
-        policy: Arc<dyn Policy>,
+        governance: Arc<Governance>,
         unity_factory: Option<Arc<UnityObjectStoreFactory>>,
         lineage: Option<OpenLineageClient>,
         lineage_config: OpenLineageConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
-            policy,
+            governance,
             unity_factory,
             unity_endpoint: None,
             unity_region: None,
             lineage,
             lineage_config,
-            identity: Arc::new(NoopIdentityProvider),
             enrichment_cache: DashMap::new(),
-            fact_store: Arc::new(datafusion_policy_cedar::InMemoryFactStore::new()),
+            object_store: crate::config::ObjectStoreConfig::default(),
         })
+    }
+
+    /// Set the S3-compatible object store registered on each session's runtime.
+    /// Defaults to the seaweedfs dev gateway (`ObjectStoreConfig::default`);
+    /// `main.rs` overrides it from the `[object-store]` config. Called once at
+    /// wiring time, before the `Engine` `Arc` is shared.
+    pub fn with_object_store(
+        mut self: Arc<Self>,
+        object_store: crate::config::ObjectStoreConfig,
+    ) -> Arc<Self> {
+        let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
+        engine.object_store = object_store;
+        self
     }
 
     /// Record the UC REST endpoint + AWS region so the engine can build a
@@ -137,47 +147,34 @@ impl Engine {
         self
     }
 
-    /// The process-wide session fact store (taint ledger). The agent-tool PEP
-    /// reads observed taints back from here by correlation id; until that PEP is
-    /// wired (PR7) this is exercised only by tests.
+    /// The process-wide session fact store (taint ledger), from the governance
+    /// profile. The agent-tool PEP reads observed taints back from here by
+    /// correlation id; until that PEP is wired (PR7) this is exercised only by
+    /// tests.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn fact_store(&self) -> Arc<dyn datafusion_policy_cedar::FactStore> {
-        self.fact_store.clone()
+        self.governance.fact_store().clone()
     }
 
-    /// Replace the identity provider (e.g. a config- or IdP-backed one). The
-    /// default is a no-op provider returning empty enrichment.
-    pub fn with_identity_provider(
-        mut self: Arc<Self>,
-        identity: Arc<dyn IdentityProvider>,
-    ) -> Arc<Self> {
-        // `Engine` is only shared after construction, so this unwrap holds at
-        // wiring time (before any clone of the Arc escapes).
-        let engine = Arc::get_mut(&mut self).expect("Engine not yet shared");
-        engine.identity = identity;
-        self
-    }
-
-    /// Resolve (and cache) the enrichment for `uid`, then apply it to
-    /// `principal`. Keyed by uid on the process-wide cache so concurrent
-    /// sessions of the same user share one provider call. Fail-closed: a
-    /// provider error propagates so the caller can fail the session.
+    /// Bind (enrich) `principal` through the governance profile's identity
+    /// provider, caching the fully-bound result by uid so concurrent sessions of
+    /// the same user share one provider call.
+    ///
+    /// Delegates to [`Governance::bind_principal`], which is fail-closed under
+    /// [`Posture::Enforcing`](datafusion_policy::Posture::Enforcing) (a provider
+    /// error propagates) and tolerant otherwise (logged, un-enriched principal
+    /// returned so a dry run proceeds).
     pub async fn enrich(&self, principal: PrincipalIdentity) -> Result<PrincipalIdentity> {
         let key = principal.uid.to_string();
         if let Some(cached) = self.enrichment_cache.get(&key) {
-            return Ok(principal.enriched(cached.clone()));
+            return Ok(cached.clone());
         }
-        let enrichment = self
-            .identity
-            .enrich(&principal.uid, &PrincipalClaims::default())
-            .await
-            .map_err(|e| {
-                datafusion::error::DataFusionError::External(Box::new(std::io::Error::other(
-                    e.to_string(),
-                )))
-            })?;
-        self.enrichment_cache.insert(key, enrichment.clone());
-        Ok(principal.enriched(enrichment))
+        let bound = self
+            .governance
+            .bind_principal(PrincipalClaims::default(), principal)
+            .await?;
+        self.enrichment_cache.insert(key, bound.clone());
+        Ok(bound)
     }
 
     /// Resolve the [`UnityObjectStoreFactory`] for a session, given an optional
@@ -234,40 +231,28 @@ impl Engine {
             self.lineage_config.clone(),
             Some(principal.clone()),
             unity_factory.clone(),
-            self.policy.clone(),
+            &self.governance,
+            &self.object_store,
         )?;
 
-        let unity = unity_factory.map(|factory| build_unity_resolver(&ctx, factory));
+        // Thread the governance posture into the resolver so the policy-sourcing
+        // fail-closed decision in `record_facts` (fetching UC `/policies`) matches
+        // the session's posture: fail closed under Enforcing, dry-run otherwise.
+        let unity = unity_factory
+            .map(|factory| build_unity_resolver(&ctx, factory, self.governance.posture()));
 
         Ok(Arc::new(Session {
             ctx,
-            policy: self.policy.clone(),
+            // The `Session` carries the policy engine + taint ledger from the
+            // profile so its `ctx()` / tool-authorization path stays engine-typed.
+            policy: self.governance.engine().clone(),
             principal,
             unity,
             statements: DashMap::new(),
             created_at: Instant::now(),
             last_used_ms: AtomicU64::new(0),
-            fact_store: self.fact_store.clone(),
+            fact_store: self.governance.fact_store().clone(),
         }))
-    }
-}
-
-/// The default identity provider: returns empty enrichment for every principal.
-///
-/// Keeps an unconfigured server (and the anonymous dev path) working — an empty
-/// enrichment is a *success*, leaving the principal with only its request-time
-/// attributes and no group membership.
-#[derive(Debug)]
-struct NoopIdentityProvider;
-
-#[async_trait::async_trait]
-impl IdentityProvider for NoopIdentityProvider {
-    async fn enrich(
-        &self,
-        _uid: &str,
-        _claims: &PrincipalClaims,
-    ) -> std::result::Result<PrincipalEnrichment, datafusion_policy_cedar::IdentityError> {
-        Ok(PrincipalEnrichment::default())
     }
 }
 
@@ -421,7 +406,7 @@ impl Session {
         self.ctx
             .state()
             .config()
-            .get_extension::<crate::catalog::CatalogFactSinkExt>()
+            .get_extension::<datafusion_policy_cedar::CatalogFactSinkExt>()
             .map(|ext| ext.0.clone())
             .unwrap_or_default()
     }
@@ -573,6 +558,16 @@ mod tests {
         PrincipalIdentity::new(format!("User::\"{name}\""))
     }
 
+    /// An `Enforcing` governance profile over an allow-all engine — the test
+    /// analog of the production profile for tests that don't exercise a deny.
+    fn allow_governance() -> Arc<Governance> {
+        Governance::builder()
+            .posture(datafusion_policy::Posture::Enforcing)
+            .engine(Arc::new(StaticPolicy::new(Decision::Allow)))
+            .build()
+            .expect("enforcing governance with an engine builds")
+    }
+
     /// A `Transport` that records every emitted event, for asserting on lineage
     /// emission in tests.
     #[derive(Debug, Default, Clone)]
@@ -596,7 +591,7 @@ mod tests {
         let recorder = Recorder::default();
         let client = OpenLineageClient::new(Arc::new(recorder.clone()));
         let engine = Engine::new(
-            Arc::new(StaticPolicy::new(Decision::Allow)),
+            allow_governance(),
             None,
             Some(client),
             OpenLineageConfig::default(),
@@ -605,12 +600,7 @@ mod tests {
     }
 
     fn engine() -> Arc<Engine> {
-        Engine::new(
-            Arc::new(StaticPolicy::new(Decision::Allow)),
-            None,
-            None,
-            OpenLineageConfig::default(),
-        )
+        Engine::new(allow_governance(), None, None, OpenLineageConfig::default())
     }
 
     #[tokio::test]
@@ -761,7 +751,7 @@ mod tests {
         let recorder = Recorder::default();
         let client = OpenLineageClient::new(Arc::new(recorder.clone()));
         let eng = Engine::new(
-            Arc::new(StaticPolicy::new(Decision::Allow)),
+            allow_governance(),
             None,
             Some(client),
             OpenLineageConfig::default(),

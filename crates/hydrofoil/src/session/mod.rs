@@ -22,7 +22,7 @@ use datafusion::{
 };
 use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
 use datafusion_policy_cedar::{
-    Decision, EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
+    EvalContextProvider as _, PrincipalIdentity, SessionConfigEvalContextProvider,
 };
 use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
@@ -595,13 +595,21 @@ pub fn create_session(
     lineage: Option<OpenLineageClient>,
     lineage_config: OpenLineageConfig,
 ) -> Result<SessionContext> {
+    // A disabled-posture governance profile: no enforcement installed (the
+    // allow-all analog of the former `StaticPolicy(Allow)`), for the standalone /
+    // metadata-only session path.
+    let governance = datafusion_policy::Governance::builder()
+        .posture(datafusion_policy::Posture::Disabled)
+        .build()
+        .expect("disabled governance builds without an engine");
     create_session_for(
         session_id,
         lineage,
         lineage_config,
         None,
         None,
-        Arc::new(crate::policy::StaticPolicy::new(Decision::Allow)),
+        &governance,
+        &crate::config::ObjectStoreConfig::default(),
     )
 }
 
@@ -618,7 +626,8 @@ pub fn create_session_for(
     lineage_config: OpenLineageConfig,
     principal: Option<PrincipalIdentity>,
     unity_factory: Option<Arc<UnityObjectStoreFactory>>,
-    policy: Arc<dyn Policy>,
+    governance: &Arc<datafusion_policy::Governance>,
+    object_store: &crate::config::ObjectStoreConfig,
 ) -> Result<SessionContext> {
     let options = InstrumentationOptions::builder()
         .record_metrics(true)
@@ -636,27 +645,29 @@ pub fn create_session_for(
         .with_information_schema(true)
         .with_default_catalog_and_schema("hydrofoil", "default");
 
-    // Bind the principal (the access-control analog of the lineage context) into
-    // the config so the policy layer / providers can resolve it from a
-    // `SessionState` during planning.
+    // Always attach a catalog fact sink, so `build_delta` (during resolution) has
+    // somewhere to write gathered facts even on the no-principal / metadata-only
+    // path. When a principal is present, `governance.attach` overwrites this with
+    // its own fresh per-session sink (and adds the principal + engine + fact-store
+    // extensions in the same call) — the fresh sink still wins because it is set
+    // last.
+    session_config.set_extension(Arc::new(
+        datafusion_policy_cedar::CatalogFactSinkExt::default(),
+    ));
+
+    // Attach ALL the enforcement-layer `SessionConfig` extensions in one call:
+    // the principal (`PrincipalExt`), a fresh per-session `CatalogFactSinkExt`
+    // (so `build_delta`'s gathered facts and the policy layer share one sink),
+    // the `PolicyEngineExt` (the engine the secured-view resolver seam
+    // `govern_provider_from_config` discovers — the same engine the composed
+    // planner receives below), and the `FactStoreExt` / any profile
+    // `FunctionResolverExt`. `attach` takes the principal as a required argument,
+    // so "forgot to bind the principal" is unrepresentable here. With no
+    // principal (metadata-only paths / tests) skip it; the planner fails closed
+    // under Enforcing if a principal is genuinely absent downstream.
     if let Some(principal) = principal {
-        session_config = crate::identity::with_principal(session_config, principal);
+        session_config = governance.attach(session_config, principal);
     }
-
-    // Attach a per-session catalog fact sink BEFORE the resolver captures the
-    // task context, so `build_delta` writes gathered facts into the same sink
-    // the policy layer reads. Keyed by TableReference and overwritten on
-    // re-resolution, so per-query freshness holds even though the sink is
-    // session-scoped (see docs/adr/0007-fact-gathering-pips.md).
-    session_config.set_extension(Arc::new(crate::catalog::CatalogFactSinkExt::default()));
-
-    // Bind the policy engine into the config so the secured-view provider seam
-    // (`govern_provider_from_config`, applied to UC-resolved tables in
-    // `LakehouseTableProviderBuilder::build_delta`) can discover it. It is the
-    // same engine the query planner receives below; the resolver tier governs a
-    // resolved provider at construction, and the shared `CatalogFactSink` marker
-    // keeps the planner tier from governing the inlined scan a second time.
-    session_config.set_extension(Arc::new(datafusion_policy::PolicyEngineExt(policy.clone())));
 
     // When Unity Catalog is wired, make its client available to the physical
     // planner so `CREATE`/`DROP CATALOG`/`SCHEMA` DDL can execute against it.
@@ -670,15 +681,20 @@ pub fn create_session_for(
         session_config.set_extension(Arc::new(UnityFactoryExt(factory.clone())));
 
         // Resolve policy-named mask functions (`@mask_fn`) against the UC
-        // Functions API. `SessionConfigEvalContextProvider` reads this into
+        // Functions API. This is inherently *per-session* (it binds this session's
+        // UC factory, which may carry a per-user token), so it overrides any
+        // profile-level `FunctionResolverExt` `governance.attach` set —
+        // `SessionConfigEvalContextProvider` reads it into
         // `EvalContext.function_resolver`; a name that fails to resolve masks the
-        // column with the default literal (fail-closed at the Cedar layer).
+        // column with the default literal (fail-closed at the policy layer).
         session_config.set_extension(Arc::new(datafusion_policy_cedar::FunctionResolverExt(
             Arc::new(crate::catalog::UnityFunctionResolver::new(
                 factory.unity_client().clone(),
             )),
         )));
     }
+
+    let policy = governance.engine().clone();
 
     // The single session query planner composes policy + lineage over one shared
     // physical planner (see `GovernedLineagePlanner`): it governs + gates first
@@ -693,6 +709,7 @@ pub fn create_session_for(
     let query_planner: Arc<dyn datafusion::execution::context::QueryPlanner + Send + Sync> =
         Arc::new(crate::planner::GovernedLineagePlanner::new(
             policy,
+            governance.posture(),
             Arc::new(datafusion_policy_cedar::SessionConfigPrincipalProvider),
             Arc::new(datafusion_policy_cedar::SessionConfigEvalContextProvider),
             vec![Arc::new(UnityCatalogPlanner)],
@@ -718,7 +735,7 @@ pub fn create_session_for(
 
     let ctx = SessionContext::new_with_state(session_state);
 
-    update_session(&ctx.state())?;
+    update_session(&ctx.state(), object_store)?;
 
     let catalog = MemoryCatalogProvider::new();
     catalog.register_schema(
@@ -739,6 +756,7 @@ pub fn create_session_for(
 pub fn build_unity_resolver(
     ctx: &SessionContext,
     factory: Arc<UnityObjectStoreFactory>,
+    posture: datafusion_policy::Posture,
 ) -> Arc<UnityCatalogProviderList> {
     let runtime = ctx.runtime_env();
     let builder =
@@ -748,28 +766,49 @@ pub fn build_unity_resolver(
             // deterministic tests keep the convention provider (the builder's default).
             .with_governed_tag_provider(Arc::new(crate::catalog::UnityGovernedTagProvider::new(
                 factory.unity_client().clone(),
-            )));
+            )))
+            // Source the UC-ABAC row-filter / column-mask policy bindings from the
+            // `/policies` API (`include_inherited=true`). Carries the server's
+            // enforcement posture so a sourcing failure fails closed under Enforcing.
+            .with_policy_provider(
+                Arc::new(crate::catalog::UnityPolicyBindingProvider::new(
+                    factory.unity_client().clone(),
+                )),
+                posture,
+            );
     Arc::new(UnityCatalogProviderList::new(factory, runtime, builder))
 }
 
-fn update_session(session: &dyn Session) -> Result<()> {
-    add_seaweedfs(session, Handle::current())?;
+fn update_session(
+    session: &dyn Session,
+    object_store: &crate::config::ObjectStoreConfig,
+) -> Result<()> {
+    register_object_store(session, Handle::current(), object_store)?;
     Ok(())
 }
 
-fn add_seaweedfs(session: &dyn Session, handle: Handle) -> Result<()> {
+/// Register the configured S3-compatible object store on the session's runtime,
+/// keyed by `s3://<bucket>/`. Defaults reproduce the historical seaweedfs dev
+/// gateway (see [`crate::config::ObjectStoreConfig`]); a deployment overrides
+/// them via `[object-store]`.
+fn register_object_store(
+    session: &dyn Session,
+    handle: Handle,
+    cfg: &crate::config::ObjectStoreConfig,
+) -> Result<()> {
     let object_store = Arc::new(
         AmazonS3Builder::new()
             .with_http_connector(SpawnedReqwestConnector::new(handle))
-            .with_access_key_id("seaweed-key-id")
-            .with_secret_access_key("seaweed-access-key")
-            .with_endpoint("http://localhost:8333/")
-            .with_bucket_name("open-lakehouse")
-            .with_allow_http(true)
+            .with_access_key_id(&cfg.access_key_id)
+            .with_secret_access_key(&cfg.secret_access_key)
+            .with_endpoint(&cfg.endpoint)
+            .with_bucket_name(&cfg.bucket)
+            .with_allow_http(cfg.allow_http)
             .build()?,
     );
-    let instrumented = instrument_object_store(object_store, "seaweedfs");
-    let url = url::Url::parse("s3://open-lakehouse/").unwrap();
+    let instrumented = instrument_object_store(object_store, "object-store");
+    let url = url::Url::parse(&format!("s3://{}/", cfg.bucket))
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
     session
         .runtime_env()
         .register_object_store(&url, instrumented);
@@ -803,21 +842,46 @@ mod integration_tests {
         PrincipalIdentity::new(format!("User::\"{name}\"")).with_attribute("region", "eu")
     }
 
+    /// An `Enforcing` governance profile wrapping `policy` — the test analog of
+    /// the production profile, so `create_session_for` / `Engine::new` enforce the
+    /// given engine on the statement path.
+    fn governance_for(policy: Arc<dyn Policy>) -> Arc<datafusion_policy::Governance> {
+        datafusion_policy::Governance::builder()
+            .posture(datafusion_policy::Posture::Enforcing)
+            .engine(policy)
+            .build()
+            .expect("enforcing governance with an engine builds")
+    }
+
     async fn ctx_with_table(
         policy: Arc<dyn Policy>,
+        lineage: Option<OpenLineageClient>,
+    ) -> LakehouseCtx {
+        ctx_with_table_at_posture(policy, datafusion_policy::Posture::Enforcing, lineage).await
+    }
+
+    async fn ctx_with_table_at_posture(
+        policy: Arc<dyn Policy>,
+        posture: datafusion_policy::Posture,
         lineage: Option<OpenLineageClient>,
     ) -> LakehouseCtx {
         // Build the session *with* the policy so its `PolicyQueryPlanner` enforces
         // it on the statement path (mirroring `Engine::new_session`), and bind the
         // principal so the planner's default provider can resolve it. The same
         // policy is also handed to `LakehouseCtx` for the write path's explicit gate.
+        let governance = datafusion_policy::Governance::builder()
+            .posture(posture)
+            .engine(policy.clone())
+            .build()
+            .expect("governance with an engine builds");
         let session = create_session_for(
             None,
             lineage,
             OpenLineageConfig::default(),
             Some(principal("alice")),
             None,
-            policy.clone(),
+            &governance,
+            &crate::config::ObjectStoreConfig::default(),
         )
         .unwrap();
         let schema = Arc::new(Schema::new(vec![
@@ -848,7 +912,7 @@ mod integration_tests {
         let ext = session
             .state()
             .config()
-            .get_extension::<crate::catalog::CatalogFactSinkExt>()
+            .get_extension::<datafusion_policy_cedar::CatalogFactSinkExt>()
             .expect("catalog fact sink attached to the session config");
 
         use datafusion_policy_cedar::TableFacts;
@@ -911,6 +975,30 @@ mod integration_tests {
             err.to_string().contains("not authorized"),
             "expected an authorization error, got: {err}"
         );
+    }
+
+    /// Under `Permissive` posture the same `DenyAll` policy does **not** block:
+    /// the planner evaluates + logs `would_block` but plans the query anyway
+    /// (the dry-run stance). The mirror of `create_physical_plan_denies_on_policy`,
+    /// proving the posture threads from `Governance` through the composed planner.
+    #[tokio::test]
+    async fn permissive_posture_does_not_block_a_deny() {
+        let ctx = ctx_with_table_at_posture(
+            Arc::new(DenyAll),
+            datafusion_policy::Posture::Permissive,
+            None,
+        )
+        .await;
+        let session = ctx.session();
+        let plan = session
+            .create_logical_plan("SELECT id FROM t")
+            .await
+            .unwrap();
+        // A Deny under Permissive must not error — the query plans.
+        session
+            .create_physical_plan(&plan)
+            .await
+            .expect("permissive must not block a Deny");
     }
 
     /// The same gate also guards the ingest/delta-connect path
@@ -1099,7 +1187,7 @@ mod integration_tests {
         use crate::policy::StaticPolicy;
 
         let engine = Engine::new(
-            Arc::new(StaticPolicy::new(Decision::Allow)),
+            governance_for(Arc::new(StaticPolicy::new(Decision::Allow))),
             None,
             None,
             OpenLineageConfig::default(),
@@ -1210,7 +1298,12 @@ mod integration_tests {
         async fn run(principal: PrincipalIdentity) -> String {
             let policy =
                 Arc::new(CedarPolicyEngine::from_sources(POLICY, "", Some(SCHEMA)).unwrap());
-            let engine = Engine::new(policy, None, None, OpenLineageConfig::default());
+            let engine = Engine::new(
+                governance_for(policy),
+                None,
+                None,
+                OpenLineageConfig::default(),
+            );
             let session = engine.new_session(principal, None).await.expect("session");
 
             let schema = Arc::new(Schema::new(vec![
@@ -1352,7 +1445,12 @@ mod integration_tests {
         async fn run(principal: PrincipalIdentity) -> String {
             let policy =
                 Arc::new(CedarPolicyEngine::from_sources(POLICY, "", Some(SCHEMA)).unwrap());
-            let engine = Engine::new(policy, None, None, OpenLineageConfig::default());
+            let engine = Engine::new(
+                governance_for(policy),
+                None,
+                None,
+                OpenLineageConfig::default(),
+            );
             let session = engine.new_session(principal, None).await.expect("session");
 
             let schema = Arc::new(Schema::new(vec![
@@ -1430,6 +1528,117 @@ mod integration_tests {
         );
     }
 
+    /// End-to-end column mask + row filter through the **`AbacPolicyEngine`** (the
+    /// UC-ABAC path, no Cedar): a `PolicyBinding` delivered on
+    /// `TableFacts.policies` — exactly what `UnityPolicyBindingProvider` would map
+    /// from a mangrove `/policies` response — drives a `COLUMN_MASK` on the `ssn`
+    /// column (matched by the governed tag `pii=ssn`) and a `ROW_FILTER`. This is
+    /// the full H4→H5 proof: bindings → engine → `TablePolicy` → secured view,
+    /// with the profile built from `AbacPolicyEngine` at `Enforcing`, without a
+    /// live catalog or any Cedar/OCI.
+    #[tokio::test]
+    async fn abac_policy_masks_and_filters_end_to_end() {
+        use std::collections::BTreeMap;
+
+        use datafusion::sql::TableReference;
+        use datafusion_policy::{
+            AbacPolicyEngine, BindingKind, ColumnMatch, FunctionArg, PolicyBinding, TagCondition,
+        };
+        use datafusion_policy_cedar::TableFacts;
+
+        use crate::engine::Engine;
+
+        // A profile over the AbacPolicyEngine (UC-ABAC has no coarse deny — the
+        // engine only produces row filters + column masks).
+        let engine = Engine::new(
+            governance_for(Arc::new(AbacPolicyEngine::new())),
+            None,
+            None,
+            OpenLineageConfig::default(),
+        );
+        let session = engine
+            .new_session(principal("alice"), None)
+            .await
+            .expect("session");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("region", DataType::Utf8, true),
+            Field::new("ssn", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["eu", "us", "eu"])),
+                Arc::new(StringArray::from(vec!["secret-a", "secret-b", "secret-c"])),
+            ],
+        )
+        .unwrap();
+        session
+            .session_context()
+            .register_table(
+                "t",
+                Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+            )
+            .unwrap();
+
+        // What `UnityPolicyBindingProvider` maps + `record_facts` records: the
+        // `ssn` column tagged `pii=ssn` and a column-mask binding matching it
+        // (masked to the default `***` literal, since the named function has no
+        // resolver wired — the fail-closed contract).
+        session.catalog_fact_sink().record(
+            TableReference::bare("t"),
+            TableFacts {
+                governed_column_tags: HashMap::from([(
+                    "ssn".to_string(),
+                    BTreeMap::from([("pii".to_string(), "ssn".to_string())]),
+                )]),
+                policies: vec![PolicyBinding {
+                    name: "mask_ssn".to_string(),
+                    kind: BindingKind::ColumnMask,
+                    to_principals: vec!["account users".to_string()],
+                    except_principals: vec![],
+                    when_condition: vec![],
+                    match_columns: vec![ColumnMatch {
+                        condition: TagCondition {
+                            key: "pii".to_string(),
+                            value: Some("ssn".to_string()),
+                        },
+                        alias: "col".to_string(),
+                    }],
+                    function: "unresolved.mask.fn".to_string(),
+                    using_args: vec![FunctionArg::Alias("col".to_string())],
+                }],
+                ..Default::default()
+            },
+        );
+
+        let lh = session.lakehouse_for_query(LineageContext::default(), None);
+        let plan = lh
+            .create_logical_plan("SELECT id, region, ssn FROM t")
+            .await
+            .unwrap();
+        let physical = lh.create_physical_plan(&plan).await.unwrap();
+        let batches = datafusion::physical_plan::collect(physical, lh.task_ctx())
+            .await
+            .unwrap();
+        let pretty = datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+            .unwrap()
+            .to_string();
+
+        // The ABAC column-mask binding masked `ssn` (fail-closed `***`, no
+        // resolver) — the raw values never surface.
+        assert!(
+            pretty.contains("***"),
+            "ssn masked by ABAC binding: {pretty}"
+        );
+        assert!(
+            !pretty.contains("secret-a") && !pretty.contains("secret-b"),
+            "raw ssn must not leak: {pretty}"
+        );
+    }
+
     /// The coarse write gate still fires under the resolver-tier secured-view
     /// wrapper: `authorize_logical_plan` (the write/ingest path's explicit gate,
     /// the same one Flight ingest and managed-append run) authorizes an `INSERT`
@@ -1472,7 +1681,8 @@ mod integration_tests {
                 OpenLineageConfig::default(),
                 Some(principal.clone()),
                 None,
-                policy.clone(),
+                &governance_for(policy.clone()),
+                &crate::config::ObjectStoreConfig::default(),
             )
             .unwrap();
             let schema = Arc::new(Schema::new(vec![
@@ -1555,7 +1765,7 @@ mod integration_tests {
         }
 
         let engine = Engine::new(
-            Arc::new(Guardrail),
+            governance_for(Arc::new(Guardrail)),
             None,
             None,
             OpenLineageConfig::default(),

@@ -74,12 +74,153 @@ pub struct LineageConfig {
 
 /// Cedar policy enforcement. Enabled when [`oci_ref`](PolicyConfig::oci_ref) is
 /// set; otherwise the server runs allow-all (open, ungoverned).
+///
+/// **Deprecated** in favor of the [`[governance]`](GovernanceConfig) section; a
+/// bare `[policy] oci_ref` is still accepted for one release as an alias that
+/// maps to `posture = "enforcing", sources = ["cedar-oci"]` (with a warning at
+/// startup). See [`GovernanceConfig::resolve`].
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct PolicyConfig {
     /// OCI reference to a Cedar policy image, e.g.
     /// `localhost:10100/hydrofoil/plan-policy:latest`.
     pub oci_ref: Option<String>,
+}
+
+/// The runtime enforcement posture, chosen explicitly (never the accidental
+/// result of a forgotten wire-up). Maps 1:1 onto
+/// [`datafusion_policy::Posture`]. Defaults to [`Disabled`](Posture::Disabled) —
+/// an ungoverned server must be a deliberate, logged choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Posture {
+    /// No enforcement installed at all (the only ungoverned mode).
+    #[default]
+    Disabled,
+    /// Evaluate + structured-log what *would* be enforced, enforce nothing
+    /// (the rollout / dry-run stance).
+    Permissive,
+    /// Fail-closed enforcement (the production stance).
+    Enforcing,
+}
+
+impl From<Posture> for datafusion_policy::Posture {
+    fn from(p: Posture) -> Self {
+        match p {
+            Posture::Disabled => datafusion_policy::Posture::Disabled,
+            Posture::Permissive => datafusion_policy::Posture::Permissive,
+            Posture::Enforcing => datafusion_policy::Posture::Enforcing,
+        }
+    }
+}
+
+/// A policy engine source composed into the runtime [`Governance`] profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicySource {
+    /// The UC-ABAC engine over `/policies`-sourced bindings (no Cedar/OCI).
+    UnityAbac,
+    /// The Cedar engine loaded from an OCI policy image.
+    CedarOci,
+}
+
+/// The identity provider (principal enrichment PIP) selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdentityProvider {
+    /// No enrichment (pass-through). The default.
+    #[default]
+    None,
+    /// The built-in demo directory map — a fixed set of users/groups for local
+    /// experimentation. Only constructed when explicitly chosen.
+    Demo,
+}
+
+/// The Cedar-source sub-config, read only when `sources` includes `cedar-oci`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CedarConfig {
+    /// OCI reference to a Cedar policy image, e.g.
+    /// `localhost:10100/hydrofoil/plan-policy:latest`.
+    pub oci_ref: Option<String>,
+}
+
+/// The identity sub-config.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct IdentityConfig {
+    /// Which identity provider to install. Defaults to `none` (pass-through).
+    pub provider: IdentityProvider,
+}
+
+/// Governance (policy enforcement) configuration — the single, explicit source
+/// of the runtime [`Posture`], the composed engine sources, and the identity
+/// provider. Replaces the fail-*open* `[policy]` section: an unconfigured server
+/// is `disabled` (loudly logged), never a silent allow-all.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct GovernanceConfig {
+    /// The enforcement posture. Defaults to [`Posture::Disabled`].
+    pub posture: Posture,
+    /// The engine sources composed into the profile. Empty under `disabled`;
+    /// required (non-empty) otherwise.
+    pub sources: Vec<PolicySource>,
+    /// Policy-binding cache TTL (seconds) for the UC `/policies` provider.
+    pub policy_cache_ttl_secs: Option<u64>,
+    /// Cedar-source settings (read only when `sources` includes `cedar-oci`).
+    pub cedar: CedarConfig,
+    /// Identity provider settings.
+    pub identity: IdentityConfig,
+}
+
+/// Error raised when the `[governance]` configuration cannot enforce what its
+/// posture promises — surfaced at startup so a misconfigured deployment refuses
+/// to start rather than silently under-enforcing.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum GovernanceConfigError {
+    #[error(
+        "governance posture is {posture:?} but no sources are configured; \
+         set governance.sources (e.g. [\"unity-abac\"]) or posture = \"disabled\""
+    )]
+    NoSources { posture: Posture },
+    #[error(
+        "governance sources include \"unity-abac\" but unity.endpoint is not set; \
+         UC-ABAC policies are fetched from Unity Catalog"
+    )]
+    UnityAbacWithoutEndpoint,
+    #[error("governance sources include \"cedar-oci\" but governance.cedar.oci_ref is not set")]
+    CedarOciWithoutRef,
+}
+
+/// The validated, normalized governance profile the server wiring consumes — the
+/// output of [`Config::resolve_governance`] after applying the deprecated
+/// `[policy]` alias and the startup validation. All invariants the enforcement
+/// layer relies on hold here (an enforcing posture has ≥1 source; each source's
+/// required config is present), so `main.rs` can build the `Governance` without
+/// re-checking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedGovernance {
+    /// The runtime posture.
+    pub posture: Posture,
+    /// The engine sources (empty only under `disabled`).
+    pub sources: Vec<PolicySource>,
+    /// The Cedar OCI reference (present iff `sources` includes `cedar-oci`).
+    pub cedar_oci_ref: Option<String>,
+    /// The policy-binding cache TTL for the UC provider.
+    pub policy_cache_ttl_secs: Option<u64>,
+    /// The identity provider selection.
+    pub identity_provider: IdentityProvider,
+}
+
+impl ResolvedGovernance {
+    /// Whether the UC-ABAC engine is one of the composed sources.
+    pub fn has_unity_abac(&self) -> bool {
+        self.sources.contains(&PolicySource::UnityAbac)
+    }
+    /// Whether the Cedar/OCI engine is one of the composed sources.
+    pub fn has_cedar_oci(&self) -> bool {
+        self.sources.contains(&PolicySource::CedarOci)
+    }
 }
 
 /// Unity Catalog integration. Enabled when [`endpoint`](UnityConfig::endpoint)
@@ -97,6 +238,52 @@ pub struct UnityConfig {
     /// AWS region hint for the UC object-store factory. Falls back to
     /// `AWS_REGION` (see [`SECRET_ENV_KEYS`]).
     pub region: Option<String>,
+}
+
+/// Default dev object store: the seaweedfs S3 gateway the UC quickstart runs.
+/// The values are the historical hardcoded defaults, now overridable.
+fn default_object_store_endpoint() -> String {
+    "http://localhost:8333/".into()
+}
+fn default_object_store_bucket() -> String {
+    "open-lakehouse".into()
+}
+fn default_object_store_access_key_id() -> String {
+    "seaweed-key-id".into()
+}
+fn default_object_store_secret_access_key() -> String {
+    "seaweed-access-key".into()
+}
+
+/// The S3-compatible object store registered on every session's runtime. The
+/// defaults reproduce the historical hardcoded seaweedfs dev gateway (the UC
+/// quickstart's S3 endpoint); a deployment overrides them via `[object-store]`.
+/// Credentials are dev defaults, overridable via env secrets.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ObjectStoreConfig {
+    /// S3 endpoint URL (e.g. `http://localhost:8333/` for the seaweedfs gateway).
+    pub endpoint: String,
+    /// Bucket the lakehouse data lives in.
+    pub bucket: String,
+    /// S3 access key id. A dev default; override via `AWS_ACCESS_KEY_ID`.
+    pub access_key_id: String,
+    /// S3 secret access key. A dev default; override via `AWS_SECRET_ACCESS_KEY`.
+    pub secret_access_key: String,
+    /// Whether to allow plain HTTP (true for the local dev gateway).
+    pub allow_http: bool,
+}
+
+impl Default for ObjectStoreConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_object_store_endpoint(),
+            bucket: default_object_store_bucket(),
+            access_key_id: default_object_store_access_key_id(),
+            secret_access_key: default_object_store_secret_access_key(),
+            allow_http: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,8 +310,13 @@ pub struct Config {
     /// Idle TTL after which a session (and its statements) is swept.
     pub session_ttl_secs: u64,
     pub lineage: LineageConfig,
+    /// Deprecated: superseded by [`governance`](Self::governance). A bare
+    /// `[policy] oci_ref` is accepted as an alias for one release.
     pub policy: PolicyConfig,
     pub unity: UnityConfig,
+    pub governance: GovernanceConfig,
+    #[serde(rename = "object-store")]
+    pub object_store: ObjectStoreConfig,
 }
 
 impl Default for Config {
@@ -140,6 +332,8 @@ impl Default for Config {
             lineage: LineageConfig::default(),
             policy: PolicyConfig::default(),
             unity: UnityConfig::default(),
+            governance: GovernanceConfig::default(),
+            object_store: ObjectStoreConfig::default(),
         }
     }
 }
@@ -220,6 +414,81 @@ impl Config {
                 _ => continue,
             };
         }
+    }
+
+    /// Resolve and validate the runtime governance profile from the
+    /// `[governance]` section, applying the deprecated `[policy]` alias, and
+    /// **refusing to start** (returning `Err`) when the configuration cannot
+    /// enforce what its posture promises. This replaces the previous silent
+    /// fail-*open* (a missing `policy.oci_ref` yielding allow-all).
+    ///
+    /// Precedence: an explicit `[governance]` section (posture other than the
+    /// default `disabled`, or any `sources`) wins. Otherwise a bare `[policy]
+    /// oci_ref` is honored as the deprecated alias — mapping to
+    /// `posture = enforcing, sources = [cedar-oci]`, with a warning logged.
+    ///
+    /// Validation (all fail closed at startup):
+    /// - a non-`disabled` posture requires ≥1 source;
+    /// - `unity-abac` requires `unity.endpoint`;
+    /// - `cedar-oci` requires `governance.cedar.oci_ref`.
+    pub fn resolve_governance(&self) -> Result<ResolvedGovernance, GovernanceConfigError> {
+        let gov = &self.governance;
+        let governance_configured = gov.posture != Posture::Disabled || !gov.sources.is_empty();
+
+        // The deprecated `[policy] oci_ref` alias, honored only when no explicit
+        // `[governance]` section is present.
+        let legacy_oci = self.policy.oci_ref.as_deref().filter(|r| !r.is_empty());
+
+        let (posture, sources, cedar_oci_ref) = if governance_configured {
+            let cedar_ref = gov.cedar.oci_ref.clone().filter(|r| !r.is_empty());
+            (gov.posture, gov.sources.clone(), cedar_ref)
+        } else if let Some(reference) = legacy_oci {
+            tracing::warn!(
+                target: "hydrofoil::config",
+                "[policy] oci_ref is deprecated; use [governance] posture=\"enforcing\" \
+                 sources=[\"cedar-oci\"] with [governance.cedar] oci_ref=... — mapping the \
+                 legacy value for now"
+            );
+            (
+                Posture::Enforcing,
+                vec![PolicySource::CedarOci],
+                Some(reference.to_string()),
+            )
+        } else {
+            // Nothing configured: disabled, and say so loudly.
+            tracing::warn!(
+                target: "hydrofoil::config",
+                "governance posture is DISABLED (no [governance] section and no [policy] \
+                 oci_ref); the server runs UNGOVERNED — set [governance] to enable enforcement"
+            );
+            (Posture::Disabled, Vec::new(), None)
+        };
+
+        // Validation — fail closed at startup.
+        if posture != Posture::Disabled && sources.is_empty() {
+            return Err(GovernanceConfigError::NoSources { posture });
+        }
+        if sources.contains(&PolicySource::UnityAbac)
+            && self
+                .unity
+                .endpoint
+                .as_deref()
+                .filter(|e| !e.is_empty())
+                .is_none()
+        {
+            return Err(GovernanceConfigError::UnityAbacWithoutEndpoint);
+        }
+        if sources.contains(&PolicySource::CedarOci) && cedar_oci_ref.is_none() {
+            return Err(GovernanceConfigError::CedarOciWithoutRef);
+        }
+
+        Ok(ResolvedGovernance {
+            posture,
+            sources,
+            cedar_oci_ref,
+            policy_cache_ttl_secs: gov.policy_cache_ttl_secs,
+            identity_provider: gov.identity.provider,
+        })
     }
 }
 
@@ -346,5 +615,181 @@ mod tests {
     #[test]
     fn test_load_missing_explicit_path_is_error() {
         assert!(Config::load(Some("/nonexistent/hydrofoil.toml")).is_err());
+    }
+
+    // --- [governance] + [object-store] (H6) ---
+
+    #[test]
+    fn governance_defaults_to_disabled() {
+        let cfg = from_toml("").unwrap();
+        assert_eq!(cfg.governance.posture, Posture::Disabled);
+        assert!(cfg.governance.sources.is_empty());
+        assert_eq!(cfg.governance.identity.provider, IdentityProvider::None);
+        // Resolving an empty config yields a disabled profile (no error).
+        let resolved = cfg.resolve_governance().unwrap();
+        assert_eq!(resolved.posture, Posture::Disabled);
+        assert!(resolved.sources.is_empty());
+    }
+
+    #[test]
+    fn object_store_defaults_are_the_seaweedfs_dev_gateway() {
+        let cfg = from_toml("").unwrap();
+        assert_eq!(cfg.object_store.endpoint, "http://localhost:8333/");
+        assert_eq!(cfg.object_store.bucket, "open-lakehouse");
+        assert_eq!(cfg.object_store.access_key_id, "seaweed-key-id");
+        assert_eq!(cfg.object_store.secret_access_key, "seaweed-access-key");
+        assert!(cfg.object_store.allow_http);
+    }
+
+    #[test]
+    fn object_store_section_overrides_defaults() {
+        let cfg = from_toml(
+            r#"
+            [object-store]
+            endpoint = "http://minio:9000/"
+            bucket = "lake"
+            allow_http = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.object_store.endpoint, "http://minio:9000/");
+        assert_eq!(cfg.object_store.bucket, "lake");
+        assert!(!cfg.object_store.allow_http);
+        // Untouched credentials keep their dev defaults.
+        assert_eq!(cfg.object_store.access_key_id, "seaweed-key-id");
+    }
+
+    #[test]
+    fn governance_unity_abac_parses_and_resolves() {
+        let cfg = from_toml(
+            r#"
+            [unity]
+            endpoint = "http://uc:8081/"
+            [governance]
+            posture = "enforcing"
+            sources = ["unity-abac"]
+            policy_cache_ttl_secs = 15
+            [governance.identity]
+            provider = "demo"
+            "#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_governance().unwrap();
+        assert_eq!(resolved.posture, Posture::Enforcing);
+        assert!(resolved.has_unity_abac());
+        assert!(!resolved.has_cedar_oci());
+        assert_eq!(resolved.policy_cache_ttl_secs, Some(15));
+        assert_eq!(resolved.identity_provider, IdentityProvider::Demo);
+    }
+
+    #[test]
+    fn governance_enforcing_unity_abac_without_endpoint_is_rejected() {
+        let cfg = from_toml(
+            r#"
+            [governance]
+            posture = "enforcing"
+            sources = ["unity-abac"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.resolve_governance(),
+            Err(GovernanceConfigError::UnityAbacWithoutEndpoint)
+        );
+    }
+
+    #[test]
+    fn governance_cedar_oci_without_ref_is_rejected() {
+        let cfg = from_toml(
+            r#"
+            [governance]
+            posture = "enforcing"
+            sources = ["cedar-oci"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.resolve_governance(),
+            Err(GovernanceConfigError::CedarOciWithoutRef)
+        );
+    }
+
+    #[test]
+    fn governance_cedar_oci_with_ref_resolves() {
+        let cfg = from_toml(
+            r#"
+            [governance]
+            posture = "permissive"
+            sources = ["cedar-oci"]
+            [governance.cedar]
+            oci_ref = "localhost:10100/hydrofoil/plan-policy:latest"
+            "#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_governance().unwrap();
+        assert_eq!(resolved.posture, Posture::Permissive);
+        assert!(resolved.has_cedar_oci());
+        assert_eq!(
+            resolved.cedar_oci_ref.as_deref(),
+            Some("localhost:10100/hydrofoil/plan-policy:latest")
+        );
+    }
+
+    #[test]
+    fn governance_non_disabled_without_sources_is_rejected() {
+        let cfg = from_toml(
+            r#"
+            [governance]
+            posture = "enforcing"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.resolve_governance(),
+            Err(GovernanceConfigError::NoSources {
+                posture: Posture::Enforcing
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_policy_oci_ref_maps_to_cedar_enforcing() {
+        // The deprecated `[policy] oci_ref` alias (no `[governance]` section).
+        let cfg = from_toml(
+            r#"
+            [policy]
+            oci_ref = "localhost:10100/hydrofoil/plan-policy:latest"
+            "#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_governance().unwrap();
+        assert_eq!(resolved.posture, Posture::Enforcing);
+        assert!(resolved.has_cedar_oci());
+        assert_eq!(
+            resolved.cedar_oci_ref.as_deref(),
+            Some("localhost:10100/hydrofoil/plan-policy:latest")
+        );
+    }
+
+    #[test]
+    fn explicit_governance_wins_over_legacy_policy_alias() {
+        // Both present: the explicit `[governance]` section takes precedence, and
+        // the legacy `[policy] oci_ref` is ignored.
+        let cfg = from_toml(
+            r#"
+            [policy]
+            oci_ref = "localhost:10100/legacy:latest"
+            [unity]
+            endpoint = "http://uc:8081/"
+            [governance]
+            posture = "enforcing"
+            sources = ["unity-abac"]
+            "#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_governance().unwrap();
+        assert!(resolved.has_unity_abac());
+        assert!(!resolved.has_cedar_oci());
+        assert_eq!(resolved.cedar_oci_ref, None);
     }
 }

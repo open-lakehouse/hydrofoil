@@ -4,6 +4,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::sql::TableReference;
+use datafusion_policy::Posture;
 use datafusion_policy_cedar::TableFacts;
 use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
 use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};
@@ -11,6 +12,7 @@ use unitycatalog_client::UnityCatalogClient;
 use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
 
+use crate::catalog::policies::{NoPolicyBindingProvider, PolicyBindingProvider};
 use crate::catalog::tags::{
     CatalogFactSinkExt, ConventionGovernedTagProvider, ConventionTagProvider, GovernedTagProvider,
     TagProvider, table_acl_facts,
@@ -40,6 +42,15 @@ pub struct LakehouseTableProviderBuilder {
     client: UnityCatalogClient,
     tag_provider: Arc<dyn TagProvider>,
     governed_tag_provider: Arc<dyn GovernedTagProvider>,
+    /// Sources the UC-ABAC row-filter / column-mask policy bindings for a table
+    /// (the `/policies` API). Defaults to [`NoPolicyBindingProvider`] (offline /
+    /// deterministic tests); `build_unity_resolver` selects the UC-API provider.
+    policy_provider: Arc<dyn PolicyBindingProvider>,
+    /// The runtime enforcement posture, threaded from the server's [`Governance`]
+    /// profile so [`record_facts`](Self::record_facts) knows whether a policy
+    /// sourcing failure / poison must fail closed ([`Posture::Enforcing`]) or be
+    /// logged and tolerated (permissive / disabled dry-run).
+    posture: Posture,
 }
 
 impl LakehouseTableProviderBuilder {
@@ -49,6 +60,10 @@ impl LakehouseTableProviderBuilder {
             client,
             tag_provider: Arc::new(ConventionTagProvider),
             governed_tag_provider: Arc::new(ConventionGovernedTagProvider),
+            policy_provider: Arc::new(NoPolicyBindingProvider),
+            // Default to the safe stance; `build_unity_resolver` overrides it from
+            // the session's governance profile.
+            posture: Posture::Enforcing,
         })
     }
 
@@ -64,20 +79,50 @@ impl LakehouseTableProviderBuilder {
             client: self.client.clone(),
             tag_provider: self.tag_provider.clone(),
             governed_tag_provider,
+            policy_provider: self.policy_provider.clone(),
+            posture: self.posture,
+        })
+    }
+
+    /// Override the policy-binding provider (the UC-ABAC row-filter / column-mask
+    /// policies) and the posture governing how a sourcing failure is handled.
+    /// `build_unity_resolver` selects the UC-`/policies` provider carrying the
+    /// server's [`Governance`] posture in production.
+    pub fn with_policy_provider(
+        self: Arc<Self>,
+        policy_provider: Arc<dyn PolicyBindingProvider>,
+        posture: Posture,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            ctx: self.ctx.clone(),
+            client: self.client.clone(),
+            tag_provider: self.tag_provider.clone(),
+            governed_tag_provider: self.governed_tag_provider.clone(),
+            policy_provider,
+            posture,
         })
     }
 
     /// Gather this table's catalog facts and record them into the session's
-    /// fact sink, keyed by the table's fully-qualified reference. A classify
-    /// error is logged and treated as "no tags" — it must not block resolution;
-    /// the reader/writer ACL facts (and the coarse gate) still apply.
-    async fn record_facts(&self, table: &Table) {
+    /// fact sink, keyed by the table's fully-qualified reference.
+    ///
+    /// Tag sourcing (classification + governed tags) is **best-effort**: an error
+    /// is logged and treated as "no tags" — it must not block resolution; the
+    /// reader/writer ACL facts (and the coarse gate) still apply, and the mask
+    /// decision stays fail-closed at the policy layer.
+    ///
+    /// Policy-binding sourcing is **fail-closed**: under [`Posture::Enforcing`] a
+    /// `/policies` API error or an unparsable (poisoned) binding errors table
+    /// resolution rather than running the query under-constrained. Under a
+    /// permissive / disabled dry-run it is logged and resolution proceeds with the
+    /// successfully-parsed bindings so the dry run still exercises the path.
+    async fn record_facts(&self, table: &Table) -> Result<(), TableProviderError> {
         let Some(ext) = self
             .ctx
             .session_config()
             .get_extension::<CatalogFactSinkExt>()
         else {
-            return;
+            return Ok(());
         };
 
         let (owner, readers, writers) = table_acl_facts(table);
@@ -101,6 +146,10 @@ impl LakehouseTableProviderBuilder {
                 Default::default()
             });
 
+        // Policy bindings (the UC-ABAC row-filter / column-mask policies). Unlike
+        // tags, sourcing here is fail-closed under Enforcing (see fn docs).
+        let policies = self.policy_bindings(table).await?;
+
         let table_ref = TableReference::full(
             table.catalog_name.clone(),
             table.schema_name.clone(),
@@ -116,11 +165,58 @@ impl LakehouseTableProviderBuilder {
                 column_tags: classification.column_tags,
                 governed_tags: governed.table_tags,
                 governed_column_tags: governed.column_tags,
-                // UC `/policies` sourcing (neutral `PolicyBinding`s attached per
-                // table) is a follow-up (S7); no bindings are recorded yet.
-                policies: Vec::new(),
+                policies,
             },
         );
+        Ok(())
+    }
+
+    /// Source the table's policy bindings, applying the fail-closed contract:
+    /// under [`Posture::Enforcing`] a sourcing error or a poisoned (partially
+    /// unparsable) result errors resolution; otherwise it is logged and the
+    /// parsed bindings are returned so a dry run still proceeds.
+    async fn policy_bindings(
+        &self,
+        table: &Table,
+    ) -> Result<Vec<datafusion_policy::PolicyBinding>, TableProviderError> {
+        let enforcing = self.posture == Posture::Enforcing;
+        match self.policy_provider.bindings(table).await {
+            Ok(policies) => {
+                if policies.poisoned {
+                    if enforcing {
+                        return Err(DataFusionError::External(
+                            format!(
+                                "policy sourcing for '{}' produced an unparsable binding; \
+                                 refusing to resolve under Enforcing (fail-closed)",
+                                table.full_name
+                            )
+                            .into(),
+                        ));
+                    }
+                    tracing::warn!(
+                        table = %table.full_name, posture = ?self.posture,
+                        "policy sourcing produced an unparsable binding; proceeding with the \
+                         parsed subset (not Enforcing)"
+                    );
+                }
+                Ok(policies.bindings)
+            }
+            Err(e) if enforcing => Err(DataFusionError::External(
+                format!(
+                    "policy sourcing for '{}' failed; refusing to resolve under Enforcing \
+                     (fail-closed): {e}",
+                    table.full_name
+                )
+                .into(),
+            )),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e, table = %table.full_name, posture = ?self.posture,
+                    "policy sourcing failed; proceeding with no bindings (not Enforcing)"
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Wrap a freshly built provider in a secured view (row filters + column
@@ -166,9 +262,10 @@ impl TableProviderBuilder for LakehouseTableProviderBuilder {
         location: &Url,
         table: &Table,
     ) -> Result<Arc<dyn TableProvider>, TableProviderError> {
-        // Gather catalog facts for this table (best-effort; never blocks the
-        // provider build).
-        self.record_facts(table).await;
+        // Gather catalog facts for this table. Tag facts are best-effort; policy
+        // sourcing is fail-closed under Enforcing (an error here aborts the
+        // provider build rather than resolving an under-governed table).
+        self.record_facts(table).await?;
 
         // Ask the catalog whether this is a managed (coordinated-commit) table.
         // The `/delta/v1` loadTable response carries the table type and — for a
@@ -276,7 +373,7 @@ mod tests {
             ..Default::default()
         };
 
-        builder.record_facts(&table).await;
+        builder.record_facts(&table).await.expect("record_facts");
 
         let sink = ctx
             .session_config()
@@ -373,6 +470,90 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         }
+    }
+
+    /// A stub [`PolicyBindingProvider`] returning a fixed [`TablePolicies`] (to
+    /// exercise the poison path) or an error (the API-outage path).
+    #[derive(Debug)]
+    enum StubPolicies {
+        Poisoned,
+        Erroring,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::catalog::policies::PolicyBindingProvider for StubPolicies {
+        async fn bindings(
+            &self,
+            _table: &Table,
+        ) -> Result<crate::catalog::policies::TablePolicies, DataFusionError> {
+            match self {
+                StubPolicies::Poisoned => Ok(crate::catalog::policies::TablePolicies {
+                    bindings: Vec::new(),
+                    poisoned: true,
+                }),
+                StubPolicies::Erroring => {
+                    Err(DataFusionError::External("policies API unavailable".into()))
+                }
+            }
+        }
+    }
+
+    /// A minimal builder whose task-context config carries only the fact sink,
+    /// with a stub policy provider selected at `posture`.
+    fn builder_with_policies(
+        stub: StubPolicies,
+        posture: Posture,
+    ) -> Arc<LakehouseTableProviderBuilder> {
+        let config = SessionConfig::new().with_extension(Arc::new(CatalogFactSinkExt::default()));
+        let ctx = Arc::new(TaskContext::default().with_session_config(config));
+        let client =
+            UnityCatalogClient::new_unauthenticated(Url::parse("http://localhost:0/").unwrap());
+        LakehouseTableProviderBuilder::new(ctx, client)
+            .with_policy_provider(Arc::new(stub), posture)
+    }
+
+    /// Under `Enforcing`, a poisoned (unparsable) binding fails `record_facts`
+    /// closed rather than resolving the table under-constrained.
+    #[tokio::test]
+    async fn poisoned_policy_fails_closed_under_enforcing() {
+        let builder = builder_with_policies(StubPolicies::Poisoned, Posture::Enforcing);
+        let err = builder
+            .record_facts(&table("c", "s", "t"))
+            .await
+            .expect_err("poison must fail closed under Enforcing");
+        assert!(err.to_string().contains("unparsable binding"), "got: {err}");
+    }
+
+    /// Under `Permissive`, the same poison is logged and resolution proceeds
+    /// (the dry-run stance) — `record_facts` succeeds.
+    #[tokio::test]
+    async fn poisoned_policy_tolerated_under_permissive() {
+        let builder = builder_with_policies(StubPolicies::Poisoned, Posture::Permissive);
+        builder
+            .record_facts(&table("c", "s", "t"))
+            .await
+            .expect("permissive tolerates a poisoned binding");
+    }
+
+    /// A `/policies` API outage fails `record_facts` closed under `Enforcing`.
+    #[tokio::test]
+    async fn policies_api_error_fails_closed_under_enforcing() {
+        let builder = builder_with_policies(StubPolicies::Erroring, Posture::Enforcing);
+        let err = builder
+            .record_facts(&table("c", "s", "t"))
+            .await
+            .expect_err("API error must fail closed under Enforcing");
+        assert!(err.to_string().contains("policy sourcing"), "got: {err}");
+    }
+
+    /// The same API outage is tolerated under `Disabled` (no enforcement at all).
+    #[tokio::test]
+    async fn policies_api_error_tolerated_under_disabled() {
+        let builder = builder_with_policies(StubPolicies::Erroring, Posture::Disabled);
+        builder
+            .record_facts(&table("c", "s", "t"))
+            .await
+            .expect("disabled tolerates a policies API error");
     }
 
     /// A table whose `ssn` column carries the governed `pii = "ssn"` tag comes

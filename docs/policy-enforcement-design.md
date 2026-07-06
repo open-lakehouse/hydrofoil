@@ -101,8 +101,13 @@ These mirror the OpenLineage design deliberately — one engine, one set of rule
   remains on this path; unsupported DDL maps to `DenyUnsupported` (fail closed).
 - **A public constructor wires Cedar in.** *(done)*
   `CedarPolicy::from_oci(reference)` builds the authorizer from the
-  `OciPolicyProvider`; `hydrofoil/src/main.rs` constructs it via `with_policy`
-  when `HYDROFOIL_POLICY_REF` is set, else defaults to `StaticPolicy` (allow-all).
+  `OciPolicyProvider`. `hydrofoil/src/main.rs` `build_governance` composes it into
+  the one `datafusion_policy::Governance` profile from the `[governance]` config
+  (`sources = ["cedar-oci"]` with `[governance.cedar] oci_ref`), alongside the
+  `unity-abac` `AbacPolicyEngine`. Enforcement no longer fails **open**: an
+  unconfigured server is `posture = "disabled"` (explicit, logged), never a silent
+  allow-all, and `resolve_governance` refuses to start a misconfigured deployment
+  rather than under-enforcing. The engine is installed via `with_governance`.
 - **Still open — authentication (the trust boundary).** The metadata principal is
   the *transport* seam, not the *trust* boundary. A tonic interceptor that
   validates a Flight SQL bearer token / mTLS subject upstream of
@@ -420,10 +425,10 @@ The backlog that originally appeared here (the gaps that made the gate unsound) 
 
 | Gap (was) | Where it landed | Status |
 | --- | --- | --- |
-| Hardcoded principal; ctx shared under `"key"` | `identity.rs` `principal_from_metadata` + `with_principal`; session keyed per-connection in `engine.rs` | ✅ done |
+| Hardcoded principal; ctx shared under `"key"` | `identity.rs` `principal_from_metadata`; the principal is bound onto the session config via `Governance::attach` in `create_session_for`; session keyed per-connection in `engine.rs` | ✅ done |
 | Empty request `Context`; columns dropped | `datafusion-cedar/src/visitor.rs` `table_context` → `Context::from_pairs`; `ReadTable(table, fields)` carries columns | ✅ done |
 | Authorizes against `Entities::empty()` | `cedar.rs` supplies `principal.to_entity()`; `Entities::empty()` is only the fail-closed fallback | ✅ done |
-| No public Cedar constructor | `cedar.rs` `CedarPolicy::from_oci`; wired in `main.rs` via `with_policy` | ✅ done |
+| No public Cedar constructor | `cedar.rs` `CedarPolicy::from_oci`; composed into the `Governance` profile in `main.rs` `build_governance`, installed via `with_governance` | ✅ done |
 | `WriteTable` / `CreateTable` panic (`todo!()`) | `visitor.rs` `PlanAction::{WriteTable,CreateTable}(TableReference)` → `WRITE_TABLE_ACTION` / `CREATE_EXTERNAL_TABLE_ACTION` | ✅ done |
 | Error semantics undefined | `cedar.rs` / `govern.rs` fail closed: authorizer/partial-eval error ⇒ deny / mask-all; unsupported DDL ⇒ `DenyUnsupported` | ✅ done |
 | **Authentication interceptor (trust boundary)** | not yet built — tonic interceptor validating bearer token / mTLS upstream of `principal_from_metadata` | ⛔ open |
