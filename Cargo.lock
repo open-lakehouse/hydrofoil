@@ -1944,7 +1944,7 @@ dependencies = [
 [[package]]
 name = "datafusion-openlineage"
 version = "0.0.10"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=48df7cd389c2bed99d2a0b070e691cf1af86a9e1#48df7cd389c2bed99d2a0b070e691cf1af86a9e1"
+source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?branch=chore%2Fdatafusion-55#f2f73fa94ed75b79157f70d2e4173403785a075a"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4034,7 +4034,7 @@ dependencies = [
 [[package]]
 name = "olai-cedar-oci"
 version = "0.0.2"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=b482069e6c8c587d78a0f216f7e0e4a0c8156890#b482069e6c8c587d78a0f216f7e0e4a0c8156890"
+source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -4050,7 +4050,7 @@ dependencies = [
 [[package]]
 name = "olai-datafusion-policy"
 version = "0.0.3"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=b482069e6c8c587d78a0f216f7e0e4a0c8156890#b482069e6c8c587d78a0f216f7e0e4a0c8156890"
+source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -4063,7 +4063,7 @@ dependencies = [
 [[package]]
 name = "olai-datafusion-policy-cedar"
 version = "0.0.3"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=b482069e6c8c587d78a0f216f7e0e4a0c8156890#b482069e6c8c587d78a0f216f7e0e4a0c8156890"
+source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -4266,7 +4266,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "openlineage-client"
 version = "0.0.5"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=48df7cd389c2bed99d2a0b070e691cf1af86a9e1#48df7cd389c2bed99d2a0b070e691cf1af86a9e1"
+source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?branch=chore%2Fdatafusion-55#f2f73fa94ed75b79157f70d2e4173403785a075a"
 dependencies = [
  "async-trait",
  "olai-http",
