@@ -350,7 +350,7 @@ impl FlightSqlServiceImpl {
         ctx: &Arc<crate::session::LakehouseCtx>,
         ticket: &CommandStatementIngest,
     ) -> Result<Option<ManagedIngestTarget>, DataFusionError> {
-        use datafusion::sql::TableReference;
+        use datafusion::common::TableReference;
 
         // Resolve the fully-qualified `(catalog, schema, table)`. Prefer the
         // ticket's explicit catalog/schema; otherwise parse a (possibly
@@ -458,7 +458,7 @@ impl FlightSqlServiceImpl {
         // The batch source for the Flight ingest path is the wire stream, coerced
         // to the table schema. Resolve the schema first (registering the UC
         // catalog), then drain + append through the shared committer path.
-        use datafusion::sql::TableReference;
+        use datafusion::common::TableReference;
 
         let table_ref = TableReference::full(
             target.catalog.clone(),
@@ -492,8 +492,8 @@ impl FlightSqlServiceImpl {
         batches: Vec<arrow::record_batch::RecordBatch>,
         lineage: &datafusion_openlineage::context::LineageContext,
     ) -> Result<i64, DataFusionError> {
+        use datafusion::common::TableReference;
         use datafusion::common::exec_datafusion_err;
-        use datafusion::sql::TableReference;
 
         // Resolve the provider (registering the UC catalog onto the session
         // first) so we build the same INSERT plan the external path would, for an
@@ -586,6 +586,7 @@ impl FlightSqlServiceImpl {
                 fields,
                 column_lineage: None,
                 lifecycle: None,
+                symlinks: Vec::new(),
             }],
         };
         // START + COMPLETE so the run has a defined lifecycle (the read path's

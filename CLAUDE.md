@@ -15,9 +15,11 @@ workspace `Cargo.toml` — read it there). Notable crates:
 - `portal`, `hydrofoil` — Connect-RPC services (proto-generated)
 - `desktop-host` — in-process service executors for the desktop shell
 
-Lineage capture (the OpenLineage ingest/read service and the DataFusion
-integration) moved to the sibling `headwaters` repo; hydrofoil consumes its
-published `datafusion-openlineage` crate from crates.io.
+Lineage capture lives outside this repo: the OpenLineage ingest/read service in
+the sibling `headwaters` repo, and the DataFusion integration in its own repo
+(`datafusion-contrib/datafusion-openlineage`), published to crates.io as
+`datafusion-openlineage`. Hydrofoil pins it (and the breakwater policy crates)
+by git rev until a release reaches the crates.io mirror, then switches back.
 
 ## Build, test, codegen
 

@@ -204,8 +204,7 @@ impl UnityGovernedTagProvider {
         let request = ListEntityTagAssignmentsRequest {
             entity_type: entity_type.to_string(),
             entity_name: entity_name.to_string(),
-            max_results: None,
-            page_token: None,
+            ..Default::default()
         };
         match self
             .client

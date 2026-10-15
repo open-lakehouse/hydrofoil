@@ -3,10 +3,9 @@ use std::sync::{Arc, LazyLock};
 use arrow::datatypes::Schema;
 use datafusion::{
     catalog::Session,
-    common::{DFSchema, plan_err},
+    common::{DFSchema, TableReference, plan_err},
     error::Result,
     logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan},
-    sql::TableReference,
 };
 use hydrofoil_common::{
     CreateDeltaTable, CreateDeltaTableMode, DeltaCommand, DeltaCommandType,
@@ -59,7 +58,7 @@ fn plan_create_delta_table(command: &CreateDeltaTable) -> Result<LogicalPlan> {
     let cmd = CreateExternalTable {
         schema,
         name: table_ref,
-        location: location.clone(),
+        locations: vec![location.clone()],
         file_type: DeltaTableFactory::FILE_FORMAT.to_string(),
         table_partition_cols: command.partitioning_columns.clone(),
         if_not_exists: matches!(command.mode(), CreateDeltaTableMode::CreateIfNotExists),
@@ -73,5 +72,7 @@ fn plan_create_delta_table(command: &CreateDeltaTable) -> Result<LogicalPlan> {
         column_defaults: Default::default(),
     };
 
-    Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)))
+    Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+        Box::new(cmd),
+    )))
 }

@@ -25,7 +25,6 @@ use datafusion::prelude::SessionContext;
 use datafusion_unitycatalog::catalog::{
     TableProviderBuilder, TableProviderError, UnityCatalogProviderList,
 };
-use deltalake_core::DeltaTableConfig;
 use deltalake_core::delta_datafusion::DeltaScanNext;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
@@ -68,14 +67,9 @@ impl TableProviderBuilder for TestProviderBuilder {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let engine = DataFusionEngine::new_from_context(task_ctx);
-        let snapshot = Snapshot::try_new_with_engine(
-            engine,
-            location.clone(),
-            DeltaTableConfig::default(),
-            None,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let snapshot = Snapshot::try_new_with_engine(engine, location.clone(), None)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let provider = DeltaScanNext::builder()
             .with_snapshot(Arc::new(snapshot))

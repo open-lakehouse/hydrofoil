@@ -39,7 +39,7 @@
 //! custom `hydrofoil` *run* facet by [`hydrofoil_run_facet`], so lineage carries
 //! who ran the query and on whose behalf/why.
 
-use datafusion::execution::context::SessionState;
+use datafusion::catalog::Session;
 use datafusion_openlineage::config::OpenLineageConfig;
 use datafusion_openlineage::context::{LineageContext, LineageContextProvider};
 use datafusion_openlineage::facets::{
@@ -390,7 +390,7 @@ pub struct HydrofoilContextProvider;
 
 #[async_trait::async_trait]
 impl LineageContextProvider for HydrofoilContextProvider {
-    async fn context(&self, session_state: &SessionState) -> LineageContext {
+    async fn context(&self, session_state: &dyn Session) -> LineageContext {
         session_state
             .config()
             .get_extension::<LineageContextExt>()

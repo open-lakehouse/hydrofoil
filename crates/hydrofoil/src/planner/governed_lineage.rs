@@ -19,8 +19,9 @@
 
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::execution::context::{QueryPlanner, SessionState};
+use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{
@@ -104,7 +105,7 @@ impl QueryPlanner for GovernedLineagePlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // (a) Policy first — govern (row filters + column masks) then gate. A Deny
         // returns Err here, *before* any lineage step, so a denied query emits no
@@ -145,6 +146,7 @@ impl QueryPlanner for GovernedLineagePlanner {
             &optimized,
             session_state,
         )
+        .start()
         .await
         else {
             return self
@@ -152,21 +154,13 @@ impl QueryPlanner for GovernedLineagePlanner {
                 .create_physical_plan(&optimized, session_state)
                 .await;
         };
-        let wrapped = handle.to_marker(optimized, lineage.client.clone(), &lineage.config);
 
-        // (c) Delegate to the one physical planner. On a planning error after
-        // START, emit FAIL under the run id (the terminal `OpenLineageExec` only
-        // exists once planning succeeds).
-        match self
-            .physical
-            .create_physical_plan(&wrapped, session_state)
+        // (c) Delegate to the one physical planner. The handle wraps the plan in
+        // its `LineageMarker` and, on a planning error after START, emits FAIL
+        // under the run id (the terminal `OpenLineageExec` only exists once
+        // planning succeeds).
+        handle
+            .create_physical_plan(self.physical.as_ref(), session_state)
             .await
-        {
-            Ok(plan) => Ok(plan),
-            Err(err) => {
-                handle.emit_fail(&lineage.client, &lineage.config, &err.to_string());
-                Err(err)
-            }
-        }
     }
 }

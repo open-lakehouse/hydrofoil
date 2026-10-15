@@ -5,10 +5,11 @@
 > extend DataFusion to build a full-featured, governed object-store query
 > service.
 >
-> The crate (and the OpenLineage ingest/read service) now lives in the sibling
-> `headwaters` repo (`open-lakehouse/headwaters`), published to crates.io as
-> `datafusion-openlineage`; hydrofoil consumes it from there. Paths like
-> `crates/open-lineage/…` below refer to that repo's layout.
+> The crate now lives in its own repo
+> (`datafusion-contrib/datafusion-openlineage`), published to crates.io as
+> `datafusion-openlineage`; hydrofoil consumes it from there. The OpenLineage
+> ingest/read service lives in the sibling `headwaters` repo. Paths like
+> `crates/open-lineage/…` below refer to the crate repo's layout.
 
 ## Why
 

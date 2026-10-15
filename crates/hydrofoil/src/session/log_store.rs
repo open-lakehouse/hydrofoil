@@ -2,36 +2,23 @@
 //!
 //! [`DataFusionLogStore`] routes commits through the per-session object stores
 //! (so credential isolation is preserved) and runs the kernel on the session's
-//! `TaskContext`. The three read/abort/get-latest methods are the deprecated
-//! legacy `LogStore` APIs in delta-rs; hydrofoil does not use them, so they
-//! return a clean "not implemented" error rather than panicking.
+//! `TaskContext`.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion::execution::TaskContext;
 use delta_kernel::Engine;
 use deltalake_core::{
-    DeltaResult, DeltaTableError,
+    DeltaResult,
     delta_datafusion::engine::DataFusionEngine,
-    kernel::transaction::TransactionError,
-    logstore::{CommitOrBytes, LogStore, LogStoreConfig, ObjectStoreRef, commit_uri_from_version},
+    kernel::Version,
+    logstore::{
+        self, CommitStrategy, Committer, FileSystemCommitter, LogStore, LogStoreConfig,
+        ObjectStoreRef,
+    },
 };
-use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
-use tracing::{error, instrument};
-use uuid::Uuid;
-
-/// Shared `PutOptions` for commit writes: create-only, so concurrent writers
-/// conflict instead of clobbering an existing version.
-fn put_options() -> &'static PutOptions {
-    static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
-    PUT_OPTS.get_or_init(|| PutOptions {
-        mode: object_store::PutMode::Create, // Creates if file doesn't exists yet
-        tags: TagSet::default(),
-        attributes: Attributes::default(),
-        extensions: Default::default(),
-    })
-}
+use object_store::ObjectStore;
 
 /// Default [`LogStore`] implementation
 #[derive(Debug, Clone)]
@@ -65,73 +52,19 @@ impl LogStore for DataFusionLogStore {
         "DataFusionLogStore".into()
     }
 
-    async fn read_commit_entry(&self, _version: u64) -> DeltaResult<Option<Bytes>> {
-        // Deliberately unsupported: this is one of the deprecated/legacy `LogStore`
-        // APIs in delta-rs that hydrofoil does not use. Return a clean error rather
-        // than panicking; drop the override entirely once delta-rs removes it.
-        Err(DeltaTableError::generic(
-            "DataFusionLogStore::read_commit_entry is not implemented (deprecated LogStore API)",
-        ))
+    async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
+        logstore::read_commit_entry(self.prefixed_store.as_ref(), version).await
     }
 
-    #[instrument(skip_all, level = "info")]
-    async fn write_commit_entry(
-        &self,
-        version: u64,
-        commit_or_bytes: CommitOrBytes,
-        _: Uuid,
-    ) -> Result<(), TransactionError> {
-        error!("using legacy log store APIs.");
-
-        match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => self
-                .object_store(None)
-                .put_opts(
-                    &commit_uri_from_version(Some(version)),
-                    log_bytes.into(),
-                    put_options().clone(),
-                )
-                .await
-                .map_err(|err| -> TransactionError {
-                    match err {
-                        ObjectStoreError::AlreadyExists { .. } => {
-                            TransactionError::VersionAlreadyExists(version)
-                        }
-                        _ => TransactionError::from(err),
-                    }
-                })?,
-            // Default log store should never get a tmp_commit, since this is for conditional put stores
-            _ => unreachable!("unreachable in write_commit_entry"),
-        };
-        Ok(())
+    async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
+        logstore::get_latest_version(self, current_version).await
     }
 
-    async fn abort_commit_entry(
-        &self,
-        _version: u64,
-        _commit_or_bytes: CommitOrBytes,
-        _: Uuid,
-    ) -> Result<(), TransactionError> {
-        // Deliberately unsupported (deprecated LogStore API); see read_commit_entry.
-        Err(TransactionError::LogStoreError {
-            msg: "DataFusionLogStore::abort_commit_entry is not implemented (deprecated LogStore API)"
-                .to_string(),
-            source: "not implemented".into(),
-        })
-    }
-
-    async fn get_latest_version(&self, _current_version: u64) -> DeltaResult<u64> {
-        // Deliberately unsupported (deprecated LogStore API); see read_commit_entry.
-        Err(DeltaTableError::generic(
-            "DataFusionLogStore::get_latest_version is not implemented (deprecated LogStore API)",
-        ))
-    }
-
-    fn object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.prefixed_store.clone()
     }
 
-    fn root_object_store(&self, _: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn root_object_store(&self) -> Arc<dyn ObjectStore> {
         self.root_store.clone()
     }
 
@@ -139,7 +72,17 @@ impl LogStore for DataFusionLogStore {
         &self.config
     }
 
-    fn engine(&self, _operation_id: Option<Uuid>) -> Arc<dyn Engine> {
+    fn engine(&self) -> Arc<dyn Engine> {
         DataFusionEngine::new_from_context(self.ctx.clone())
+    }
+
+    /// Commits are create-only (put-if-absent) writes through the per-session
+    /// table store, so concurrent writers conflict instead of clobbering an
+    /// existing version.
+    fn committer(&self) -> Arc<dyn Committer> {
+        Arc::new(FileSystemCommitter::new(
+            self.prefixed_store.clone(),
+            CommitStrategy::ConditionalPut,
+        ))
     }
 }
