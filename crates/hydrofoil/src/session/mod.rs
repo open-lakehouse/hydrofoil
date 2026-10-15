@@ -3,21 +3,24 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use arrow::array::RecordBatch;
 use datafusion::{
     catalog::{
-        AsyncCatalogProviderList as _, CatalogProvider as _, MemoryCatalogProvider, Session,
+        AsyncCatalogProviderList as _, CatalogProvider as _, CatalogProviderList,
+        MemoryCatalogProvider, Session,
     },
     common::DFSchema,
     config::{ConfigOptions, TableOptions},
     datasource::{TableProvider, provider_as_source},
     error::Result,
     execution::{
-        SessionState, SessionStateBuilder, TaskContext, context::ExecutionProps,
+        SessionState, SessionStateBuilder, TaskContext,
+        context::{ExecutionProps, QueryPlanner},
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
         AggregateUDF, Extension, HigherOrderUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
         WindowUDF, registry::ExtensionTypeRegistryRef,
     },
-    physical_plan::{ExecutionPlan, PhysicalExpr},
+    physical_optimizer::PhysicalOptimizerRule,
+    physical_plan::{ExecutionPlan, PhysicalExpr, operator_statistics::StatisticsRegistry},
     prelude::{DataFrame, Expr, SessionConfig, SessionContext},
 };
 use datafusion_openlineage::{OpenLineageClient, OpenLineageConfig};
@@ -28,12 +31,12 @@ use datafusion_tracing::{
     InstrumentationOptions, instrument_with_info_spans, pretty_format_compact_batch,
 };
 use delta_kernel::Version;
-use deltalake_core::{DeltaTableConfig, delta_datafusion::DeltaScanNext, kernel::Snapshot};
 use deltalake_core::{
     Path,
     delta_datafusion::engine::AsObjectStoreUrl as _,
     logstore::{LogStore, StorageConfig, logstore_with},
 };
+use deltalake_core::{delta_datafusion::DeltaScanNext, kernel::Snapshot};
 use deltalake_core::{delta_datafusion::engine::DataFusionEngine, logstore::LogStoreConfig};
 use instrumented_object_store::instrument_object_store;
 use object_store::{aws::AmazonS3Builder, client::SpawnedReqwestConnector, prefix::PrefixStore};
@@ -44,7 +47,7 @@ use uuid::Uuid;
 
 use datafusion_unitycatalog::catalog::{UnityCatalogProviderList, build_catalog_managed_snapshot};
 use deltalake_datafusion::sql::{UnityCatalogPlanner, UnityClientExtension, UnityFactoryExt};
-use unitycatalog_common::models::delta::v1::DeltaCommit;
+use unitycatalog_delta_api::models::DeltaCommit;
 use unitycatalog_object_store::UnityObjectStoreFactory;
 
 use datafusion_openlineage::context::LineageContext;
@@ -117,7 +120,7 @@ impl LakehouseCtx {
     /// `catalog.schema.table` reference.
     pub async fn resolve_table_provider(
         &self,
-        table_ref: datafusion::sql::TableReference,
+        table_ref: datafusion::common::TableReference,
     ) -> Result<Arc<dyn TableProvider>> {
         if let Some(unity) = self.unity.as_ref() {
             let resolved = unity
@@ -321,6 +324,29 @@ impl Session for LakehouseSession {
         self.config().options()
     }
 
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Session::catalog_list(&self.inner)
+    }
+
+    // The planning hooks below have no-op / unsupported trait defaults; delegate
+    // to the inner state so DataFusion code handed this session as `&dyn Session`
+    // optimizes and plans exactly as the inner state would.
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Session::query_planner(&self.inner)
+    }
+
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        self.inner.optimize(plan)
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        self.inner.physical_optimizers()
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.inner.statistics_registry()
+    }
+
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -444,27 +470,7 @@ impl LakehouseTaskContext {
     ) -> Result<Arc<Snapshot>> {
         let engine = DataFusionEngine::new_from_context(self.inner.clone());
 
-        let snapshot = Snapshot::try_new_with_engine(
-            engine,
-            location.clone(),
-            DeltaTableConfig {
-                // since we are not going through the eager snapshot, this should
-                // not matter, but we set it to false to avoid any surprises
-                require_files: false,
-                // This might still be used somewhere but should have no effect
-                // when also using the datafusion engine.
-                log_buffer_size: 10,
-                // also should not matter here
-                log_batch_size: self.inner.session_config().options().execution.batch_size,
-                // we are setting the spawning service when we build the objects stores,
-                // and should not additionally integrate with this layer.
-                io_runtime: None,
-                // should not matter here as we go through the datafusion engine.
-                skip_stats: false,
-            },
-            version,
-        )
-        .await?;
+        let snapshot = Snapshot::try_new_with_engine(engine, location.clone(), version).await?;
 
         Ok(snapshot.into())
     }
@@ -520,7 +526,7 @@ impl LakehouseTaskContext {
         let log_store = self.delta_logstore_for(location)?;
         let engine = DataFusionEngine::new_from_context(self.inner.clone());
         let snapshot =
-            build_catalog_managed_snapshot(engine.as_ref(), location, commits, latest, at_version)?;
+            build_catalog_managed_snapshot(engine, location, commits, latest, at_version).await?;
 
         let provider = DeltaScanNext::builder()
             .with_snapshot(Arc::new(snapshot))
@@ -856,11 +862,13 @@ mod integration_tests {
             tags: ["pii".to_string()].into_iter().collect(),
             ..Default::default()
         };
-        ext.0
-            .record(datafusion::sql::TableReference::full("c", "s", "t"), facts);
+        ext.0.record(
+            datafusion::common::TableReference::full("c", "s", "t"),
+            facts,
+        );
         assert_eq!(
             ext.0
-                .get(&datafusion::sql::TableReference::full("c", "s", "t"))
+                .get(&datafusion::common::TableReference::full("c", "s", "t"))
                 .unwrap()
                 .tags,
             ["pii".to_string()].into_iter().collect()
@@ -1027,8 +1035,8 @@ mod integration_tests {
     #[tokio::test]
     async fn governance_filters_and_masks_rows() {
         use datafusion::common::DFSchema;
+        use datafusion::common::TableReference;
         use datafusion::logical_expr::{col, lit};
-        use datafusion::sql::TableReference;
         use datafusion_policy_cedar::TablePolicy;
         use std::collections::HashMap;
 
@@ -1091,7 +1099,7 @@ mod integration_tests {
     /// resolving through Unity Catalog).
     #[tokio::test]
     async fn governance_records_observed_taints() {
-        use datafusion::sql::TableReference;
+        use datafusion::common::TableReference;
         use datafusion_policy_cedar::TableFacts;
         use std::collections::HashMap;
 
@@ -1172,7 +1180,7 @@ mod integration_tests {
     async fn governed_tag_masks_column_end_to_end() {
         use std::collections::{BTreeMap, HashMap};
 
-        use datafusion::sql::TableReference;
+        use datafusion::common::TableReference;
         use datafusion_policy_cedar::{CedarPolicyEngine, TableFacts};
 
         use crate::engine::Engine;
@@ -1300,7 +1308,7 @@ mod integration_tests {
     async fn governed_tag_row_filter_end_to_end() {
         use std::collections::BTreeMap;
 
-        use datafusion::sql::TableReference;
+        use datafusion::common::TableReference;
         use datafusion_policy_cedar::{CedarPolicyEngine, TableFacts};
 
         use crate::engine::Engine;

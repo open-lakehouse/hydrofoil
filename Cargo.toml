@@ -5,43 +5,50 @@ members = ["crates/*"]
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.91"
+rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1"
-arrow = "58"
-arrow-array = { version = "58" }
-arrow-flight = { version = "58", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "58" }
-arrow-select = { version = "58" }
+arrow = "59"
+arrow-array = { version = "59" }
+arrow-flight = { version = "59", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "59" }
+arrow-select = { version = "59" }
 async-trait = { version = "^0.1.89" }
 bytes = { version = "1" }
-# The Cedar/policy crates moved to the breakwater sibling repo
+# The Cedar/policy crates live in the breakwater sibling repo
 # (open-lakehouse/breakwater), published to crates.io. Consumers import them as
 # `cedar_oci` / `datafusion_policy_cedar` (names unchanged from the in-tree crates).
 # `datafusion-policy` is the neutral (engine-agnostic) core: it owns the
 # secured-view provider seam (`govern_provider_from_config`) hydrofoil wraps
 # UC-resolved tables with, imported as `datafusion_policy`.
-cedar-oci = { package = "olai-cedar-oci", version = "0.0.2" }
-datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.3" }
-datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.3" }
+#
+# Pinned to the DataFusion 55 rev until that release reaches the crates.io
+# mirror we build against; then drop `git`/`rev` and keep the `version`.
+cedar-oci = { package = "olai-cedar-oci", version = "0.0.2", git = "https://github.com/open-lakehouse/breakwater", rev = "b482069e6c8c587d78a0f216f7e0e4a0c8156890" }
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.3", git = "https://github.com/open-lakehouse/breakwater", rev = "b482069e6c8c587d78a0f216f7e0e4a0c8156890" }
+datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.3", git = "https://github.com/open-lakehouse/breakwater", rev = "b482069e6c8c587d78a0f216f7e0e4a0c8156890" }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
 dashmap = "6.0.1"
-datafusion = "54"
-datafusion-common = "54"
-# The OpenLineage / DataFusion integration moved to the headwaters sibling repo
-# (open-lakehouse/headwaters), published to crates.io as `datafusion-openlineage`.
-# Consumers import it as `datafusion_openlineage`.
-datafusion-openlineage = { version = "0.0.7" }
-datafusion-tracing = "54"
-# Track the same kernel source as the delta-rs fork (roeap/delta-rs) so the
-# whole graph resolves to a single buoyant_kernel version — otherwise hydrofoil
-# (which uses these types directly) and delta-rs disagree on the Engine/Field
-# kernel API.
-delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
+datafusion = "55"
+datafusion-common = "55"
+# The OpenLineage / DataFusion integration lives in its own repo
+# (datafusion-contrib/datafusion-openlineage), published to crates.io as
+# `datafusion-openlineage`. Consumers import it as `datafusion_openlineage`.
+# Pinned to the DataFusion 55 rev until that release reaches the crates.io
+# mirror we build against; then drop `git`/`rev` and keep the `version`.
+datafusion-openlineage = { version = "0.0.10", git = "https://github.com/datafusion-contrib/datafusion-openlineage", rev = "48df7cd389c2bed99d2a0b070e691cf1af86a9e1" }
+datafusion-tracing = "55"
+# The published `buoyant_kernel` (the Buoyant Data distribution of
+# delta-kernel-rs), the same one deltalake-core and mangrove resolve, so the
+# whole graph shares one kernel and hydrofoil (which uses these types directly)
+# agrees with delta-rs on the Engine/Field kernel API. `arrow-59` keeps it on
+# datafusion 55's arrow major.
+delta_kernel = { package = "buoyant_kernel", version = "0.28.1", features = [
     "internal-api",
-    "arrow-58",
+    "arrow-conversion",
+    "arrow-59",
 ] }
 futures = "0.3.32"
 itertools = "0.14"
@@ -67,19 +74,22 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-# delta-rs / Unity Catalog forks, pinned to pushed git revs so the workspace
-# (and the Docker build, whose context is just this repo) resolves them without
-# sibling checkouts. To iterate against in-progress fork changes locally, swap
-# these for the `path = "../delta-rs/..."` / `../mangrove/crates/..."` overrides
-# (and bump the rev here once the changes are pushed).
+# delta-rs / Unity Catalog, pinned to pushed git revs so the workspace (and the
+# Docker build, whose context is just this repo) resolves them without sibling
+# checkouts. Keep both revs in lock-step with mangrove's workspace `Cargo.toml`.
 #
-# The UC crates now live in open-lakehouse/mangrove, published as `olai-uc-*`.
-# The in-tree dep keys stay `unitycatalog-*` / `datafusion-unitycatalog` via the
+# The UC crates live in open-lakehouse/mangrove, published as `olai-uc-*`. The
+# in-tree dep keys stay `unitycatalog-*` / `datafusion-unitycatalog` via the
 # `package =` alias so dependents' `{ workspace = true }` references are unchanged.
-# Pin the git rev for now; switch to the published `olai-uc-*` versions once released.
-unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a", features = ["rest-client", "axum"] }
-unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
-unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
-datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "21509cc1c0cb0835cfaa0085c61ace9739a7619a" }
-deltalake-core = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion", "cloud"] }
-deltalake = { git = "https://github.com/roeap/delta-rs", rev = "82a2c28ff10650a028d65d30bb46eed12789cc9d", features = ["datafusion"] }
+# They all stay on git: `olai-uc-datafusion` can't publish while it depends on
+# the deltalake-core git rev, and mixing a crates.io `olai-uc-common` with its
+# git copy would split the UC types.
+#
+# deltalake-core is the roeap/delta-rs fork of upstream `main` (2.0.0-dev, the
+# catalog-managed read path), the same rev mangrove pins.
+unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "9701b4d5ee62d8fd7d8bebbc4ad0c2c5b3a3af7c", features = ["rest-client", "axum"] }
+unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "9701b4d5ee62d8fd7d8bebbc4ad0c2c5b3a3af7c" }
+unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "9701b4d5ee62d8fd7d8bebbc4ad0c2c5b3a3af7c" }
+unitycatalog-delta-api = { package = "olai-uc-delta-api", git = "https://github.com/open-lakehouse/mangrove", rev = "9701b4d5ee62d8fd7d8bebbc4ad0c2c5b3a3af7c", default-features = false }
+datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "9701b4d5ee62d8fd7d8bebbc4ad0c2c5b3a3af7c" }
+deltalake-core = { version = "2.0.0", git = "https://github.com/roeap/delta-rs", rev = "adea9ea175a63549d10ffdf7bc3d7ca4cc1986ee", features = ["datafusion", "cloud"] }

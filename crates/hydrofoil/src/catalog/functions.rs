@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use buffa::EnumValue;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{
@@ -64,6 +65,7 @@ impl CatalogFunctionResolver for UnityFunctionResolver {
             .functions_client()
             .get_function(&GetFunctionRequest {
                 name: name.to_string(),
+                ..Default::default()
             })
             .await
             .map_err(|e| {
@@ -91,12 +93,12 @@ impl CatalogMaskUdf {
     fn from_function(name: &str, function: &Function) -> Result<Self> {
         let arg_types = function
             .input_params
-            .as_ref()
+            .as_option()
             .map(|params| {
                 params
                     .parameters
                     .iter()
-                    .map(|p| col_type_to_arrow(p.type_name))
+                    .map(|p| col_type_to_arrow(&p.type_name))
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?
@@ -143,9 +145,12 @@ impl ScalarUDFImpl for CatalogMaskUdf {
 /// parameters and return type) to an Arrow [`DataType`]. Covers the showcase
 /// scalar types; an unsupported/unspecified type is an `Err` so resolution fails
 /// closed rather than binding a wrong signature.
-fn col_type_to_arrow(type_name: i32) -> Result<DataType> {
-    let col_type = ColumnTypeName::try_from(type_name).map_err(|_| {
-        DataFusionError::Plan(format!("unknown UC column type enum value {type_name}"))
+fn col_type_to_arrow(type_name: &EnumValue<ColumnTypeName>) -> Result<DataType> {
+    let col_type = type_name.as_known().ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "unknown UC column type enum value {}",
+            type_name.to_i32()
+        ))
     })?;
     let dt = match col_type {
         ColumnTypeName::Boolean => DataType::Boolean,
@@ -174,7 +179,7 @@ mod tests {
 
     fn param(type_name: ColumnTypeName) -> FunctionParameterInfo {
         FunctionParameterInfo {
-            type_name: type_name as i32,
+            type_name: type_name.into(),
             ..Default::default()
         }
     }
@@ -182,9 +187,11 @@ mod tests {
     #[test]
     fn builds_signature_from_function_params_and_return_type() {
         let function = Function {
-            input_params: Some(FunctionParameterInfos {
+            input_params: FunctionParameterInfos {
                 parameters: vec![param(ColumnTypeName::String), param(ColumnTypeName::Int)],
-            }),
+                ..Default::default()
+            }
+            .into(),
             data_type: "STRING".to_string(),
             ..Default::default()
         };
@@ -201,10 +208,7 @@ mod tests {
 
     #[test]
     fn no_params_yields_a_zero_arg_signature() {
-        let function = Function {
-            input_params: None,
-            ..Default::default()
-        };
+        let function = Function::default();
         let udf = CatalogMaskUdf::from_function("f", &function).unwrap();
         assert_eq!(
             udf.signature().type_signature,
@@ -215,9 +219,11 @@ mod tests {
     #[test]
     fn unsupported_param_type_fails_closed() {
         let function = Function {
-            input_params: Some(FunctionParameterInfos {
+            input_params: FunctionParameterInfos {
                 parameters: vec![param(ColumnTypeName::Timestamp)],
-            }),
+                ..Default::default()
+            }
+            .into(),
             ..Default::default()
         };
         assert!(CatalogMaskUdf::from_function("f", &function).is_err());

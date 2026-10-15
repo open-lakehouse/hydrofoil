@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::catalog::TableProvider;
+use datafusion::common::TableReference;
 use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
-use datafusion::sql::TableReference;
 use datafusion_policy_cedar::TableFacts;
 use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
 use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};

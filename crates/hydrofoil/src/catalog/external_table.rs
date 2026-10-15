@@ -38,7 +38,7 @@ impl TableProviderFactory for DeltaTableFactory {
             table_name = cmd.name.table(),
             schame_name = cmd.name.schema(),
             catalog_name = cmd.name.catalog(),
-            location = cmd.location,
+            locations = ?cmd.locations,
         )
     )]
     async fn create(
@@ -53,7 +53,14 @@ impl TableProviderFactory for DeltaTableFactory {
             return plan_err!("Creating temporary Delta tables is not supported");
         }
 
-        let location = Url::parse(&cmd.location).map_err(|e| plan_datafusion_err!("{e}"))?;
+        // A Delta table is rooted at exactly one location.
+        let [location] = cmd.locations.as_slice() else {
+            return plan_err!(
+                "Delta tables take exactly one LOCATION, got {}",
+                cmd.locations.len()
+            );
+        };
+        let location = Url::parse(location).map_err(|e| plan_datafusion_err!("{e}"))?;
         let log_store = ctx.task_ctx().lh().delta_logstore_for(&location)?;
 
         let columns: Vec<StructField> = cmd
