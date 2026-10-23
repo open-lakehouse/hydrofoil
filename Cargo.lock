@@ -1946,8 +1946,8 @@ dependencies = [
 
 [[package]]
 name = "datafusion-openlineage"
-version = "0.0.10"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?branch=chore%2Fdatafusion-55#f2f73fa94ed75b79157f70d2e4173403785a075a"
+version = "0.0.11"
+source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=0178e846243e0c353b62bed566e4b85458b21ec4#0178e846243e0c353b62bed566e4b85458b21ec4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4289,7 +4289,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "openlineage-client"
 version = "0.0.5"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?branch=chore%2Fdatafusion-55#f2f73fa94ed75b79157f70d2e4173403785a075a"
+source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=0178e846243e0c353b62bed566e4b85458b21ec4#0178e846243e0c353b62bed566e4b85458b21ec4"
 dependencies = [
  "async-trait",
  "olai-http",
