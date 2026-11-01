@@ -98,17 +98,22 @@ Run `cargo clean` in a worktree before removing it.
 ## Sibling crates and the crates.io proxy
 
 Local Cargo resolves crates.io through a proxy that hides releases for 7 days.
-trestle's [`docs/crates-proxy.md`](https://github.com/open-lakehouse/trestle/blob/main/docs/crates-proxy.md)
-has the full guide. In this repo:
+That applies to every crate a sibling repo publishes, whoever publishes it:
+trestle, mangrove, breakwater, datafusion-openlineage. trestle's
+[`docs/crates-proxy.md`](https://github.com/open-lakehouse/trestle/blob/main/docs/crates-proxy.md)
+has the full guide (trestle only hosts the tooling). In this repo:
 
 - **Git pins** (strategy 3): breakwater and `datafusion-openlineage` are pinned
   to a git rev while their release isn't on the proxy yet. Each keeps its
   `version`, so once that release is older than 7 days, drop `git`/`rev`
-  (`grep -n 'git = ' Cargo.toml`). The mangrove `olai-uc-*` crates and
-  `deltalake-core` stay on git by design (see the `Cargo.toml` comment).
-- **crates.io crates** (`olai-http`): to use a release under 7 days old, run
-  `just crates-proxy-patch trestle`, build, then `just crates-proxy-lock` before
-  committing `Cargo.lock`. `scripts/crates-proxy.sh` runs trestle's
-  `scripts/crates-proxy/` from a trestle checkout next to this repo (or
-  `TRESTLE_ROOT`). Never commit `.cargo/` or a lock that
+  (`grep -n 'git = ' Cargo.toml`). To switch sooner, treat it as a fresh release
+  (next item). The mangrove `olai-uc-*` crates and `deltalake-core` stay on git
+  by design (see the `Cargo.toml` comment).
+- **crates.io crates** (`olai-http` today; any unpinned sibling crate tomorrow):
+  to use a release under 7 days old, run `just crates-proxy-patch <upstream>`
+  (`trestle`, `breakwater`, `datafusion-openlineage`, …), build, then
+  `just crates-proxy-lock` before committing `Cargo.lock`. If the release chains
+  on another fresh one, patch both upstreams. `scripts/crates-proxy.sh` runs
+  trestle's `scripts/crates-proxy/` and finds the upstream checkouts next to this
+  repo (or via `<REPO>_ROOT`). Never commit `.cargo/` or a lock that
   `scripts/crates-proxy.sh check-lock` rejects.
