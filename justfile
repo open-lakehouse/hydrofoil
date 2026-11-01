@@ -59,3 +59,15 @@ build-docker bin:
       --build-arg BIN={{ bin }} \
       --build-arg CRATES_PROXY="${CRATES_PROXY:-}" \
       -t {{ bin }}:dev .
+
+# build against a sibling release the crates.io proxy still hides (< 7 days old):
+# patch its crates from the local checkout, e.g. `just crates-proxy-patch trestle`.
+# Writes the gitignored .cargo/config.toml; `--remove <repo>` drops it again.
+crates-proxy-patch *args:
+    ./scripts/crates-proxy.sh patch {{ args }}
+
+# restore the patched crates' crates.io entries in Cargo.lock (run before committing
+# it), then check that no local patch is left in the lock.
+crates-proxy-lock:
+    ./scripts/crates-proxy.sh lock-registry
+    ./scripts/crates-proxy.sh check-lock
