@@ -4,8 +4,8 @@
 //
 // This is the *execution* analogue of `lib/client/registry.ts` (which swaps the
 // HTTP fetch). The default runner here speaks ConnectRPC over `clientFetch`, so
-// the web build behaves exactly as a direct client call. But a host (e.g. the
-// Tauri desktop shell in node/desktop) may execute queries an entirely different
+// the web build behaves exactly as a direct client call. But a host (e.g. a
+// Tauri desktop shell) may execute queries an entirely different
 // way — a Rust `invoke` command, an embedded engine — bypassing the wire. Such a
 // host calls `registerQueryRunner` before the UI bootstraps to swap in its own
 // implementation.

@@ -1,7 +1,7 @@
 // A dependency-free `fetch` that serves the Unity Catalog REST API from the
 // curated fixtures — registered via `registerFetch` so the UI's UC query layer
 // (lib/api.ts -> lib/uc/queries.ts) renders real-looking data in Storybook with
-// no backend. This mirrors how node/desktop's tauriFetch stands in for the
+// no backend. This mirrors how a desktop host's fetch stands in for the
 // network, but returns fixtures instead of proxying to a sidecar.
 //
 // It matches the exact paths/params the query layer issues (see

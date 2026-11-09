@@ -1,4 +1,4 @@
-// Storybook's "host" bundle — the analogue of node/desktop/src/main.ts, but it
+// Storybook's "host" bundle — the analogue of a desktop host's entry point, but it
 // registers in-memory FIXTURE fakes at the UI's seams instead of Tauri. Imported
 // once from preview.tsx, before any story renders, so every component sees a
 // fully-populated backend with no network, no Docker, and no Tauri.

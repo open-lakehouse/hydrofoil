@@ -7,7 +7,7 @@
 // `.py` file and opens it; marimo then parses the cells.
 //
 // The connection setup reads the env vars the desktop notebook sidecar injects
-// (see node/desktop/src-tauri/src/notebook.rs): `UC_URI` /
+// (formerly node/desktop's notebook sidecar): `UC_URI` /
 // `OPEN_LAKEHOUSE_UC_URL` (the Unity Catalog REST base, always present),
 // `LINEAGE_URL` (the OpenLineage sink base, present only when the environment
 // carries the lineage capability), and optionally `UC_TOKEN` (absent today — the

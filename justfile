@@ -2,8 +2,8 @@
 _default:
     just --list
 
-# node/ workspace recipes (UI, uc-client, desktop). Run e.g. `just node ui-dev`
-# or `just node desktop-dev`; list them with `just node --list`.
+# node/ workspace recipes (UI, uc-client). Run e.g. `just node ui-dev`; list
+# them with `just node --list`.
 mod node
 
 # run the hydrofoil server on the host. Point it at a config with

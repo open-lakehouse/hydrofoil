@@ -2378,25 +2378,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "desktop-host"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bytes",
- "connectrpc",
- "datafusion-openlineage",
- "futures",
- "http",
- "hydrofoil",
- "olai-uc-object-store",
- "portal",
- "serde_json",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

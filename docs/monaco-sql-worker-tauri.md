@@ -1,5 +1,8 @@
 # Monaco SQL language worker in Tauri — findings & fix plan
 
+> `node/desktop` was removed in 2026-11 (the desktop app is now luminescent-lakehouse's
+> `apps/desktop`); what follows still applies to `node/ui`.
+
 Status: **applied & verified** (2026-06-23). Fix landed in `monaco-setup.ts`,
 `catalogCompletion.ts`, and a new `pgsql.worker.ts` + `monaco-worker.d.ts`; both `node/ui`
 and `node/desktop` type-check and build, both emit the `pgsql.worker-*.js` chunk (~2.2 MB —

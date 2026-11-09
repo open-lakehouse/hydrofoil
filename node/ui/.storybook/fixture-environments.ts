@@ -1,6 +1,6 @@
 // A fake EnvironmentHost serving the environment-management surfaces
 // (EnvironmentManager, EnvironmentDetail) from fixtures, registered via
-// `registerEnvironmentHost`. Mirrors node/desktop's tauriEnvironmentHost shape
+// `registerEnvironmentHost`. Mirrors a desktop host's environment host shape
 // but is fully in-memory: `managed: true` so the picker/manager render, with a
 // couple of environments, a capability checklist, config artifacts, and live
 // service statuses for the running one.

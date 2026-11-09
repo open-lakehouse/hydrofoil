@@ -57,14 +57,6 @@ storybook-static/
 # Local Unity Catalog dev data + rendered config (see scripts/dev-ui.sh)
 .uc-data/
 
-# Desktop app working directory: per-environment config + data (environments.json,
-# envs/<id>/uc/{config.yaml,catalog.db,storage}). In-repo so it's inspectable.
-.open-lakehouse/
-
-# Tauri sidecar binaries (symlinked to the local uc build by `just uc-setup`;
-# triple-suffixed, machine-specific).
-node/desktop/src-tauri/binaries/
-
 WALKTHROUGH.md
 
 .isaac/
