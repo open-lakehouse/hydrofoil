@@ -3,8 +3,7 @@
 // any dependency on that host.
 //
 // By default this is plain `globalThis.fetch`, so the web build behaves exactly
-// as if it called fetch directly. A host (e.g. the Tauri desktop shell in
-// node/desktop) can call `registerFetch` before the UI bootstraps to swap in its
+// as if it called fetch directly. A host (e.g. a Tauri desktop shell) can call `registerFetch` before the UI bootstraps to swap in its
 // own implementation — that implementation decides per request whether to handle
 // it itself or fall through to the network.
 //
@@ -42,7 +41,7 @@ export const clientFetch: FetchImpl = (...args) => currentFetch(...args);
 // network, WITHOUT the UI depending on the host. ConnectRPC clients are built
 // with `clientTransport`; by default it speaks Connect over `clientFetch`, so the
 // web build is a normal client. The Tauri desktop host registers a transport that
-// dispatches against the in-process executors via `invoke` (see node/desktop).
+// dispatches against the in-process executors via `invoke`.
 
 // Default: Connect-over-fetch. An empty base resolves against the dev origin; the
 // Vite proxy forwards the RPC path prefixes (see vite.config.ts). `useBinaryFormat`

@@ -1,5 +1,11 @@
 # Local key management for desktop environments
 
+> **Superseded (2026-11).** Hydrofoil's desktop app was removed; the desktop shell is
+> [luminescent-lakehouse](https://github.com/open-lakehouse/luminescent-lakehouse)'s
+> `apps/desktop`. It keeps these semantics (a KEK per environment from the OS CSPRNG,
+> in the keychain, no fallback) in `crates/shell-core/src/kek.rs`. The
+> `node/desktop` files cited below no longer exist.
+>
 > Status: **Implemented** (2026-06) in the desktop shell
 > (`node/desktop/src-tauri/src/kek.rs`, wired into `lib.rs`), with the UI surface in
 > `node/ui/src/components/environment`. See

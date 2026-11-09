@@ -2,8 +2,7 @@
   "name": "@open-lakehouse/node",
   "private": true,
   "workspaces": [
-    "ui",
-    "desktop"
+    "ui"
   ],
   "scripts": {
     "lint": "biome check .",

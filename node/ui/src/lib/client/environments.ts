@@ -195,7 +195,7 @@ const defaultHost: EnvironmentHost = {
 let currentHost: EnvironmentHost = defaultHost;
 
 /** Install a custom environment host. Hosts call this once, before the UI
- *  bootstraps (see node/desktop). */
+ *  bootstraps. */
 export function registerEnvironmentHost(host: EnvironmentHost): void {
   currentHost = host;
 }

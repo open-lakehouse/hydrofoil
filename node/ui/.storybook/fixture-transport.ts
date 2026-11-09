@@ -6,7 +6,7 @@
 // implementations are written against the generated schema types and run nearly
 // the same code path a real server would — including server-streaming, which the
 // query/preview results need. This is the same "register a fake transport at the
-// seam" pattern node/desktop uses for tauriTransport, but in-process.
+// seam" pattern a desktop host uses for its transport, but in-process.
 
 import { createRouterTransport, type Transport } from "@connectrpc/connect";
 

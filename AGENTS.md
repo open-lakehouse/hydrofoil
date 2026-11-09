@@ -17,8 +17,9 @@ Multi-crate Rust workspace (`crates/*`; edition and MSRV in the workspace
   and types
 - `datafusion` (`deltalake-datafusion`): DataFusion integration
 - `portal`, `hydrofoil`: Connect-RPC services (proto-generated)
-- `desktop-host`: in-process service executors for the desktop shell
-- `node/`: UI, uc-client and desktop workspace (`just node --list`)
+- `node/`: UI and uc-client workspace (`just node --list`). The desktop app
+  moved to [luminescent-lakehouse](https://github.com/open-lakehouse/luminescent-lakehouse)
+  (`apps/desktop`).
 
 Code from sibling repos:
 

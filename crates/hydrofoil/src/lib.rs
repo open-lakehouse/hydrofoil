@@ -1,9 +1,9 @@
 //! Hydrofoil — the catalog-native query engine, exposed both as a binary
 //! (Flight SQL gRPC + HTTP query surface, see `main.rs`) and as a library.
 //!
-//! The library surface exists so embedders — notably the Tauri desktop backend
-//! via `desktop-host` — can build the same engine and ConnectRPC `QueryService`
-//! executor and drive it in-process, without standing up the HTTP/gRPC servers.
+//! The library surface exists so embedders can build the same engine and
+//! ConnectRPC `QueryService` executor and drive it in-process, without standing
+//! up the HTTP/gRPC servers.
 //! The pieces an embedder needs are re-exported at the crate root
 //! ([`FlightSqlServiceImpl`], [`QueryAppState`], [`Config`]); everything the
 //! binary uses lives in the same modules and resolves through the same
@@ -52,7 +52,7 @@ mod session;
 mod stream;
 pub mod telemetry;
 
-// Re-exports for embedders (e.g. `desktop-host`): the shared engine/session
+// Re-exports for embedders: the shared engine/session
 // service, the ConnectRPC QueryService executor wrapper, and the layered config.
 pub use config::Config;
 pub use ingest_service::IngestAppState;
