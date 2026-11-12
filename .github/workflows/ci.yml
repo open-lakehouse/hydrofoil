@@ -166,21 +166,17 @@ jobs:
         with:
           persist-credentials: false
 
-      # Doctest coverage (`--doc` / `report --doctests`) relies on
-      # `-Z unstable-options --persist-doctests`, which only the nightly
-      # compiler accepts. Install nightly so the doctest coverage step can run
-      # via `cargo +nightly`. Stable is installed last below so it stays the
-      # default toolchain for the nextest run.
+      # Coverage runs entirely on nightly. Doctest coverage (`--doc` /
+      # `report --doctests`) needs `-Z unstable-options --persist-doctests`,
+      # which only nightly accepts, and the report merges every `.profraw` with
+      # one `llvm-profdata`. Instrumenting the nextest run with the pinned
+      # stable while merging with nightly's tools fails once their LLVM raw
+      # profile formats diverge ("raw profile version mismatch ... no profile
+      # can be merged"), so every step uses the same toolchain.
+      # llvm-tools-preview ships the profdata tooling cargo-llvm-cov needs.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: nightly
-          components: llvm-tools-preview
-
-      # llvm-tools-preview ships the profdata tooling cargo-llvm-cov needs.
-      # Installed after nightly so "1.96" remains the default toolchain.
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-        with:
-          toolchain: "1.96"
           components: llvm-tools-preview
 
       - name: Install protoc
@@ -200,9 +196,8 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-nextest
 
-      # Collect coverage from both nextest tests and doctests into one report.
-      # Doctest coverage needs nightly (unstable `--persist-doctests`); the
-      # nextest run stays on the pinned stable toolchain.
+      # Collect coverage from both nextest tests and doctests into one report,
+      # all on nightly (see the toolchain step above).
       #
       # `--ignore-filename-regex` drops committed codegen from the report itself
       # (buffa/connect-rust under `**/generated/`, prost/tonic under `**/src/gen/`,
@@ -212,7 +207,7 @@ jobs:
       # too. Keep the two in sync.
       - name: Collect coverage
         run: |
-          cargo llvm-cov --no-report nextest --workspace --all-features
+          cargo +nightly llvm-cov --no-report nextest --workspace --all-features
           cargo +nightly llvm-cov --no-report --doc --workspace --all-features
           cargo +nightly llvm-cov report --doctests --codecov --output-path codecov.json \
             --ignore-filename-regex '(/generated/|/src/gen/)'
