@@ -416,7 +416,7 @@ impl FlightSqlServiceImpl {
         }
 
         // Partitioned managed appends are not yet supported by the connector
-        // (it writes through `unpartitioned_write_context`). Fail clearly rather
+        // (it builds an unpartitioned write context). Fail clearly rather
         // than commit a wrong layout.
         if loaded
             .metadata
