@@ -757,15 +757,15 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "buoyant_kernel"
-version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6605210c22aaa8b9c5496548a860f43e6d0d27f8c153837d5e27739b4664c524"
+version = "0.30.1"
 dependencies = [
  "arrow",
  "buoyant_kernel_derive",
  "bytes",
  "chrono",
+ "chrono-tz",
  "crc",
+ "derive_more",
  "indexmap 2.14.0",
  "itertools 0.14.0",
  "object_store",
@@ -791,9 +791,7 @@ dependencies = [
 
 [[package]]
 name = "buoyant_kernel_derive"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f22616ba486e89c304e6bf092f573545220da1f3e1399bb594b47698578a588"
+version = "2.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -802,9 +800,7 @@ dependencies = [
 
 [[package]]
 name = "buoyant_kernel_engine"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06f319906f8825edc80f9240225833e270d02fb893fad1457d24e960c71ad80"
+version = "0.30.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -814,6 +810,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "reqwest 0.13.4",
+ "rustls-native-certs",
  "serde_json",
  "tokio",
  "tracing",
@@ -2230,7 +2227,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "2.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=4b2af2d34409649ccf762312160405acdeaafea0#4b2af2d34409649ccf762312160405acdeaafea0"
+source = "git+https://github.com/roeap/delta-rs?rev=fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0#fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0"
 dependencies = [
  "alloc-stdlib 0.2.2",
  "arrow",
@@ -2308,7 +2305,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "1.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=4b2af2d34409649ccf762312160405acdeaafea0#4b2af2d34409649ccf762312160405acdeaafea0"
+source = "git+https://github.com/roeap/delta-rs?rev=fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0#fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0"
 dependencies = [
  "convert_case 0.9.0",
  "itertools 0.14.0",
@@ -2320,15 +2317,20 @@ dependencies = [
 [[package]]
 name = "deltalake-kernel-executor"
 version = "2.0.0"
-source = "git+https://github.com/roeap/delta-rs?rev=4b2af2d34409649ccf762312160405acdeaafea0#4b2af2d34409649ccf762312160405acdeaafea0"
+source = "git+https://github.com/roeap/delta-rs?rev=fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0#fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0"
 dependencies = [
  "arrow",
+ "async-trait",
  "buoyant_kernel",
  "buoyant_kernel_engine",
  "bytes",
+ "chrono",
  "dashmap",
  "datafusion",
+ "datafusion-datasource",
+ "datafusion-physical-expr-adapter",
  "futures",
+ "indexmap 2.14.0",
  "itertools 0.15.0",
  "object_store",
  "thiserror",
@@ -2374,6 +2376,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
 dependencies = [
  "derive_builder_core",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version",
  "syn 2.0.117",
 ]
 
@@ -2773,11 +2796,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4111,10 +4136,39 @@ dependencies = [
 ]
 
 [[package]]
-name = "olai-http-wasm"
-version = "0.0.5"
+name = "olai-http"
+version = "0.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "348e03daaf902c4271eef1b733ce00825b549cb1e3ce329d80d351efd873b71c"
+checksum = "feaffe8c073bce67b3a272508870e69fccc6050afb6da9797faa6ee135dc40c8"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "humantime",
+ "hyper",
+ "percent-encoding",
+ "quick-xml 0.37.5",
+ "rand 0.9.4",
+ "reqwest 0.13.4",
+ "ring",
+ "rust-ini",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "olai-http-wasm"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "980de22f1f3471e13a589cdb2f61a2d572a52a4722276d813f1724df7a5a8ad1"
 dependencies = [
  "futures",
  "reqwest 0.12.28",
@@ -4125,19 +4179,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-storage-credentials"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0482bcd16c51565dfe4911338fa60d0a5d986ca6032f6b2d7c024f1d6cc90dd2"
+dependencies = [
+ "chrono",
+ "object_store",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "olai-uc-client"
-version = "0.0.5"
-source = "git+https://github.com/open-lakehouse/mangrove?rev=679634fd5b5f3697b0fe05e7f9ab27e75b4448ce#679634fd5b5f3697b0fe05e7f9ab27e75b4448ce"
+version = "0.0.8"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
 dependencies = [
  "buffa",
  "futures",
  "getrandom 0.2.17",
- "olai-http",
+ "olai-http 0.0.10",
  "olai-http-wasm",
  "olai-uc-common",
  "olai-uc-delta-api",
+ "olai-uc-handlers",
  "percent-encoding",
  "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "thiserror",
@@ -4148,8 +4219,8 @@ dependencies = [
 
 [[package]]
 name = "olai-uc-common"
-version = "0.0.5"
-source = "git+https://github.com/open-lakehouse/mangrove?rev=679634fd5b5f3697b0fe05e7f9ab27e75b4448ce#679634fd5b5f3697b0fe05e7f9ab27e75b4448ce"
+version = "0.0.8"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -4162,7 +4233,8 @@ dependencies = [
  "futures",
  "http",
  "itertools 0.14.0",
- "olai-http",
+ "olai-http 0.0.10",
+ "olai-storage-credentials",
  "pbjson",
  "pbjson-types",
  "percent-encoding",
@@ -4182,7 +4254,7 @@ dependencies = [
 [[package]]
 name = "olai-uc-datafusion"
 version = "0.1.0"
-source = "git+https://github.com/open-lakehouse/mangrove?rev=679634fd5b5f3697b0fe05e7f9ab27e75b4448ce#679634fd5b5f3697b0fe05e7f9ab27e75b4448ce"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
 dependencies = [
  "async-trait",
  "buffa",
@@ -4194,10 +4266,12 @@ dependencies = [
  "deltalake-core",
  "futures",
  "object_store",
+ "olai-storage-credentials",
  "olai-uc-client",
  "olai-uc-common",
  "olai-uc-delta-api",
  "olai-uc-object-store",
+ "olai-vended-store",
  "serde",
  "serde_json",
  "thiserror",
@@ -4208,11 +4282,12 @@ dependencies = [
 
 [[package]]
 name = "olai-uc-delta-api"
-version = "0.0.5"
-source = "git+https://github.com/open-lakehouse/mangrove?rev=679634fd5b5f3697b0fe05e7f9ab27e75b4448ce#679634fd5b5f3697b0fe05e7f9ab27e75b4448ce"
+version = "0.0.7"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
 dependencies = [
  "async-trait",
  "axum",
+ "olai-storage-credentials",
  "serde",
  "serde_json",
  "thiserror",
@@ -4221,27 +4296,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-uc-handlers"
+version = "0.0.2"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
+dependencies = [
+ "async-trait",
+ "olai-uc-common",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "olai-uc-object-store"
-version = "0.0.5"
-source = "git+https://github.com/open-lakehouse/mangrove?rev=679634fd5b5f3697b0fe05e7f9ab27e75b4448ce#679634fd5b5f3697b0fe05e7f9ab27e75b4448ce"
+version = "0.0.8"
+source = "git+https://github.com/open-lakehouse/mangrove?rev=692cd906ee7b7016b1c05fea4111f12616bb53ba#692cd906ee7b7016b1c05fea4111f12616bb53ba"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
  "getrandom 0.2.17",
  "object_store",
- "olai-http",
+ "olai-http 0.0.10",
  "olai-http-wasm",
+ "olai-storage-credentials",
  "olai-uc-client",
  "olai-uc-common",
+ "olai-vended-store",
  "reqwest 0.12.28",
- "send_wrapper",
+ "reqwest 0.13.4",
  "serde",
  "thiserror",
  "tokio",
  "url",
  "uuid",
- "web-time",
+]
+
+[[package]]
+name = "olai-vended-store"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843e3f2e21f76fad870848bcc0d1358ba270c47305a2260eee764dd5b27e318d"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "getrandom 0.2.17",
+ "getrandom 0.4.2",
+ "http",
+ "object_store",
+ "olai-http 0.0.10",
+ "olai-storage-credentials",
+ "percent-encoding",
+ "reqwest 0.13.4",
+ "ring",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4273,7 +4390,7 @@ version = "0.0.5"
 source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=0178e846243e0c353b62bed566e4b85458b21ec4#0178e846243e0c353b62bed566e4b85458b21ec4"
 dependencies = [
  "async-trait",
- "olai-http",
+ "olai-http 0.0.6",
  "serde",
  "serde_json",
  "thiserror",
