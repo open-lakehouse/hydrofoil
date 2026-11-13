@@ -32,6 +32,39 @@ hydrofoil-gen:
     cd crates/hydrofoil && buf generate
     cargo fmt -p hydrofoil
 
+# one-time toolchain setup for the in-browser query engine (wasm/query-wasm)
+setup-wasm:
+    rustup target add wasm32-unknown-unknown
+    # The CLI's bindgen schema must exactly match the wasm-bindgen crate version
+    # in wasm/Cargo.lock — keep the two pins in sync.
+    cargo install -f wasm-bindgen-cli --version 0.2.126 --locked
+
+# Built from the wasm WORKSPACE ROOT (`wasm/`) so its own lockfile and
+# `.cargo/config.toml` (wasm getrandom rustflags) apply; -p selects the crate.
+#
+# build the in-browser query engine into wasm/query-wasm/pkg (gitignored)
+build-query-wasm:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # macOS: ring's C sources are compiled for wasm32 by cc-rs, but Apple's
+    # system clang has no wasm backend ("No available targets are compatible
+    # with triple wasm32-unknown-unknown"). Point cc-rs at a Homebrew LLVM
+    # clang that can. Only set when unset (respect an explicit override) and
+    # only on macOS with an llvm present — Linux/CI clang already targets wasm.
+    if [[ "$(uname)" == "Darwin" ]]; then
+        llvm="$(brew --prefix llvm@21 2>/dev/null || brew --prefix llvm 2>/dev/null || true)"
+        if [[ -n "$llvm" && -x "$llvm/bin/clang" ]]; then
+            : "${CC_wasm32_unknown_unknown:=$llvm/bin/clang}"
+            : "${AR_wasm32_unknown_unknown:=$llvm/bin/llvm-ar}"
+            export CC_wasm32_unknown_unknown AR_wasm32_unknown_unknown
+        fi
+    fi
+    root="{{ justfile_directory() }}"
+    cd "$root/wasm" && cargo build -p olai-uc-query-wasm --target wasm32-unknown-unknown --release --locked
+    wasm-bindgen --target web --typescript \
+      --out-dir "$root/wasm/query-wasm/pkg" \
+      "$root/wasm/target/wasm32-unknown-unknown/release/query_wasm.wasm"
+
 push_policy:
     oras push localhost:10100/hydrofoil/plan-policy:latest \
       config/policies/lakehouse.cedar:application/vnd.cedar.policyset.v1 \
