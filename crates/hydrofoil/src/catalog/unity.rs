@@ -7,6 +7,7 @@ use datafusion::execution::TaskContext;
 use datafusion_policy_cedar::TableFacts;
 use datafusion_unitycatalog::catalog::{ManagedReadState, resolve_managed_read_state};
 use datafusion_unitycatalog::catalog::{TableProviderBuilder, TableProviderError};
+use datafusion_unitycatalog::managed::ManagedDeltaTableProvider;
 use unitycatalog_client::UnityCatalogClient;
 use unitycatalog_common::models::tables::v1::Table;
 use url::Url;
@@ -213,11 +214,24 @@ impl TableProviderBuilder for LakehouseTableProviderBuilder {
         let provider = match resolve_managed_read_state(&loaded)? {
             // The catalog is the source of truth: build from the ratified commit
             // tail + latest version rather than scanning `_delta_log/`.
+            // Writes commit through the catalog as well, so the read provider is
+            // wrapped. A time-travel read is read-only and stays unwrapped.
             ManagedReadState::Managed { commits, latest } => {
-                self.ctx
+                let provider = self
+                    .ctx
                     .lh()
                     .delta_managed_provider_for(location, &commits, latest as i64, at_version)
-                    .await?
+                    .await?;
+                if at_version.is_some() {
+                    provider
+                } else {
+                    Arc::new(ManagedDeltaTableProvider::new(
+                        provider,
+                        &table.catalog_name,
+                        &table.schema_name,
+                        &table.name,
+                    ))
+                }
             }
             // External / not-catalog-managed: the filesystem `_delta_log/` is
             // authoritative; the read must not set a catalog version.

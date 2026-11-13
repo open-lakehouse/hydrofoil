@@ -1,78 +1,47 @@
-//! Append a batch of rows to an existing Unity Catalog catalog-managed Delta table.
+//! Append to, or overwrite, an existing Unity Catalog catalog-managed Delta table.
 //!
-//! Drives the kernel write `Transaction` through our [`UnityCatalogCommitter`]:
+//! Both write their data files once, through the kernel's write context, then commit
+//! through [`commit_managed`](super::txn::commit_managed). Retries re-stage the same
+//! files on the fresh snapshot, so a conflict never rewrites data. An overwrite also
+//! re-derives its removes from that snapshot, so it removes exactly the files live at the
+//! version it commits on top of.
 //!
-//! 1. `loadTable` → the catalog's ratified commit tail + latest version.
-//! 2. Build a kernel snapshot from that tail (catalog is source of truth), over a
-//!    credentialed object store + engine.
-//! 3. `snapshot.update_table(Write, ..).build(engine, committer)` → write parquet via
-//!    `DefaultEngine::write_parquet` → `add_files` → `commit`. The committer stages the
-//!    commit and ratifies it via UC `updateTable add-commit`.
-//!
-//! ## Post-commit obligations (ManagedTablesSpec §"Write to the table", lines 75-77)
-//!
-//! After UC ratifies a commit the client **must** complete the commit lifecycle:
-//!
-//! - **Publish**: copy the ratified staged commit into `_delta_log/<v>.json` so
-//!   non-catalog-aware readers see the new version, and so UC can stop tracking the
-//!   unbackfilled tail (an unbounded tail eventually trips UC's `429`
-//!   `ResourceExhaustedException` and blocks all further writes).
-//! - **Backfill notify**: once published, tell UC via `set-latest-backfilled-version`.
-//! - **Metrics**: report commit metrics so UC can schedule table maintenance.
-//!
-//! All three are **best-effort**: the commit is already ratified, so a publish/notify/
-//! metrics failure must never be reported as a failed write — we log and move on, and the
-//! next write (or the 429 backfill handler below) catches up.
-//!
-//! ## Retry (delta.yaml updateTable errors; ManagedTablesSpec commit-errors table)
-//!
-//! The commit is wrapped in a bounded retry loop:
-//!
-//! - **409 conflict** (`CommitVersionConflictException` / `AlreadyExistsException`): a
-//!   concurrent writer took our version. Reload the table, rebuild the snapshot at the new
-//!   latest version, re-stage, retry.
-//! - **429 resource-exhausted** (`ResourceExhaustedException` / `TooManyRequestsException`):
-//!   the unbackfilled tail is too long. Publish + backfill the pending tail, then retry.
-//! - **500 commit-state-unknown** (`CommitStateUnknownException`): the outcome is ambiguous.
-//!   Reload the table and look for the exact staged file we proposed — if present the commit
-//!   landed (success, never re-commit); if absent, retry.
+//! Post-commit work (publish, backfill, metrics) is best-effort; see [`super::txn`].
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
+use delta_kernel::Version;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::snapshot::{Snapshot as KernelSnapshot, SnapshotRef};
-use delta_kernel::transaction::{CommitResult, UpdateTableOperation};
-use delta_kernel::{Engine, Version};
+use delta_kernel::transaction::UpdateTableOperation;
 use delta_kernel_default_engine::DefaultEngineBuilder;
-use tracing::{debug, info, warn};
+use object_store::ObjectStore;
+use tracing::warn;
 use unitycatalog_client::DeltaV1Client;
-use unitycatalog_delta_api::models::{
-    DeltaCommitReport, DeltaLoadTableResponse, DeltaReport, DeltaReportMetricsRequest,
-    DeltaTableRequirement, DeltaTableUpdate, DeltaUpdateTableRequest,
-};
 use unitycatalog_object_store::{TableOperation, UnityObjectStoreFactory};
-use url::Url;
 
-use crate::catalog::{
-    ManagedReadState, ensure_trailing_slash, resolve_managed_read_state, to_log_tail,
+use super::create::CreateManagedTableError;
+use super::txn::{
+    CommitOptions, KernelTxnStage, ManagedEngine, ManagedTableRef, add_paths, commit_managed,
+    delete_data_files, into_record_batch, remove_all_files,
 };
 
-use super::committer::UnityCatalogCommitter;
-use super::create::CreateManagedTableError;
-
-/// Maximum number of commit attempts before giving up (1 initial try + retries).
-const MAX_COMMIT_ATTEMPTS: u32 = 5;
-/// Base backoff between retry attempts; jittered and capped per attempt.
-const RETRY_BASE_BACKOFF: Duration = Duration::from_millis(50);
-const RETRY_MAX_BACKOFF: Duration = Duration::from_secs(2);
+/// How a write combines with the table's existing data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedWriteMode {
+    /// Add the new rows.
+    Append,
+    /// Replace every row with the new ones.
+    Overwrite,
+}
 
 /// Append `batch` as a new commit to the existing managed table `catalog.schema.table`.
 ///
-/// Returns the committed table version. `engine_info` is recorded in the commit's `commitInfo`.
-/// On success the ratified commit is published, backfilled, and its metrics reported on a
-/// best-effort basis (a failure of any of those does not fail the already-ratified write).
+/// Returns the committed table version. `engine_info` is recorded in the commit's
+/// `commitInfo`. On success the ratified commit is published, backfilled, and its metrics
+/// reported on a best-effort basis (a failure there does not fail the ratified write).
 pub async fn append_to_managed_table(
     factory: Arc<UnityObjectStoreFactory>,
     catalog: &str,
@@ -81,372 +50,257 @@ pub async fn append_to_managed_table(
     batch: RecordBatch,
     engine_info: &str,
 ) -> Result<Version, CreateManagedTableError> {
-    let client = Arc::new(factory.unity_client().delta_v1());
-    let num_rows = batch.num_rows() as i64;
+    write_managed_table(
+        factory,
+        catalog,
+        schema,
+        table,
+        vec![batch],
+        ManagedWriteMode::Append,
+        engine_info,
+    )
+    .await
+}
 
-    // The credentialed store + engine are stable across retries (the table exists, so we vend
-    // by name). Build them once.
+/// Replace the contents of the managed table `catalog.schema.table` with `batch`.
+pub async fn overwrite_managed_table(
+    factory: Arc<UnityObjectStoreFactory>,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    batch: RecordBatch,
+    engine_info: &str,
+) -> Result<Version, CreateManagedTableError> {
+    write_managed_table(
+        factory,
+        catalog,
+        schema,
+        table,
+        vec![batch],
+        ManagedWriteMode::Overwrite,
+        engine_info,
+    )
+    .await
+}
+
+/// Write `batches` to the managed table `catalog.schema.table` in `mode`, vending
+/// read-write credentials for it from `factory`.
+pub async fn write_managed_table(
+    factory: Arc<UnityObjectStoreFactory>,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    batches: Vec<RecordBatch>,
+    mode: ManagedWriteMode,
+    engine_info: &str,
+) -> Result<Version, CreateManagedTableError> {
+    let target = ManagedTableRef::new(
+        Arc::new(factory.unity_client().delta_v1()),
+        catalog,
+        schema,
+        table,
+    );
+    // The table exists, so vend by name.
     let uc_store = factory
         .for_table(
             format!("{catalog}.{schema}.{table}"),
             TableOperation::ReadWrite,
         )
         .await?;
-    let engine = DefaultEngineBuilder::new(uc_store.root()).build();
-
-    let mut attempt: u32 = 0;
-    loop {
-        attempt += 1;
-
-        // 1. Load the catalog's ratified state and build a snapshot from it.
-        let loaded = client.load_table(catalog, schema, table).await?;
-        let (table_id, location) = table_id_and_location(catalog, schema, table, &loaded)?;
-        let snapshot = build_snapshot(&loaded, &location, &engine)?;
-
-        // 2. Write the batch through a transaction committed by our catalog committer.
-        let committer =
-            UnityCatalogCommitter::new(client.clone(), catalog, schema, table, table_id.clone());
-        let mut txn = snapshot
-            .update_table(UpdateTableOperation::Write, engine_info, true)
-            .build(&engine, Box::new(committer.clone()))
-            .map_err(CreateManagedTableError::Kernel)?;
-
-        let write_context = txn
-            .write_state()
-            .and_then(|state| state.write_context_builder().build())
-            .map_err(CreateManagedTableError::Kernel)?;
-        let add_metadata = engine
-            .write_parquet(&ArrowEngineData::new(batch.clone()), &write_context)
-            .await
-            .map_err(CreateManagedTableError::Kernel)?;
-        txn.add_files(add_metadata);
-
-        let outcome = match txn.commit(&engine) {
-            Ok(CommitResult::Committed(c)) => {
-                let version = c.commit_version();
-                info!(version, attempt, "committed managed-table append");
-                let post = c.post_commit_snapshot().cloned();
-                run_post_commit(
-                    &client, catalog, schema, table, &table_id, &engine, post, version, num_rows,
-                )
-                .await;
-                return Ok(version);
-            }
-            // 409: a concurrent writer ratified our version first. Reload + rebuild + retry.
-            Ok(CommitResult::Conflicted(c)) => {
-                warn!(
-                    conflict_version = c.conflict_version(),
-                    attempt, "commit conflict; reloading and retrying"
-                );
-                RetryOutcome::Retry
-            }
-            // Retryable (kernel IO error): recover the typed UC error and dispatch on it.
-            Ok(CommitResult::Retryable(rt)) => {
-                handle_typed_retry(
-                    &client, catalog, schema, table, &committer, &engine, attempt, rt.error,
-                )
-                .await?
-            }
-            // Generic Err: same dispatch (the committer collapses UC errors into a kernel Err).
-            Err(kernel_err) => {
-                handle_typed_retry(
-                    &client, catalog, schema, table, &committer, &engine, attempt, kernel_err,
-                )
-                .await?
-            }
-        };
-
-        match outcome {
-            RetryOutcome::Succeeded(version) => return Ok(version),
-            RetryOutcome::Retry => {
-                if attempt >= MAX_COMMIT_ATTEMPTS {
-                    return Err(CreateManagedTableError::other(format!(
-                        "managed-table commit failed after {attempt} attempts"
-                    )));
-                }
-                backoff(attempt).await;
-            }
-        }
-    }
+    let store = uc_store.root();
+    write_with_store(&target, store, batches, mode, engine_info).await
 }
 
-/// The result of inspecting a failed commit attempt.
-enum RetryOutcome {
-    /// A `CommitStateUnknown` check confirmed the commit actually landed at this version.
-    Succeeded(Version),
-    /// Retry the commit (after the caller's backoff).
-    Retry,
-}
-
-/// Inspect the typed UC error the committer recorded for the just-failed attempt and decide
-/// whether to retry, fail, or treat the commit as already-landed.
+/// Write `batches` to the managed table `catalog.schema.table` through `client` and
+/// `store`, for callers that manage credentials themselves.
 ///
-/// `kernel_err` is the kernel error to surface when the failure is not a recognised UC error
-/// (or attempts are exhausted).
+/// `store` must be bucket-rooted (paths are full object keys, as the kernel default
+/// engine expects) and allow writes under the table location.
 #[allow(clippy::too_many_arguments)]
-async fn handle_typed_retry(
-    client: &DeltaV1Client,
+pub async fn write_managed_table_with_store(
+    client: Arc<DeltaV1Client>,
     catalog: &str,
     schema: &str,
     table: &str,
-    committer: &UnityCatalogCommitter,
-    engine: &dyn Engine,
-    attempt: u32,
-    kernel_err: delta_kernel::KernelError,
-) -> Result<RetryOutcome, CreateManagedTableError> {
-    let Some(uc_err) = committer.take_last_error() else {
-        // No typed UC error → a kernel-side / IO failure. Retry while attempts remain.
-        if attempt >= MAX_COMMIT_ATTEMPTS {
-            return Err(CreateManagedTableError::Kernel(kernel_err));
-        }
-        warn!(attempt, error = %kernel_err, "retryable kernel commit error; retrying");
-        return Ok(RetryOutcome::Retry);
-    };
+    store: Arc<dyn ObjectStore>,
+    batches: Vec<RecordBatch>,
+    mode: ManagedWriteMode,
+    engine_info: &str,
+) -> Result<Version, CreateManagedTableError> {
+    let target = ManagedTableRef::new(client, catalog, schema, table);
+    write_with_store(&target, store, batches, mode, engine_info).await
+}
 
-    // 500 CommitStateUnknown: the commit may or may not have landed. Reload and look for the
-    // exact staged file we proposed — never blind-retry (duplicate commit) nor blind-fail
-    // (falsely failed write).
-    if uc_err.is_commit_state_unknown() {
-        return match commit_landed(client, catalog, schema, table, committer).await? {
-            Some(version) => {
-                info!(
-                    version,
-                    "commit-state-unknown resolved: proposed commit present; success"
-                );
-                Ok(RetryOutcome::Succeeded(version))
-            }
-            None if attempt >= MAX_COMMIT_ATTEMPTS => Err(CreateManagedTableError::Client(uc_err)),
-            None => {
-                warn!(
-                    attempt,
-                    "commit-state-unknown: proposed commit absent; retrying"
-                );
-                Ok(RetryOutcome::Retry)
-            }
+/// Write `batches` to `target` through `store`, a bucket-rooted store with write access
+/// to the table location.
+pub(crate) async fn write_with_store(
+    target: &ManagedTableRef,
+    store: Arc<dyn ObjectStore>,
+    batches: Vec<RecordBatch>,
+    mode: ManagedWriteMode,
+    engine_info: &str,
+) -> Result<Version, CreateManagedTableError> {
+    let engine: ManagedEngine = DefaultEngineBuilder::new(store.clone()).build();
+
+    // Load once to derive the write context and write the data files.
+    let first = target.load().await?;
+    let snapshot = first.snapshot(&engine)?;
+    let written_schema = snapshot.schema();
+    let location = first.location.clone();
+    let probe = snapshot
+        .clone()
+        .update_table(UpdateTableOperation::Write, engine_info, true)
+        .build(&engine, Box::new(target.committer(&first.table_id)))?;
+    if !probe.logical_partition_columns().is_empty() {
+        return Err(CreateManagedTableError::other(format!(
+            "writes to partitioned managed table '{}.{}.{}' are not yet supported",
+            target.catalog, target.schema, target.table
+        )));
+    }
+    let write_context = probe.write_state()?.write_context_builder().build()?;
+    drop(probe);
+
+    // The kernel writes whatever columns a batch has, so check them against the table
+    // before anything reaches storage.
+    let table_schema: ArrowSchema = written_schema
+        .as_ref()
+        .try_into_arrow()
+        .map_err(|e| CreateManagedTableError::other(format!("table schema to arrow: {e}")))?;
+    for batch in &batches {
+        check_batch_schema(&table_schema, batch.schema_ref())?;
+    }
+
+    let num_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
+    let mut adds = Vec::with_capacity(batches.len());
+    for batch in batches.into_iter().filter(|b| b.num_rows() > 0) {
+        let add = engine
+            .write_parquet(&ArrowEngineData::new(batch), &write_context)
+            .await?;
+        adds.push(into_record_batch(add)?);
+    }
+    if adds.is_empty() && mode == ManagedWriteMode::Append {
+        // Nothing to commit. Report the current version.
+        return Ok(snapshot.version());
+    }
+    let data_files = add_paths(&adds);
+
+    let options = CommitOptions {
+        operation: UpdateTableOperation::Write,
+        engine_info,
+        data_change: true,
+        num_rows_inserted: num_rows,
+    };
+    let result = commit_managed(target, &engine, &store, first, options, |snapshot| {
+        // The data files were written against `written_schema`. If another writer changed
+        // the schema since, they no longer match it.
+        if snapshot.schema() != written_schema {
+            return Err(CreateManagedTableError::other(
+                "the table schema changed during the write; retry the write",
+            ));
+        }
+        let removes = match mode {
+            ManagedWriteMode::Append => Vec::new(),
+            ManagedWriteMode::Overwrite => remove_all_files(snapshot, &engine)?,
         };
-    }
+        Ok(KernelTxnStage {
+            adds: adds.clone(),
+            removes,
+        })
+    })
+    .await;
 
-    // 429 ResourceExhausted: the unbackfilled tail is too long. Publish + backfill it, then retry.
-    if uc_err.is_resource_exhausted() {
-        if attempt >= MAX_COMMIT_ATTEMPTS {
-            return Err(CreateManagedTableError::Client(uc_err));
-        }
-        warn!(
-            attempt,
-            "resource-exhausted (429); backfilling pending tail before retry"
-        );
-        if let Err(e) = backfill_pending_tail(client, catalog, schema, table, engine).await {
-            warn!(error = %e, "backfill before retry failed; retrying anyway");
-        }
-        return Ok(RetryOutcome::Retry);
-    }
-
-    // Any other UC error is permanent (400 invalid, 403 denied, 404 missing, …).
-    Err(CreateManagedTableError::Client(uc_err))
-}
-
-/// If the staged commit the committer last proposed is present in the table's ratified tail (or
-/// already published), return the version it landed at. Used to resolve a `CommitStateUnknown`.
-async fn commit_landed(
-    client: &DeltaV1Client,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    committer: &UnityCatalogCommitter,
-) -> Result<Option<Version>, CreateManagedTableError> {
-    let Some((version, file_name)) = committer.last_proposed() else {
-        return Ok(None);
-    };
-    let landed_version: Version = version
-        .try_into()
-        .map_err(|_| CreateManagedTableError::other("negative proposed commit version"))?;
-    let loaded = client.load_table(catalog, schema, table).await?;
-    let in_tail = loaded
-        .commits
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .any(|c| c.version == version && c.file_name == file_name);
-    // It may already have been published (and dropped from the tail) if a previous attempt's
-    // best-effort publish ran; treat "latest ratified version >= our version" as landed too.
-    // Key only on `latest-table-version` (the true ratified-version field) — never
-    // `metadata.last-commit-version`, which tracks only metadata-changing commits (A5).
-    let published = loaded
-        .latest_table_version
-        .map(|v| v >= version)
-        .unwrap_or(false);
-    Ok((in_tail || published).then_some(landed_version))
-}
-
-/// Run the best-effort post-commit lifecycle: publish the ratified tail to `_delta_log/`,
-/// notify UC via `set-latest-backfilled-version`, and report commit metrics. None of these
-/// failing turns the (already ratified) commit into a failed write.
-#[allow(clippy::too_many_arguments)]
-async fn run_post_commit(
-    client: &DeltaV1Client,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    table_id: &str,
-    engine: &dyn Engine,
-    post_commit_snapshot: Option<SnapshotRef>,
-    version: Version,
-    num_rows: i64,
-) {
-    match post_commit_snapshot {
-        Some(snapshot) => {
-            match publish_and_backfill(client, catalog, schema, table, table_id, engine, &snapshot)
-                .await
-            {
-                Ok(published_to) => {
-                    debug!(published_to, "published + backfilled managed-table commits")
-                }
-                Err(e) => {
-                    warn!(error = %e, "best-effort publish/backfill failed; commit remains ratified")
-                }
+    match result {
+        Ok(version) => Ok(version),
+        Err(failure) => {
+            if failure.outcome_unknown {
+                warn!(
+                    files = data_files.len(),
+                    "managed write failed with an unknown outcome; keeping its data files"
+                );
+            } else {
+                delete_data_files(&store, &location, &data_files).await;
             }
+            Err(failure.error)
         }
-        // No post-commit snapshot (kernel didn't return one): publish is a maintenance step the
-        // next write or the 429 handler will catch up; skip rather than rebuild here.
-        None => debug!(
-            version,
-            "no post-commit snapshot; deferring publish to a later write"
-        ),
-    }
-
-    // Metrics (best-effort).
-    let request = DeltaReportMetricsRequest {
-        table_id: table_id.to_string(),
-        report: Some(DeltaReport {
-            commit_report: Some(DeltaCommitReport {
-                num_files_added: Some(1),
-                num_rows_inserted: Some(num_rows),
-                ..Default::default()
-            }),
-        }),
-    };
-    if let Err(e) = client
-        .report_metrics(catalog, schema, table, &request)
-        .await
-    {
-        warn!(version, error = %e, "best-effort report_metrics failed");
     }
 }
 
-/// Publish `snapshot`'s unpublished catalog commits to `_delta_log/<v>.json`, then notify UC
-/// with `set-latest-backfilled-version`. Returns the version published up to.
-async fn publish_and_backfill(
-    client: &DeltaV1Client,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    table_id: &str,
-    engine: &dyn Engine,
-    snapshot: &SnapshotRef,
-) -> Result<i64, CreateManagedTableError> {
-    // A `UnityCatalogCommitter` is a catalog committer whose `publish` copies staged commits to
-    // their published path (idempotent on already-published files). `publish` is a no-op when
-    // nothing is unpublished, returning the same snapshot.
-    let committer =
-        UnityCatalogCommitter::new(Arc::new(client.clone()), catalog, schema, table, table_id);
-    let published = snapshot
-        .publish(engine, &committer)
-        .map_err(CreateManagedTableError::Kernel)?;
-    let published_to: i64 = published
-        .version()
-        .try_into()
-        .map_err(|_| CreateManagedTableError::other("published version does not fit into i64"))?;
-
-    let request = DeltaUpdateTableRequest {
-        requirements: vec![DeltaTableRequirement::AssertTableUuid {
-            uuid: table_id.to_string(),
-        }],
-        updates: vec![DeltaTableUpdate::SetLatestBackfilledVersion {
-            latest_published_version: published_to,
-        }],
-    };
-    client
-        .update_table(catalog, schema, table, &request)
-        .await?;
-    debug!(published_to, "set-latest-backfilled-version");
-    Ok(published_to)
-}
-
-/// Reload the table and publish + backfill its current unpublished tail. Used by the 429 handler
-/// to drain the tail before retrying a commit.
-async fn backfill_pending_tail(
-    client: &DeltaV1Client,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    engine: &dyn Engine,
+/// Reject a batch whose columns differ from the table's in name, order, or type. String
+/// and binary view types match their plain counterparts (DataFusion reads Delta strings as
+/// `Utf8View`; both encode the same Parquet column).
+fn check_batch_schema(
+    table: &ArrowSchema,
+    batch: &ArrowSchema,
 ) -> Result<(), CreateManagedTableError> {
-    let loaded = client.load_table(catalog, schema, table).await?;
-    let (table_id, location) = table_id_and_location(catalog, schema, table, &loaded)?;
-    let snapshot = build_snapshot(&loaded, &location, engine)?;
-    publish_and_backfill(client, catalog, schema, table, &table_id, engine, &snapshot).await?;
-    Ok(())
-}
-
-/// Extract the UC table id and trailing-slash-normalised location from a loadTable response.
-fn table_id_and_location(
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    loaded: &DeltaLoadTableResponse,
-) -> Result<(String, Url), CreateManagedTableError> {
-    let table_id = loaded
-        .metadata
-        .properties
-        .get("io.unitycatalog.tableId")
-        .cloned()
-        .ok_or_else(|| {
-            CreateManagedTableError::other(format!(
-                "table {catalog}.{schema}.{table} is missing the required \
-                 io.unitycatalog.tableId property (ManagedTablesSpec §table properties)"
-            ))
-        })?;
-    let location = Url::parse(&ensure_trailing_slash(&loaded.metadata.location))
-        .map_err(|e| CreateManagedTableError::other(format!("invalid table location: {e}")))?;
-    Ok((table_id, location))
-}
-
-/// Build a kernel snapshot from the catalog's ratified state (the catalog is the source of
-/// truth). A catalog-managed table always requires `max_catalog_version`.
-///
-/// Shares [`resolve_managed_read_state`] with the read path, so the latest-version
-/// resolution is identical (and never substitutes `metadata.last-commit-version` — review
-/// finding A5). The table is known managed here, so a `NotManaged` result is a hard error.
-fn build_snapshot(
-    loaded: &DeltaLoadTableResponse,
-    location: &Url,
-    engine: &dyn Engine,
-) -> Result<SnapshotRef, CreateManagedTableError> {
-    let (commits, latest) = match resolve_managed_read_state(loaded)
-        .map_err(|e| CreateManagedTableError::other(e.to_string()))?
-    {
-        ManagedReadState::Managed { commits, latest } => (commits, latest),
-        ManagedReadState::NotManaged => {
-            return Err(CreateManagedTableError::other(format!(
-                "table at '{location}' is not catalog-managed; cannot build a managed snapshot"
-            )));
+    fn normalize(dt: &DataType) -> DataType {
+        match dt {
+            DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::BinaryView | DataType::LargeBinary => DataType::Binary,
+            other => other.clone(),
         }
+    }
+    let matches = table.fields().len() == batch.fields().len()
+        && table.fields().iter().zip(batch.fields()).all(|(t, b)| {
+            t.name() == b.name() && normalize(t.data_type()) == normalize(b.data_type())
+        });
+    if matches {
+        return Ok(());
+    }
+    let describe = |s: &ArrowSchema| {
+        s.fields()
+            .iter()
+            .map(|f| format!("{}: {}", f.name(), f.data_type()))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
-    KernelSnapshot::builder_for(location.as_str())
-        .with_log_tail(
-            to_log_tail(location, &commits)
-                .map_err(|e| CreateManagedTableError::other(e.to_string()))?,
-        )
-        .with_max_catalog_version(latest)
-        .build(engine)
-        .map_err(CreateManagedTableError::Kernel)
+    Err(CreateManagedTableError::other(format!(
+        "batch schema [{}] does not match the table schema [{}]",
+        describe(batch),
+        describe(table)
+    )))
 }
 
-/// Jittered, capped exponential backoff between commit attempts.
-async fn backoff(attempt: u32) {
-    let exp = RETRY_BASE_BACKOFF.saturating_mul(1u32 << attempt.min(5));
-    let capped = exp.min(RETRY_MAX_BACKOFF);
-    // Deterministic jitter from the attempt count avoids pulling in an RNG dependency.
-    let jitter = Duration::from_millis((attempt as u64 * 7) % 25);
-    tokio::time::sleep(capped + jitter).await;
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{Field, Schema};
+
+    use super::*;
+
+    fn schema(fields: &[(&str, DataType)]) -> ArrowSchema {
+        Schema::new(
+            fields
+                .iter()
+                .map(|(n, t)| Field::new(*n, t.clone(), true))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn batch_schema_must_match_table_columns() {
+        let table = schema(&[("id", DataType::Int64), ("name", DataType::Utf8)]);
+        assert!(check_batch_schema(&table, &table).is_ok());
+        // View types read back by DataFusion are accepted.
+        assert!(
+            check_batch_schema(
+                &table,
+                &schema(&[("id", DataType::Int64), ("name", DataType::Utf8View)])
+            )
+            .is_ok()
+        );
+        assert!(check_batch_schema(&table, &schema(&[("other", DataType::Int64)])).is_err());
+        assert!(
+            check_batch_schema(
+                &table,
+                &schema(&[("name", DataType::Utf8), ("id", DataType::Int64)])
+            )
+            .is_err()
+        );
+        assert!(
+            check_batch_schema(
+                &table,
+                &schema(&[("id", DataType::Int32), ("name", DataType::Utf8)])
+            )
+            .is_err()
+        );
+    }
 }

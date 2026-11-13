@@ -8,6 +8,19 @@
 | Scope | One PR in delta-rs (+ small follow-up in open-lakehouse) |
 | Findings | A1 (critical, source-verified) |
 
+## Status (2026-11)
+
+- **The delta-rs gate is not needed.** The A1 premise no longer holds on the pinned
+  fork (`16f1df06`) or on upstream delta-rs `main`. `CatalogManaged` is allow-listed
+  as a *reader* feature only. The writer set lacks `catalogManaged`, `inCommitTimestamp`
+  and `vacuumProtocolCheck`, so `ProtocolChecker::can_write_to` already rejects every
+  legacy commit to a catalog-managed table.
+- **The follow-through is done.** Managed tables resolve to
+  `datafusion_unitycatalog::managed::ManagedDeltaTableProvider`, both in hydrofoil
+  (`crates/hydrofoil/src/catalog/unity.rs`) and in the crate's own
+  `DeltaTableProviderBuilder`. Its `insert_into` commits through Unity Catalog
+  (`managed::txn`), so `INSERT INTO` / `INSERT OVERWRITE` never reach `DeltaDataSink`.
+
 ## Mission
 
 You are working in a delta-rs fork used by the open-lakehouse stack. Unity Catalog
