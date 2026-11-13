@@ -13,6 +13,10 @@ target/
 # is ~1.2 GB (baked Spark jars / uv cache).
 environments/docker/
 
+# The in-browser query engine: a separate cargo workspace (wasm32), not part of
+# the Rust service images.
+wasm/
+
 # Node / web UI — not part of the Rust service images.
 node_modules/
 **/node_modules/

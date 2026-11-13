@@ -49,12 +49,19 @@ datafusion-tracing = "55"
 delta_kernel = { package = "buoyant_kernel", version = "0.30.1", default-features = false, features = [
     "internal-api",
     "arrow-conversion",
+    "default-engine-base",
     "arrow-59",
+] }
+# The default engine (`DefaultEngineBuilder`), split out of the kernel crate; the
+# managed-table commit path in `datafusion-unitycatalog` builds one.
+delta_kernel_default_engine = { package = "buoyant_kernel_engine", version = "0.30.1", default-features = false, features = [
+    "arrow-59",
+    "rustls",
 ] }
 futures = "0.3.32"
 itertools = "0.14"
 object_store = { version = "0.13.2", features = ["azure", "aws", "gcp"] }
-olai-http = { version = "0.0.5" }
+olai-http = { version = "0.0.10" }
 ordered-float = { version = "5" }
 prost = { version = "0.14.1" }
 serde = { version = "1", features = ["derive"] }
@@ -75,26 +82,29 @@ url = { version = "2.5.2", features = [
 ], default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
-# delta-rs / Unity Catalog, pinned to pushed git revs so the workspace (and the
-# Docker build, whose context is just this repo) resolves them without sibling
-# checkouts. Keep both revs in lock-step with mangrove's workspace `Cargo.toml`.
-#
-# The UC crates live in open-lakehouse/mangrove, published as `olai-uc-*`. The
-# in-tree dep keys stay `unitycatalog-*` / `datafusion-unitycatalog` via the
+# The Unity Catalog crates live in open-lakehouse/mangrove, published to
+# crates.io as `olai-uc-*`. The in-tree dep keys stay `unitycatalog-*` via the
 # `package =` alias so dependents' `{ workspace = true }` references are unchanged.
-# They all stay on git: `olai-uc-datafusion` can't publish while it depends on
-# the deltalake-core git rev, and mixing a crates.io `olai-uc-common` with its
-# git copy would split the UC types.
-#
+unitycatalog-common = { package = "olai-uc-common", version = "0.0.8", features = ["rest-client", "axum"] }
+unitycatalog-client = { package = "olai-uc-client", version = "0.0.9" }
+unitycatalog-object-store = { package = "olai-uc-object-store", version = "0.0.9" }
+unitycatalog-delta-api = { package = "olai-uc-delta-api", version = "0.0.8", default-features = false }
+# The DataFusion catalog provider + Delta integration backed by Unity Catalog
+# (moved here from mangrove, where it was `crates/datafusion`).
+datafusion-unitycatalog = { package = "olai-uc-datafusion", path = "crates/datafusion-unitycatalog" }
+
+# Shared with the UC crates: the buffa proto runtime the UC models are built on,
+# and the trestle credential-vending crates the managed-table path uses.
+buffa = { version = "0.7", features = ["json"] }
+olai-storage-credentials = { version = "0.0.3" }
+olai-vended-store = { version = "0.0.3", default-features = false }
+
 # deltalake-core is the roeap/delta-rs `olai/catalog-managed-2f01b956` branch:
 # upstream `main` @2f01b956 (2.0.0-dev on buoyant_kernel 0.30, the catalog-managed
 # read path) plus one commit re-exporting `to_delta_predicate` from
-# `deltalake_core::delta_datafusion` — the same rev mangrove pins.
-unitycatalog-common = { package = "olai-uc-common", git = "https://github.com/open-lakehouse/mangrove", rev = "692cd906ee7b7016b1c05fea4111f12616bb53ba", features = ["rest-client", "axum"] }
-unitycatalog-client = { package = "olai-uc-client", git = "https://github.com/open-lakehouse/mangrove", rev = "692cd906ee7b7016b1c05fea4111f12616bb53ba" }
-unitycatalog-object-store = { package = "olai-uc-object-store", git = "https://github.com/open-lakehouse/mangrove", rev = "692cd906ee7b7016b1c05fea4111f12616bb53ba" }
-unitycatalog-delta-api = { package = "olai-uc-delta-api", git = "https://github.com/open-lakehouse/mangrove", rev = "692cd906ee7b7016b1c05fea4111f12616bb53ba", default-features = false }
-datafusion-unitycatalog = { package = "olai-uc-datafusion", git = "https://github.com/open-lakehouse/mangrove", rev = "692cd906ee7b7016b1c05fea4111f12616bb53ba" }
+# `deltalake_core::delta_datafusion`. Pinned by rev so the workspace (and the Docker
+# build, whose context is just this repo) resolves it without sibling checkouts.
+# Switch to the crates.io release once 2.0 ships with that export.
 deltalake-core = { version = "2.0.0", git = "https://github.com/roeap/delta-rs", rev = "fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0", features = ["datafusion", "cloud"] }
 
 # Local dev/test builds: line tables for workspace crates, so panics and

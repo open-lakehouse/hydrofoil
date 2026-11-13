@@ -16,10 +16,20 @@ Multi-crate Rust workspace (`crates/*`; edition and MSRV in the workspace
 - `client` (`hydrofoil-client`), `common` (`hydrofoil-common`): shared client
   and types
 - `datafusion` (`deltalake-datafusion`): DataFusion integration
+- `datafusion-unitycatalog` (`olai-uc-datafusion`, unpublished): the DataFusion
+  catalog provider + catalog-managed Delta integration backed by Unity Catalog
+  (moved from mangrove)
 - `portal`, `hydrofoil`: Connect-RPC services (proto-generated)
+- `wasm/`: a **separate** Cargo workspace (own `Cargo.lock`, arrow-rs /
+  object_store / delta-kernel fork pins) for the in-browser query engine
+  (`query-wasm`, `olai-delta-df`; moved from mangrove). Build and lint it from
+  inside `wasm/` (`just setup-wasm`, `just build-query-wasm`); CI gates it in the
+  `query-wasm` job.
 - `node/`: UI and uc-client workspace (`just node --list`). The desktop app
   moved to [luminescent-lakehouse](https://github.com/open-lakehouse/luminescent-lakehouse)
-  (`apps/desktop`).
+  (`apps/desktop`). `node/query-wasm` and `node/files-wasm` package the wasm
+  engine as a `QueryRunner` / `FilesRunner` (not in the npm workspace yet; see
+  their READMEs).
 
 Code from sibling repos:
 
@@ -49,8 +59,9 @@ from proto via `buf`; generated stubs are committed.
 
 - **Never hand-edit generated stubs.** Change the proto, regenerate, and commit
   the output in the same commit as its source change.
-- **Keep the mangrove and delta-rs revs in lock-step** with mangrove's workspace
-  `Cargo.toml` (see the comment above those dependencies).
+- **Keep the `olai-uc-*` versions on one mangrove release** (mixing releases
+  splits the UC types), and the `buoyant_kernel` version on the one `deltalake-core`
+  resolves.
 - **Never commit to `main`.** Stage files by name; never `git add -A` /
   `git add .`.
 
@@ -108,9 +119,10 @@ has the full guide (trestle only hosts the tooling). In this repo:
   to a git rev while their release isn't on the proxy yet. Each keeps its
   `version`, so once that release is older than 7 days, drop `git`/`rev`
   (`grep -n 'git = ' Cargo.toml`). To switch sooner, treat it as a fresh release
-  (next item). The mangrove `olai-uc-*` crates and `deltalake-core` stay on git
-  by design (see the `Cargo.toml` comment).
-- **crates.io crates** (`olai-http` today; any unpinned sibling crate tomorrow):
+  (next item). `deltalake-core` stays on git until delta-rs 2.0 ships the
+  `to_delta_predicate` export (see the `Cargo.toml` comment).
+- **crates.io crates** (`olai-http`, mangrove's `olai-uc-*`, and any unpinned
+  sibling crate):
   to use a release under 7 days old, run `just crates-proxy-patch <upstream>`
   (`trestle`, `breakwater`, `datafusion-openlineage`, …), build, then
   `just crates-proxy-lock` before committing `Cargo.lock`. If the release chains

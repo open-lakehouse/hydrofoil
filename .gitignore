@@ -10,7 +10,11 @@
 
 # Rust
 .cargo/
+# …but the wasm workspace's target rustflags (getrandom wasm_js cfg) are source:
+!wasm/.cargo/
 target/
+# wasm-bindgen output of `just build-query-wasm` (a build artifact)
+wasm/query-wasm/pkg/
 
 # Python
 __pycache__/
