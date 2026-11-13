@@ -27,8 +27,9 @@ Multi-crate Rust workspace (`crates/*`; edition and MSRV in the workspace
   `query-wasm` job.
 - `node/`: UI and uc-client workspace (`just node --list`). The desktop app
   moved to [luminescent-lakehouse](https://github.com/open-lakehouse/luminescent-lakehouse)
-  (`apps/desktop`). `node/query-wasm` packages the wasm engine as a
-  `QueryRunner` (not in the npm workspace yet; see its README).
+  (`apps/desktop`). `node/query-wasm` and `node/files-wasm` package the wasm
+  engine as a `QueryRunner` / `FilesRunner` (not in the npm workspace yet; see
+  their READMEs).
 
 Code from sibling repos:
 
