@@ -70,6 +70,11 @@ pub struct UnityCatalogCommitter {
     /// Matching on the full UUID file name — not just the version — avoids mistaking a
     /// concurrent writer's commit at the same version for ours.
     last_proposed: Arc<Mutex<Option<(i64, String)>>>,
+    /// The version UC ratified for this committer's last proposal, set the moment
+    /// `update_table` returns success. Kernel work after the committer returns (building
+    /// the post-commit snapshot) can still fail. Without this record the caller would read
+    /// that failure as "not committed" and commit the same data again under a new version.
+    last_ratified: Arc<Mutex<Option<i64>>>,
 }
 
 impl std::fmt::Debug for UnityCatalogCommitter {
@@ -101,7 +106,15 @@ impl UnityCatalogCommitter {
             table_id: table_id.into(),
             last_error: Arc::new(Mutex::new(None)),
             last_proposed: Arc::new(Mutex::new(None)),
+            last_ratified: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The version UC ratified for this committer's most recent proposal, if it did.
+    /// When this is `Some`, the commit landed even if `Transaction::commit` then returned
+    /// an error.
+    pub(crate) fn last_ratified(&self) -> Option<i64> {
+        *self.last_ratified.lock().expect("committer mutex poisoned")
     }
 
     /// The `(version, staged_file_name)` of the last staged commit proposed to UC, if any.
@@ -123,6 +136,12 @@ impl UnityCatalogCommitter {
             .lock()
             .expect("committer mutex poisoned")
             .take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_proposed(&self, version: i64, file_name: impl Into<String>) {
+        *self.last_proposed.lock().expect("committer mutex poisoned") =
+            Some((version, file_name.into()));
     }
 
     fn record_error(&self, err: unitycatalog_client::Error) {
@@ -291,9 +310,12 @@ impl UnityCatalogCommitter {
         };
 
         match self.block_on_update(request) {
-            Ok(()) => Ok(CommitResponse::Committed {
-                file_meta: committed,
-            }),
+            Ok(()) => {
+                *self.last_ratified.lock().expect("committer mutex poisoned") = Some(version);
+                Ok(CommitResponse::Committed {
+                    file_meta: committed,
+                })
+            }
             // A version conflict (UC returns 409) becomes a kernel Conflict so the caller's
             // commit loop can rebuild and retry, rather than a hard error.
             Err(e) if is_conflict(&e) => Ok(CommitResponse::Conflict {
@@ -423,6 +445,7 @@ mod tests {
     fn last_proposed_defaults_none() {
         let committer = test_committer();
         assert!(committer.last_proposed().is_none());
+        assert!(committer.last_ratified().is_none());
     }
 
     #[test]

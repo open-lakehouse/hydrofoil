@@ -29,6 +29,7 @@ use url::Url;
 
 use super::builder::{TableProviderBuilder, TableProviderError};
 use super::kernel::{ManagedReadState, build_catalog_managed_snapshot, resolve_managed_read_state};
+use crate::managed::ManagedDeltaTableProvider;
 
 /// Builds Delta [`TableProvider`]s for Unity Catalog tables.
 ///
@@ -162,26 +163,35 @@ impl TableProviderBuilder for DeltaTableProviderBuilder {
             Err(e) => return Err(DataFusionError::External(Box::new(e))),
         };
 
-        let snapshot = match resolve_managed_read_state(&loaded)? {
+        match resolve_managed_read_state(&loaded)? {
             // The catalog is the source of truth: build from the ratified commit
-            // tail + latest version rather than scanning `_delta_log/`.
+            // tail + latest version rather than scanning `_delta_log/`. Writes
+            // commit through the catalog too, so wrap the read provider.
             ManagedReadState::Managed { commits, latest } => {
                 let engine = DataFusionEngine::new_from_context(self.ctx.task_ctx());
-                build_catalog_managed_snapshot(
+                let snapshot = build_catalog_managed_snapshot(
                     engine.clone(),
                     location,
                     &commits,
                     latest as i64,
                     None,
                 )
-                .await?
+                .await?;
+                let provider = self.provider_from_snapshot(snapshot, log_store).await?;
+                Ok(Arc::new(ManagedDeltaTableProvider::new(
+                    provider,
+                    &table.catalog_name,
+                    &table.schema_name,
+                    &table.name,
+                )))
             }
             // External / not-catalog-managed: the filesystem `_delta_log/` is
             // authoritative and the read must not set a catalog version.
-            ManagedReadState::NotManaged => self.filesystem_snapshot(location).await?,
-        };
-
-        self.provider_from_snapshot(snapshot, log_store).await
+            ManagedReadState::NotManaged => {
+                let snapshot = self.filesystem_snapshot(location).await?;
+                self.provider_from_snapshot(snapshot, log_store).await
+            }
+        }
     }
 
     #[cfg(feature = "metric-view")]
