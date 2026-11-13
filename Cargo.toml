@@ -99,13 +99,17 @@ buffa = { version = "0.7", features = ["json"] }
 olai-storage-credentials = { version = "0.0.3" }
 olai-vended-store = { version = "0.0.3", default-features = false }
 
-# deltalake-core is the roeap/delta-rs `olai/catalog-managed-2f01b956` branch:
+# deltalake-core is the roeap/delta-rs `olai/kernel-executor-plans` branch:
 # upstream `main` @2f01b956 (2.0.0-dev on buoyant_kernel 0.30, the catalog-managed
-# read path) plus one commit re-exporting `to_delta_predicate` from
-# `deltalake_core::delta_datafusion`. Pinned by rev so the workspace (and the Docker
-# build, whose context is just this repo) resolves it without sibling checkouts.
-# Switch to the crates.io release once 2.0 ships with that export.
-deltalake-core = { version = "2.0.0", git = "https://github.com/roeap/delta-rs", rev = "fa1dff783053bf7fbc3df6b09a776d9b3f2b80f0", features = ["datafusion", "cloud"] }
+# read path), plus a commit re-exporting `to_delta_predicate` from
+# `deltalake_core::delta_datafusion`, plus the kernel-executor plan operators
+# (RelationSource / ScopedPlanExecutor, WriteJson, DynamicScan) and the fixes that
+# let kernel's declarative metadata scan plan run on DataFusion 55 (see
+# docs/adr/0018-kernel-plan-executor-from-delta-rs.md). Pinned by rev so the
+# workspace (and the Docker build, whose context is just this repo) resolves it
+# without sibling checkouts. Switch to the crates.io release once 2.0 ships with
+# these changes.
+deltalake-core = { version = "2.0.0", git = "https://github.com/roeap/delta-rs", rev = "16f1df06520df5a41610f6d28c871c415cede3d2", features = ["datafusion", "cloud"] }
 
 # Local dev/test builds: line tables for workspace crates, so panics and
 # backtraces keep file:line, and no debug info for dependencies, which is most of
