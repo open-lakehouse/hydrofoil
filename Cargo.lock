@@ -1970,8 +1970,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-openlineage"
-version = "0.0.11"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=0178e846243e0c353b62bed566e4b85458b21ec4#0178e846243e0c353b62bed566e4b85458b21ec4"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3174cdfb83e6ada02b64b2684f696ca382886cae5ce98d12ec802bbb1392129"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4235,7 +4236,8 @@ dependencies = [
 [[package]]
 name = "olai-cedar-oci"
 version = "0.0.2"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd98470e4379d2465dbd9ef9914e778a5a49272d2168beb215586596133fabcc"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -4266,8 +4268,9 @@ dependencies = [
 
 [[package]]
 name = "olai-datafusion-policy"
-version = "0.0.3"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c1bf790b7f9e1e361f5431da67e11565225fa20209dd74156595cdcef63d5a9"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -4279,8 +4282,9 @@ dependencies = [
 
 [[package]]
 name = "olai-datafusion-policy-cedar"
-version = "0.0.3"
-source = "git+https://github.com/open-lakehouse/breakwater?rev=f1686e0871e2d3d7fe34fe1cba25605f80790f89#f1686e0871e2d3d7fe34fe1cba25605f80790f89"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e5e25b879873b4e9ec8d174db3f283c40b0b8574d914afeb0732e66582e1c5"
 dependencies = [
  "async-trait",
  "cedar-local-agent",
@@ -4695,7 +4699,8 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "openlineage-client"
 version = "0.0.5"
-source = "git+https://github.com/datafusion-contrib/datafusion-openlineage?rev=0178e846243e0c353b62bed566e4b85458b21ec4#0178e846243e0c353b62bed566e4b85458b21ec4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e8430f4b5d98b67a144214c5a3e0b289fd1de8d1e8f2c945d494aa185e27186"
 dependencies = [
  "async-trait",
  "olai-http 0.0.6",

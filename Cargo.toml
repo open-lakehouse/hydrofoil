@@ -22,13 +22,9 @@ bytes = { version = "1" }
 # `datafusion-policy` is the neutral (engine-agnostic) core: it owns the
 # secured-view provider seam (`govern_provider_from_config`) hydrofoil wraps
 # UC-resolved tables with, imported as `datafusion_policy`.
-#
-# Pinned to breakwater `main` (the DataFusion 55 bump, #15) until that release
-# reaches the crates.io mirror we build against; then drop `git`/`rev` and keep
-# the `version`.
-cedar-oci = { package = "olai-cedar-oci", version = "0.0.2", git = "https://github.com/open-lakehouse/breakwater", rev = "f1686e0871e2d3d7fe34fe1cba25605f80790f89" }
-datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.3", git = "https://github.com/open-lakehouse/breakwater", rev = "f1686e0871e2d3d7fe34fe1cba25605f80790f89" }
-datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.3", git = "https://github.com/open-lakehouse/breakwater", rev = "f1686e0871e2d3d7fe34fe1cba25605f80790f89" }
+cedar-oci = { package = "olai-cedar-oci", version = "0.0.2" }
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.4" }
+datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.4" }
 chrono = { version = "0.4.44", features = ["serde"] }
 config = "0.15.19"
 dashmap = "6.0.1"
@@ -37,9 +33,7 @@ datafusion-common = "55"
 # The OpenLineage / DataFusion integration lives in its own repo
 # (datafusion-contrib/datafusion-openlineage), published to crates.io as
 # `datafusion-openlineage`. Consumers import it as `datafusion_openlineage`.
-# Pinned to the v0.0.11 release tag's commit (DataFusion 55) until the crates.io
-# mirror has it; then drop `git`/`rev` and keep the `version`.
-datafusion-openlineage = { version = "0.0.11", git = "https://github.com/datafusion-contrib/datafusion-openlineage", rev = "0178e846243e0c353b62bed566e4b85458b21ec4" }
+datafusion-openlineage = "0.0.12"
 datafusion-tracing = "55"
 # The published `buoyant_kernel` (the Buoyant Data distribution of
 # delta-kernel-rs), the same one deltalake-core and mangrove resolve, so the
