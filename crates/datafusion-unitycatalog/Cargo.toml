@@ -77,7 +77,7 @@ tempfile = "3.1"
 rstest = "0.18"
 # The managed-table round trip runs mangrove's UC server in-process (in-memory
 # SQLite, a temporary `file://` storage root): no services needed.
-unitycatalog-server = { package = "olai-uc-server", version = "0.0.15", default-features = false, features = [
+unitycatalog-server = { package = "olai-uc-server", version = "0.0.24", default-features = false, features = [
   "embed",
   "sqlite",
 ] }

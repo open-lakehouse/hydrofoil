@@ -1,7 +1,9 @@
 # 0018 — Kernel declarative plans run on delta-rs's DataFusion executor
 
 > Status: **Accepted** (2026-11). The executor changes live on the roeap/delta-rs
-> `olai/kernel-executor-plans` branch, which the root `Cargo.toml` pins `deltalake-core` to.
+> `olai/kernel-executor-plans-df56` branch (rebased onto delta-rs `main` on DataFusion 56;
+> `olai/kernel-executor-plans` holds the DataFusion 55 version), which the root `Cargo.toml`
+> pins `deltalake-core` to.
 > Guarded by `crates/datafusion-unitycatalog/tests/kernel_executor.rs`.
 
 ## Context
@@ -49,9 +51,10 @@ fork, so it can be considered for upstreaming later:
   with `RelationSource`. Also `WriteJson` (ordered inputs, schema check, atomic create or
   `FileAlreadyExists`) and `DynamicScan` (rejects rows with a deletion vector, as kernel's
   reference executor does).
-- `fix(kernel-executor)`: the metadata scan plan runs. The executor's sessions leave out the two
-  leaf-pushdown rules until DataFusion 56. Projections use a `declared_cast` UDF (Arrow's cast)
+- `fix(kernel-executor)`: the metadata scan plan runs. On DataFusion 55 the executor's sessions
+  left out the two leaf-pushdown rules. Projections use a `declared_cast` UDF (Arrow's cast)
   where only nested nullability differs. A semi join's build side is narrowed to its keys.
+- `fix(kernel-executor)`: on DataFusion 56 the sessions keep the leaf-pushdown rules again.
 
 `DefaultEngine` stays in `datafusion-unitycatalog`'s managed create/append path. Writes need
 `write_parquet`, and the executor's writes are the classic handlers anyway.
@@ -63,13 +66,11 @@ fork, so it can be considered for upstreaming later:
   and an overwrite.
 - delta-rs core still loads snapshots and commits through `log_store.engine()`, the
   `DefaultEngine`, so its own table provider doesn't use the plan path yet.
-- Upstreaming candidates, all in `crates/kernel-executor`: the three commits above. The
-  leaf-rule workaround is temporary either way.
+- Upstreaming candidates, all in `crates/kernel-executor`: the commits above. With DataFusion
+  56 the leaf-rule workaround is gone.
 - Revisit at the next kernel bump. Kernel `main` adds `PrefixSum`, the `FirstNonNull`
   aggregate and declarative commits. The executor's exhaustive aggregate match won't compile
   until `FirstNonNull` is lowered.
-- Revisit at DataFusion 56: restore the leaf-pushdown rules (`LEAF_PUSHDOWN_RULES` in the
-  executor's `query/mod.rs`).
 - The wasm engine (`wasm/olai-delta-df`) is separate. It runs on the roeap
   `sm-plans-consolidation` kernel fork with DataFusion 54 and doesn't use the 0.30 plan IR.
   Converging it is its own decision.

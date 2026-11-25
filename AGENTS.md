@@ -118,9 +118,9 @@ has the full guide (trestle only hosts the tooling). In this repo:
 - **Git pins** (strategy 3): pin a sibling to a git rev only while the change you
   need is unreleased, and keep its `version`; once that release is older than 7
   days, drop `git`/`rev` (`grep -n 'git = ' Cargo.toml`). To switch sooner, treat
-  it as a fresh release (next item). Today only `deltalake-core` is git-pinned,
-  until delta-rs 2.0 ships the `to_delta_predicate` export (see the `Cargo.toml`
-  comment).
+  it as a fresh release (next item). Today `deltalake-core` is git-pinned until
+  delta-rs 2.0 ships the `to_delta_predicate` export, and `datafusion-openlineage`
+  until its DataFusion 56 release (see the `Cargo.toml` comments).
 - **crates.io crates** (`olai-http`, mangrove's `olai-uc-*`, and any unpinned
   sibling crate):
   to use a release under 7 days old, run `just crates-proxy-patch <upstream>`
