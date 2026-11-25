@@ -33,9 +33,7 @@ datafusion-common = "56"
 # The OpenLineage / DataFusion integration lives in its own repo
 # (datafusion-contrib/datafusion-openlineage), published to crates.io as
 # `datafusion-openlineage`. Consumers import it as `datafusion_openlineage`.
-# Git pin (the DataFusion 56 upgrade, datafusion-contrib/datafusion-openlineage#19)
-# until it is released; then back to the crates.io version.
-datafusion-openlineage = { version = "0.0.12", git = "https://github.com/datafusion-contrib/datafusion-openlineage", rev = "af59876b71262d9dcbcbceb591eb0dc82c4f402d" }
+datafusion-openlineage = "0.0.13"
 datafusion-tracing = "56"
 # The published `buoyant_kernel` (the Buoyant Data distribution of
 # delta-kernel-rs), the same one deltalake-core and mangrove resolve, so the
