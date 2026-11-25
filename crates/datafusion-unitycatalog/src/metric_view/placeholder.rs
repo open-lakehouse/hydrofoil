@@ -75,7 +75,10 @@ impl MetricViewPlaceholder {
             let field = field.as_ref().clone().with_name(&ne.name);
             fields.push((None, Arc::new(field)));
         }
-        let schema = Arc::new(DFSchema::new_with_metadata(fields, Default::default())?);
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            fields,
+            std::collections::HashMap::<String, String>::new(),
+        )?);
         Ok(Self {
             source,
             dimensions,

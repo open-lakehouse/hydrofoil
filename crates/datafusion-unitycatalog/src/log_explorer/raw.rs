@@ -134,12 +134,12 @@ impl RawProjection {
     /// `_commit`). When no action column is selected (e.g. `SELECT _commit` or
     /// `count(*)`), one cheap action column is still read to preserve row
     /// cardinality, then dropped from the output.
-    fn resolve(projection: Option<&Vec<usize>>) -> Result<Self> {
+    fn resolve(projection: Option<&[usize]>) -> Result<Self> {
         let full = RawLogProvider::raw_action_schema();
         let commit_idx = full.fields().len() - 1; // `_commit` is last.
 
         let indices: Vec<usize> = match projection {
-            Some(p) => p.clone(),
+            Some(p) => p.to_vec(),
             None => (0..full.fields().len()).collect(),
         };
 
@@ -222,7 +222,7 @@ impl TableProvider for RawLogProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
